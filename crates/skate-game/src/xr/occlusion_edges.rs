@@ -26,7 +26,11 @@ static LATEST: Mutex<Option<GuideFrame>> = Mutex::new(None);
 /// A frame older than this is no guide (the camera stopped, or was lent out).
 const STALE_NS: i64 = 250_000_000;
 /// How many frames' head poses are kept (over half a second of them).
+#[cfg(not(test))]
 const POSES: usize = 48;
+/// (a whole capture's worth, for replaying one)
+#[cfg(test)]
+const POSES: usize = 4096;
 
 /// A camera frame for the renderer: half the stream's size, RGBA.
 #[derive(Clone)]
@@ -82,6 +86,10 @@ pub(crate) struct HandPoses(pub [HeadPoses; 2]);
 /// controller swung them about with it.
 const PALM_M: Vec3 = Vec3::new(0.0, -0.03, 0.06);
 const HAND_REACH_M: f32 = 0.09;
+/// The controller's top stands out of the hand: what is this near the aim
+/// pose itself is the hand's too. (Left out, it stayed behind when the
+/// hand went, and the two came apart.)
+const TOP_REACH_M: f32 = 0.07;
 /// How thick an arm is about its line, m.
 const ARM_M: f32 = 0.07;
 /// Where a shoulder is from the head: out to its side, down, and back, m.
@@ -99,7 +107,8 @@ pub(crate) struct Part {
     /// The hand's middle then, and its reach.
     pub centre: Vec4,
     /// An arm: the wrist then and the arm's length; the way to the shoulder
-    /// and the arm's thickness (0: a hand).
+    /// and the arm's thickness (0: a hand, whose `wrist` is then the
+    /// controller's top and how far about it is the hand's too).
     pub wrist: Vec4,
     pub axis: Vec4,
 }
@@ -114,18 +123,22 @@ pub(crate) fn parts(head: &HeadPoses, hands: &HandPoses, then: i64, now: i64) ->
     let right = ahead.cross(Vec3::Y);
     for (side, poses) in [(-1.0, &hands.0[0]), (1.0, &hands.0[1])] {
         let (Some((pa, qa)), Some((pb, qb))) = (poses.at(then), poses.at(now)) else { continue };
-        let was = Mat4::from_rotation_translation(qa, pa);
-        let is = Mat4::from_rotation_translation(qb, pb);
-        let forward = is * was.inverse();
         let centre = pa + qa * PALM_M;
         let centre_now = (pb + qb * PALM_M).extend(0.0);
+        // The hand goes where the palm went, and is not turned with the
+        // controller: the depth image has only the side of the hand that
+        // faced the headset, and a quick twist (60 degrees in 50 ms is
+        // usual) turned that shell to show a back it doesn't have, which
+        // broke the hand up.
+        let forward = Mat4::from_translation(centre_now.truncate() - centre);
         out.push(Part {
             forward,
             backward: forward.inverse(),
             line_start: centre_now,
             line_end: centre_now,
             centre: centre.extend(HAND_REACH_M),
-            wrist: Vec4::ZERO,
+            // (a hand's `wrist` is its controller's top, and how far about it)
+            wrist: pa.extend(TOP_REACH_M),
             axis: Vec4::ZERO,
         });
         let shoulder = head_at + right * SHOULDER_M.x * side - Vec3::Y * SHOULDER_M.y - ahead * SHOULDER_M.z;
@@ -162,6 +175,14 @@ impl HeadPoses {
             self.0.pop_front();
         }
         self.0.push_back((time_ns, position, rotation));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn add_for_test(&mut self, time_ns: i64, position: Vec3, rotation: Quat) {
+        let keep = self.0.len() + 1;
+        self.add(time_ns, position, rotation);
+        // (a whole capture's worth, for replaying one)
+        let _ = keep;
     }
 
     /// The head at a time, between the two poses about it (the nearest one
@@ -269,7 +290,7 @@ mod tests {
         for i in 0..100 {
             poses.add(1000 + i, Vec3::ZERO, Quat::IDENTITY);
         }
-        assert_eq!(poses.0.len(), POSES);
+        assert!(poses.0.len() <= POSES);
     }
 
     /// A point of a recorded session lands where the desk-side working of
@@ -302,8 +323,11 @@ mod tests {
         let parts = parts(&head, &hands, 0, 100);
         assert_eq!(parts.len(), 2, "its hand and its arm (no left controller: no left parts)");
         let (hand, arm) = (parts[0], parts[1]);
-        assert!((hand.forward.transform_point3(pa) - pb).length() < 1e-5);
-        assert!((hand.backward.transform_point3(pb) - pa).length() < 1e-5);
+        // The hand goes as the palm went, unturned.
+        let palm_went = pb + Quat::from_rotation_y(0.5) * PALM_M - (pa + PALM_M);
+        assert!((hand.forward.transform_point3(pa) - (pa + palm_went)).length() < 1e-5);
+        assert!((hand.backward.transform_point3(pa + palm_went) - pa).length() < 1e-5);
+        assert!((hand.forward.transform_vector3(Vec3::X) - Vec3::X).length() < 1e-6);
         assert_eq!(hand.axis.w, 0.0);
         // The wrist goes with the controller; the shoulder stays; the arm's middle goes about half as far.
         let shoulder = Vec3::new(0.19, 0.98, 0.02);

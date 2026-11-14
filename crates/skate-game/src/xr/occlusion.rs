@@ -283,6 +283,10 @@ struct Moves {
     parts: [Part; 4],
 }
 
+/// The squares each way of the sheet the hands are moved on as
+/// (`occlusion_advance.wgsl`'s `SQUARES`).
+const ADVANCE_SQUARES: u32 = 160;
+
 /// How old what the player sees of the room is when it is shown (the
 /// passthrough's own wait, by others' measurements): the hands are moved
 /// on to then, not to now.
@@ -659,6 +663,7 @@ struct OcclusionPipeline {
     /// The hands moved on: what it reads, and it.
     advance_layout: BindGroupLayoutDescriptor,
     advance: CachedRenderPipelineId,
+    advance_mesh: CachedRenderPipelineId,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -735,26 +740,45 @@ fn init_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>, asse
     let matte = edge_pass("occlusion matte", &matte_layout, "embedded://skate_game/xr/occlusion_matte.wgsl", TextureFormat::Rgba16Float);
     let advance_layout = BindGroupLayoutDescriptor::new(
         "occlusion advance",
-        &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (texture_depth_2d(), uniform_buffer::<Moves>(false))),
+        &BindGroupLayoutEntries::sequential(ShaderStages::VERTEX_FRAGMENT, (texture_depth_2d(), uniform_buffer::<Moves>(false))),
     );
+    let advance_shader: Handle<Shader> = assets.load("embedded://skate_game/xr/occlusion_advance.wgsl");
+    let advanced_depth = |compare| {
+        Some(wgpu::DepthStencilState {
+            format: TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: compare,
+            stencil: default(),
+            bias: default(),
+        })
+    };
+    // (the sheet of moved squares, drawn over the first draw where it is nearer)
+    let advance_mesh = cache.queue_render_pipeline(RenderPipelineDescriptor {
+        label: Some("occlusion advance mesh".into()),
+        layout: vec![advance_layout.clone()],
+        vertex: bevy::render::render_resource::VertexState {
+            shader: advance_shader.clone(),
+            shader_defs: vec![],
+            entry_point: Some("mesh".into()),
+            buffers: vec![],
+        },
+        depth_stencil: advanced_depth(wgpu::CompareFunction::Less),
+        fragment: None,
+        ..default()
+    });
     // (it writes depth and no colour: a depth image like the headset's own, for the passes after it)
     let advance = cache.queue_render_pipeline(RenderPipelineDescriptor {
         label: Some("occlusion advance".into()),
         layout: vec![advance_layout.clone()],
         vertex: fullscreen.to_vertex_state(),
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format: TextureFormat::Depth32Float,
-            depth_write_enabled: true,
-            depth_compare: wgpu::CompareFunction::Always,
-            stencil: default(),
-            bias: default(),
-        }),
-        fragment: Some(FragmentState { shader: assets.load("embedded://skate_game/xr/occlusion_advance.wgsl"), targets: vec![], ..default() }),
+        depth_stencil: advanced_depth(wgpu::CompareFunction::Always),
+        fragment: Some(FragmentState { shader: advance_shader, entry_point: Some("base".into()), targets: vec![], ..default() }),
         ..default()
     });
     commands.insert_resource(OcclusionPipeline {
         advance_layout,
         advance,
+        advance_mesh,
         look_layout,
         texels_layout,
         matte_layout,
@@ -975,9 +999,12 @@ impl ViewNode for OcclusionNode {
             &BindGroupEntries::single(&layers[layer]),
         );
         let mut room = raw.clone();
-        if let (true, Some(advance), Some(moves)) =
-            (depth.moving, cache.get_render_pipeline(pipeline.advance), depth.moves[layer].as_ref().and_then(|m| m.binding()))
-        {
+        if let (true, Some(advance), Some(advance_mesh), Some(moves)) = (
+            depth.moving,
+            cache.get_render_pipeline(pipeline.advance),
+            cache.get_render_pipeline(pipeline.advance_mesh),
+            depth.moves[layer].as_ref().and_then(|m| m.binding()),
+        ) {
             let reads = device.create_bind_group(
                 "occlusion advance",
                 &cache.get_bind_group_layout(&pipeline.advance_layout),
@@ -997,6 +1024,8 @@ impl ViewNode for OcclusionNode {
             pass.set_pipeline(advance);
             pass.set_bind_group(0, &reads, &[]);
             pass.draw(0..3, 0..1);
+            pass.set_pipeline(advance_mesh);
+            pass.draw(0..ADVANCE_SQUARES * ADVANCE_SQUARES * 6, 0..1);
             drop(pass);
             room = device.create_bind_group(
                 "occlusion room, hands moved on",
@@ -1163,6 +1192,193 @@ mod tests {
                 .validate(&module)
                 .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&text)));
         }
+    }
+
+    /// The hands moved on, as the headset does it, run here on a capture's
+    /// depth images (the shader itself, with what the game tells it), for
+    /// looking at: each left-eye depth image's metres as the headset gave it
+    /// and with the hands moved on to `SK8_AHEAD_MS` after it was taken, as
+    /// two runs of little-endian f32 (320x320 each) a frame.
+    /// `SK8_CAPTURE=<a capture's folder> SK8_ADVANCE_OUT=<file> cargo test ... the_hands_moved_on_in_a_capture -- --ignored`
+    #[test]
+    #[ignore = "needs a GPU and a capture; writes a file"]
+    fn the_hands_moved_on_in_a_capture() {
+        use std::io::Write;
+        let folder = std::path::PathBuf::from(std::env::var("SK8_CAPTURE").expect("SK8_CAPTURE"));
+        let ahead_ns = std::env::var("SK8_AHEAD_MS").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(50.0) * 1e6;
+        let notes: Vec<serde_json::Value> = std::fs::read_to_string(folder.join("capture.jsonl"))
+            .unwrap()
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect();
+        let numbers = |v: &serde_json::Value| -> Vec<f32> { v.as_array().map_or(vec![], |a| a.iter().map(|x| x.as_f64().unwrap_or(0.0) as f32).collect()) };
+        let (mut head, mut hands) = (HeadPoses::default(), HandPoses::default());
+        for f in notes.iter().filter(|n| n["kind"] == "frame") {
+            let (Some(time), Some(eyes)) = (f["xr_time"].as_i64(), f["eyes"].as_array()) else { continue };
+            if eyes.len() == 2 {
+                let (a, b, q) = (numbers(&eyes[0]["p"]), numbers(&eyes[1]["p"]), numbers(&eyes[0]["q"]));
+                head.add_for_test(time, (Vec3::from_slice(&a) + Vec3::from_slice(&b)) * 0.5, Quat::from_slice(&q));
+            }
+            for hand in f["hands"].as_array().into_iter().flatten() {
+                let side = if hand["hand"] == "left" { 0 } else { 1 };
+                hands.0[side].add_for_test(time, Vec3::from_slice(&numbers(&hand["p"])), Quat::from_slice(&numbers(&hand["q"])));
+            }
+        }
+        let depth_bytes = std::fs::read(folder.join("depth.bin")).unwrap();
+        let instance = wgpu::Instance::default();
+        let adapter = bevy::tasks::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("a GPU");
+        let (device, queue) = bevy::tasks::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let (w, h) = (320u32, 320u32);
+        let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+        let texture = |format, usage| {
+            device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+        };
+        let raw = texture(TextureFormat::Depth16Unorm, TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST);
+        let out = texture(TextureFormat::Depth32Float, TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC);
+        let vertex = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(
+                "@vertex fn vertex(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> { return vec4(f32(i32(i & 1u) * 4 - 1), f32(i32(i >> 1u) * 4 - 1), 0.0, 1.0); }".into(),
+            ),
+        });
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(include_str!("occlusion_advance.wgsl").into()),
+        });
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: TextureSampleType::Depth, view_dimension: TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&layout], push_constant_ranges: &[] });
+        let depth_state = |compare| {
+            Some(wgpu::DepthStencilState { format: TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: compare, stencil: default(), bias: default() })
+        };
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState { module: &vertex, entry_point: Some("vertex"), buffers: &[], compilation_options: default() },
+            primitive: default(),
+            depth_stencil: depth_state(wgpu::CompareFunction::Always),
+            multisample: default(),
+            fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("base"), targets: &[], compilation_options: default() }),
+            multiview: None,
+            cache: None,
+        });
+        let mesh = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState { module: &shader, entry_point: Some("mesh"), buffers: &[], compilation_options: default() },
+            primitive: default(),
+            depth_stencil: depth_state(wgpu::CompareFunction::Less),
+            multisample: default(),
+            fragment: None,
+            multiview: None,
+            cache: None,
+        });
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: Moves::min_size().get(),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&raw.create_view(&default())) },
+                wgpu::BindGroupEntry { binding: 1, resource: uniform.as_entire_binding() },
+            ],
+        });
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (w * h * 4) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut file = std::io::BufWriter::new(std::fs::File::create(std::env::var("SK8_ADVANCE_OUT").expect("SK8_ADVANCE_OUT")).unwrap());
+        let mut frames = 0;
+        for n in notes.iter().filter(|n| n["kind"] == "depth" && n["layer"] == 0) {
+            let (offset, len) = (n["offset"].as_u64().unwrap() as usize, n["len"].as_u64().unwrap() as usize);
+            let texels = &depth_bytes[offset..offset + len];
+            queue.write_texture(
+                raw.as_image_copy(),
+                texels,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 2), rows_per_image: None },
+                size,
+            );
+            let view_from_tracking = Mat4::from_cols_slice(&numbers(&n["view_from_tracking"]));
+            let tangents = Vec4::from_slice(&numbers(&n["tangents"]));
+            let (near, far) = (n["near"].as_f64().unwrap() as f32, n["far"].as_f64().unwrap() as f32);
+            let then = n["capture_time"].as_i64().unwrap();
+            let parts = occlusion_edges::parts(&head, &hands, then, then + ahead_ns as i64);
+            let mut moves = Moves { view_from_tracking, tracking_from_view: view_from_tracking.inverse(), tangents, near, far, count: parts.len().min(4) as u32, parts: default() };
+            for (slot, part) in moves.parts.iter_mut().zip(&parts) {
+                *slot = *part;
+            }
+            let mut bytes = bevy::render::render_resource::encase::UniformBuffer::new(Vec::<u8>::new());
+            bytes.write(&moves).unwrap();
+            queue.write_buffer(&uniform, 0, bytes.as_ref());
+            let mut encoder = device.create_command_encoder(&default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &out.create_view(&default()),
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.draw(0..3, 0..1);
+                pass.set_pipeline(&mesh);
+                pass.draw(0..ADVANCE_SQUARES * ADVANCE_SQUARES * 6, 0..1);
+            }
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo { texture: &out, mip_level: 0, origin: default(), aspect: TextureAspect::DepthOnly },
+                wgpu::TexelCopyBufferInfo { buffer: &read, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: None } },
+                size,
+            );
+            queue.submit([encoder.finish()]);
+            read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let metres = |d: f32| if d <= 0.0 || d >= 1.0 { 0.0 } else { near / (1.0 - d) };
+            for pair in texels.chunks_exact(2) {
+                file.write_all(&metres(u16::from_le_bytes([pair[0], pair[1]]) as f32 / 65535.0).to_le_bytes()).unwrap();
+            }
+            for d in read.slice(..).get_mapped_range().chunks_exact(4) {
+                file.write_all(&metres(f32::from_le_bytes([d[0], d[1], d[2], d[3]])).to_le_bytes()).unwrap();
+            }
+            read.unmap();
+            frames += 1;
+        }
+        println!("{frames} depth images, the hands moved on {} ms", ahead_ns / 1e6);
     }
 
     /// The pass's shader is valid WGSL, with and without MSAA. (A shader
