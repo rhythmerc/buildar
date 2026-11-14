@@ -15,6 +15,8 @@ struct Eye {
     hole_count: u32,
     // How far under a mouth's height counts as in the bowl (world units).
     below: f32,
+    // Not 0: edges are found in the camera's image (the matte).
+    edges: u32,
     // The mouths of the bowls sunk into real surfaces: the centre (world), and the radius.
     holes: array<vec4<f32>, 4>,
 }
@@ -29,6 +31,9 @@ struct Eye {
 // The room's image filtered (occlusion_filter.wgsl), read between its texels.
 @group(0) @binding(3) var room_filtered: texture_2d_array<f32>;
 @group(0) @binding(4) var room_sampler: sampler;
+// This eye's matte (occlusion_matte.wgsl): where a patch of the room's image
+// has near things and far things, how much each pixel is of the far ones.
+@group(0) @binding(5) var matte: texture_2d<f32>;
 
 // A value of the room's image as metres along its view (0: unknown).
 fn metres(d: f32) -> f32 {
@@ -54,7 +59,21 @@ fn seen_softly(image: vec2<f32>, size: vec2<i32>, drawn: f32) -> f32 {
     if far - near <= 0.03 {
         return seen(metres(s.z + 1.0 - s.x), drawn);
     }
-    return mix(near, far, smoothstep(0.2, 0.8, s.z / max(s.w, 1e-6)));
+    var share = smoothstep(0.2, 0.8, s.z / max(s.w, 1e-6));
+    if eye.edges != 0u {
+        // The matte's answer, smoothed among the pixels it is an answer for (nine reads between its texels).
+        let step = 1.0 / vec2<f32>(textureDimensions(matte));
+        var sum = vec2(0.0);
+        for (var y = -1; y <= 1; y++) {
+            for (var x = -1; x <= 1; x++) {
+                sum += textureSampleLevel(matte, room_sampler, image + vec2(f32(x), f32(y)) * step, 0.0).ba;
+            }
+        }
+        if sum.x > 0.01 {
+            share = smoothstep(0.25, 0.75, sum.y / sum.x);
+        }
+    }
+    return mix(near, far, share);
 }
 
 // 1: seen; 0: behind the real surface. A little past it still counts as on it.

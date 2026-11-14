@@ -21,6 +21,7 @@
 //! headset's images came back wrong.
 use super::ar_settings::ArSettings;
 use super::occlusion_capture::{Capture, Readbacks};
+use super::occlusion_edges::{self, Guide, HeadPoses};
 use super::rig::Rig;
 use bevy::core_pipeline::FullscreenShader;
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
@@ -28,9 +29,9 @@ use bevy::ecs::query::QueryItem;
 use bevy::prelude::*;
 use bevy::render::extract_resource::{ExtractResource, ExtractResourcePlugin};
 use bevy::render::render_graph::{NodeRunError, RenderGraphContext, RenderGraphExt, RenderLabel, ViewNode, ViewNodeRunner};
-use bevy::render::render_resource::binding_types::{sampler, texture_2d_array, texture_depth_2d, texture_depth_2d_multisampled, uniform_buffer};
+use bevy::render::render_resource::binding_types::{sampler, texture_2d, texture_2d_array, texture_depth_2d, texture_depth_2d_multisampled, uniform_buffer};
 use bevy::render::render_resource::{
-    BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState,
+    BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, BlendComponent, BlendFactor, BlendOperation, BlendState,
     CachedRenderPipelineId, ColorTargetState, ColorWrites, FragmentState, Operations, PipelineCache, RenderPassColorAttachment,
     RenderPassDescriptor, RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor, ShaderStages, ShaderType, SpecializedRenderPipeline, SpecializedRenderPipelines,
     Texture, TextureAspect, TextureFormat, TextureSampleType, TextureUsages, TextureView, TextureViewDescriptor, TextureViewDimension,
@@ -71,9 +72,13 @@ impl Occlusion {
 
 /// What the render world needs each frame: the setting, and the XR rig's
 /// root (the game world from the room's tracking space).
-#[derive(Resource, Clone, Copy, Default, ExtractResource)]
+#[derive(Resource, Clone, Default, ExtractResource)]
 struct Wanted {
     mode: Occlusion,
+    /// Edges are found in the camera's image (`occlusion_edges`), and the
+    /// newest camera frame for it (none: no camera, or none lately).
+    edges: bool,
+    guide: Option<Guide>,
     world_from_tracking: Mat4,
     /// The mouths of the sunk pieces (bowls) nearest the head: the centre,
     /// in the game world, and the radius about it.
@@ -98,12 +103,17 @@ impl Plugin for OcclusionPlugin {
         bevy::asset::embedded_asset!(app, "occlusion.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_filter.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_copy.wgsl");
+        bevy::asset::embedded_asset!(app, "occlusion_sure.wgsl");
+        bevy::asset::embedded_asset!(app, "occlusion_texels.wgsl");
+        bevy::asset::embedded_asset!(app, "occlusion_matte.wgsl");
+        bevy::shader::load_shader_library!(app, "occlusion_look.wgsl");
         let problem = OcclusionProblem::default();
         let capture = Capture::default();
         app.init_resource::<Wanted>()
             .insert_resource(problem.clone())
             .insert_resource(capture.clone())
-            .add_systems(Update, super::occlusion_capture::log_frames)
+            .init_resource::<HeadPoses>()
+            .add_systems(Update, (super::occlusion_capture::log_frames, occlusion_edges::keep_head_poses))
             .add_plugins(ExtractResourcePlugin::<Wanted>::default())
             .add_systems(PostUpdate, want)
             .add_observer(readable_eye_depth);
@@ -138,10 +148,14 @@ fn want(
     rig: Res<Rig>,
     placed: Res<super::build::PlacedPieces>,
     heads: Query<&GlobalTransform, With<XrCamera>>,
+    poses: Res<HeadPoses>,
     mut wanted: ResMut<Wanted>,
 ) {
     let root = rig.root_transform();
     wanted.mode = if root.is_some() { settings.occlusion } else { Occlusion::Off };
+    wanted.edges = wanted.mode.on() && settings.occlusion_edges;
+    occlusion_edges::set_wanted(wanted.edges && crate::camera_access());
+    wanted.guide = if wanted.edges { occlusion_edges::guide(&poses, super::occlusion_capture::clocks().0) } else { None };
     wanted.world_from_tracking = root.map_or(Mat4::IDENTITY, |r| r.to_matrix());
     wanted.hole_count = 0;
     let (Some(root), true) = (root, wanted.mode.on()) else { return };
@@ -182,6 +196,17 @@ struct RoomDepth {
     latest: Option<Latest>,
     eyes: [Option<UniformBuffer<Eye>>; 2],
     logged: bool,
+    /// Edges from the camera, this frame: on, each eye's `Look`, the
+    /// camera's frame as a texture (and when it was taken), which of an
+    /// eye's two mattes is written, the views the kept ones were made in,
+    /// and the depth image the sure texels are of (none: to be found).
+    edging: bool,
+    looks: [Option<UniformBuffer<Look>>; 2],
+    guide: Option<(Texture, TextureView, i64)>,
+    turn: usize,
+    old_views: [Option<(Mat4, Vec4)>; 2],
+    sure_of: Option<(usize, i64)>,
+    find_sure: bool,
     /// The pass's pipeline failed (said once).
     broken: bool,
 }
@@ -200,7 +225,40 @@ struct Made {
     /// (`occlusion_capture`): the texture, and each eye's layer of it.
     copied: (Texture, [TextureView; 2]),
     size: (u32, u32),
+    /// For edges from the camera (`occlusion_edges`), each with a view for
+    /// each eye: which texels are sure (`occlusion_sure.wgsl`), their
+    /// colours in the camera's frame (`occlusion_texels.wgsl`), and each
+    /// eye's two mattes (`occlusion_matte.wgsl`): one is written each frame
+    /// from the other, the kept one, turn about.
+    sure: (Texture, [TextureView; 2]),
+    texels: (Texture, [TextureView; 2]),
+    mattes: [[(Texture, TextureView); 2]; 2],
 }
+
+/// What the passes that find edges in the camera's image are told
+/// (`occlusion_look.wgsl`).
+#[derive(ShaderType, Clone, Copy, Default)]
+struct Look {
+    tracking_from_view: Mat4,
+    camera_from_tracking: Mat4,
+    old_view_from_tracking: Mat4,
+    tangents: Vec4,
+    old_tangents: Vec4,
+    intrinsics: Vec4,
+    near: f32,
+    far: f32,
+    /// 1: there is a camera frame. 2: there are kept answers.
+    flags: u32,
+    keep: f32,
+    most: f32,
+}
+
+/// The mattes' size each way: over twice the depth image's.
+const MATTE: u32 = 768;
+/// How much of a pixel's kept evidence stays each frame, and the most
+/// there can be (log-odds: at 4 it takes a few frames against to turn it).
+const KEEP: f32 = 0.8;
+const MOST: f32 = 4.0;
 
 #[derive(Clone, Copy)]
 struct Latest {
@@ -227,6 +285,8 @@ struct Eye {
     hole_count: u32,
     /// [`BELOW_M`] in the game world's units.
     below: f32,
+    /// Not 0: the near/far mix at edges is read from the eye's matte.
+    edges: u32,
     holes: [Vec4; HOLES],
 }
 
@@ -367,6 +427,44 @@ fn make(session: &OxrSession, device: &RenderDevice) -> Result<Made, &'static st
                 ..default()
             })
         });
+        let layered = |label, format| {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let each = [0, 1].map(|layer| {
+                texture.create_view(&TextureViewDescriptor {
+                    dimension: Some(TextureViewDimension::D2),
+                    base_array_layer: layer,
+                    array_layer_count: Some(1),
+                    ..default()
+                })
+            });
+            (texture, each)
+        };
+        let sure = layered("room depth, sure", TextureFormat::R16Float);
+        let texels = layered("room depth, colours", TextureFormat::Rgba16Float);
+        let matte = || {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("occlusion matte"),
+                size: wgpu::Extent3d { width: MATTE, height: MATTE, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: TextureFormat::Rgba16Float,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&TextureViewDescriptor::default());
+            (texture, view)
+        };
+        let mattes = [[matte(), matte()], [matte(), matte()]];
         let sampler = device.create_sampler(&SamplerDescriptor {
             label: Some("room depth, filtered"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -382,6 +480,9 @@ fn make(session: &OxrSession, device: &RenderDevice) -> Result<Made, &'static st
             sampler,
             copied: (copy, copy_each),
             size: (state.width, state.height),
+            sure,
+            texels,
+            mattes,
         })
     }
 }
@@ -488,6 +589,13 @@ struct OcclusionPipeline {
     filter_layout: BindGroupLayoutDescriptor,
     filter: CachedRenderPipelineId,
     copy: CachedRenderPipelineId,
+    /// Edges from the camera: what its three passes read, and they.
+    look_layout: BindGroupLayoutDescriptor,
+    texels_layout: BindGroupLayoutDescriptor,
+    matte_layout: BindGroupLayoutDescriptor,
+    sure: CachedRenderPipelineId,
+    texels: CachedRenderPipelineId,
+    matte: CachedRenderPipelineId,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -507,6 +615,7 @@ fn init_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>, asse
             uniform_buffer::<Eye>(false),
             texture_2d_array(TextureSampleType::Float { filterable: true }),
             sampler(SamplerBindingType::Filtering),
+            texture_2d(TextureSampleType::Float { filterable: true }),
         );
         BindGroupLayoutDescriptor::new("occlusion", &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, entries))
     };
@@ -534,7 +643,40 @@ fn init_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>, asse
         }),
         ..default()
     });
+    let float = || texture_2d(TextureSampleType::Float { filterable: true });
+    let look_layout =
+        BindGroupLayoutDescriptor::new("occlusion look", &BindGroupLayoutEntries::single(ShaderStages::FRAGMENT, uniform_buffer::<Look>(false)));
+    let texels_layout = BindGroupLayoutDescriptor::new(
+        "occlusion texels",
+        &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (float(), float(), sampler(SamplerBindingType::Filtering))),
+    );
+    let matte_layout = BindGroupLayoutDescriptor::new(
+        "occlusion matte",
+        &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (float(), float(), float(), float(), sampler(SamplerBindingType::Filtering))),
+    );
+    let mut edge_pass = |label: &'static str, reads: &BindGroupLayoutDescriptor, shader: &'static str, format| {
+        cache.queue_render_pipeline(RenderPipelineDescriptor {
+            label: Some(label.into()),
+            layout: vec![reads.clone(), look_layout.clone()],
+            vertex: fullscreen.to_vertex_state(),
+            fragment: Some(FragmentState {
+                shader: assets.load(shader),
+                targets: vec![Some(ColorTargetState { format, blend: None, write_mask: ColorWrites::ALL })],
+                ..default()
+            }),
+            ..default()
+        })
+    };
+    let sure = edge_pass("occlusion sure", &filter_layout, "embedded://skate_game/xr/occlusion_sure.wgsl", TextureFormat::R16Float);
+    let texels = edge_pass("occlusion texels", &texels_layout, "embedded://skate_game/xr/occlusion_texels.wgsl", TextureFormat::Rgba16Float);
+    let matte = edge_pass("occlusion matte", &matte_layout, "embedded://skate_game/xr/occlusion_matte.wgsl", TextureFormat::Rgba16Float);
     commands.insert_resource(OcclusionPipeline {
+        look_layout,
+        texels_layout,
+        matte_layout,
+        sure,
+        texels,
+        matte,
         filter_layout,
         filter,
         copy,
@@ -598,10 +740,79 @@ fn prepare(
         }
         commands.entity(entity).insert(OcclusionPipelineId(id, multisampled));
     }
+    // Edges from the camera: its newest frame goes to its texture, and this
+    // frame's matte is written from the other one of the eye's two.
+    let was_edging = depth.edging;
+    depth.edging = wanted.edges;
+    if depth.edging {
+        depth.turn ^= 1;
+        let image = (latest.image, latest.capture_time);
+        depth.find_sure = depth.sure_of != Some(image);
+        depth.sure_of = Some(image);
+        let frame = wanted.guide.as_ref().map(|g| &g.frame);
+        let stale = match (&depth.guide, frame) {
+            (Some((texture, _, time)), Some(f)) => (texture.width(), texture.height()) != (f.width, f.height) || *time != f.timestamp_ns,
+            (None, _) => true,
+            _ => false,
+        };
+        if stale {
+            // (no frame yet: a pixel of nothing, which the passes are told not to go by)
+            let (width, height, pixels, time) = frame.map_or((1, 1, &[0u8; 4][..], 0), |f| (f.width, f.height, &f.pixels[..], f.timestamp_ns));
+            if depth.guide.as_ref().is_none_or(|(t, ..)| (t.width(), t.height()) != (width, height)) {
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("occlusion camera frame"),
+                    size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: TextureFormat::Rgba8Unorm,
+                    usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&TextureViewDescriptor::default());
+                depth.guide = Some((texture, view, 0));
+            }
+            if let Some((texture, _, at)) = depth.guide.as_mut() {
+                if pixels.len() == (width * height * 4) as usize {
+                    queue.write_texture(
+                        texture.as_image_copy(),
+                        pixels,
+                        wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: None },
+                        wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                    );
+                    *at = time;
+                }
+            }
+        }
+    } else {
+        depth.sure_of = None;
+    }
     let tracking_from_world = wanted.world_from_tracking.inverse();
     for layer in 0..2 {
         let (view_from_tracking, tangents) = latest.views[layer];
+        if depth.edging {
+            // (kept answers only from the frame before: none when edges were just turned on)
+            let old = depth.old_views[layer].filter(|_| was_edging);
+            let look = Look {
+                tracking_from_view: view_from_tracking.inverse(),
+                camera_from_tracking: wanted.guide.as_ref().map_or(Mat4::IDENTITY, |g| g.camera_from_tracking),
+                old_view_from_tracking: old.map_or(Mat4::IDENTITY, |o| o.0),
+                tangents,
+                old_tangents: old.map_or(tangents, |o| o.1),
+                intrinsics: wanted.guide.as_ref().map_or(Vec4::ZERO, |g| g.frame.intrinsics),
+                near: latest.near,
+                far: if latest.far.is_finite() { latest.far } else { 0.0 },
+                flags: wanted.guide.is_some() as u32 | (old.is_some() as u32) << 1,
+                keep: KEEP,
+                most: MOST,
+            };
+            let buffer = depth.looks[layer].get_or_insert_with(UniformBuffer::default);
+            buffer.set(look);
+            buffer.write_buffer(&device, &queue);
+            depth.old_views[layer] = Some((view_from_tracking, tangents));
+        }
         let eye = Eye {
+            edges: depth.edging as u32,
             view_from_world: view_from_tracking * tracking_from_world,
             tangents,
             near: latest.near,
@@ -654,13 +865,14 @@ impl ViewNode for OcclusionNode {
             &cache.get_bind_group_layout(&pipeline.filter_layout),
             &BindGroupEntries::single(&layers[layer]),
         );
+        let matte = &made.mattes[layer][depth.turn].1;
         let bind_group = device.create_bind_group(
             "occlusion",
             &cache.get_bind_group_layout(&pipeline.layouts[pipeline_id.1 as usize]),
-            &BindGroupEntries::sequential((view_uniforms, scene_depth.view(), eye, &made.filtered.1, &made.sampler)),
+            &BindGroupEntries::sequential((view_uniforms, scene_depth.view(), eye, &made.filtered.1, &made.sampler, matte)),
         );
-        // This eye's half of the room's image, drawn over the whole of `to`.
-        let draw_room = |context: &mut RenderContext, label, to: &TextureView, with: &bevy::render::render_resource::RenderPipeline| {
+        // A pass over the whole of `to`.
+        let draw = |context: &mut RenderContext, label, to: &TextureView, with: &bevy::render::render_resource::RenderPipeline, reads: &[&BindGroup]| {
             let mut pass = context.command_encoder().begin_render_pass(&RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(RenderPassColorAttachment {
@@ -674,12 +886,51 @@ impl ViewNode for OcclusionNode {
                 occlusion_query_set: None,
             });
             pass.set_pipeline(with);
-            pass.set_bind_group(0, &room, &[]);
+            for (index, group) in reads.iter().enumerate() {
+                pass.set_bind_group(index as u32, *group, &[]);
+            }
             pass.draw(0..3, 0..1);
+        };
+        // This eye's half of the room's image, drawn over the whole of `to`.
+        let draw_room = |context: &mut RenderContext, label, to: &TextureView, with: &bevy::render::render_resource::RenderPipeline| {
+            draw(context, label, to, with, &[&room]);
         };
         // It is filtered first. (Each frame, not each new image: it is a
         // small image, and the headset doesn't say which are new.)
         draw_room(context, "occlusion filter", &made.filtered.2[layer], filter);
+        // Edges from the camera: the sure texels (of a new depth image), their
+        // colours in the camera's newest frame, and from those the matte.
+        if let (true, Some(sure), Some(texels), Some(matte_pass), Some(look), Some((_, guide, _))) = (
+            depth.edging,
+            cache.get_render_pipeline(pipeline.sure),
+            cache.get_render_pipeline(pipeline.texels),
+            cache.get_render_pipeline(pipeline.matte),
+            depth.looks[layer].as_ref().and_then(|l| l.binding()),
+            depth.guide.as_ref(),
+        ) {
+            let look = device.create_bind_group("occlusion look", &cache.get_bind_group_layout(&pipeline.look_layout), &BindGroupEntries::single(look));
+            if depth.find_sure {
+                draw(context, "occlusion sure", &made.sure.1[layer], sure, &[&room, &look]);
+            }
+            let reads = device.create_bind_group(
+                "occlusion texels",
+                &cache.get_bind_group_layout(&pipeline.texels_layout),
+                &BindGroupEntries::sequential((&made.sure.1[layer], guide, &made.sampler)),
+            );
+            draw(context, "occlusion texels", &made.texels.1[layer], texels, &[&reads, &look]);
+            let reads = device.create_bind_group(
+                "occlusion matte",
+                &cache.get_bind_group_layout(&pipeline.matte_layout),
+                &BindGroupEntries::sequential((
+                    &made.filtered.2[layer],
+                    &made.texels.1[layer],
+                    guide,
+                    &made.mattes[layer][depth.turn ^ 1].1,
+                    &made.sampler,
+                )),
+            );
+            draw(context, "occlusion matte", matte, matte_pass, &[&reads, &look]);
+        }
         // A capture is running: the image as it came is copied out to be read back.
         if let (Some(_), Some(copy)) = (world.resource::<Capture>().sender(), cache.get_render_pipeline(pipeline.copy)) {
             draw_room(context, "occlusion copy", &made.copied.1[layer], copy);
@@ -758,6 +1009,21 @@ mod tests {
             assert_eq!(serde_json::from_str::<Occlusion>(old).unwrap(), mode);
         }
         assert_eq!(serde_json::to_string(&Occlusion::On).unwrap(), "\"On\"");
+    }
+
+    /// The passes that find edges in the camera's image are valid WGSL, with
+    /// what they share put in as Bevy's imports would.
+    #[test]
+    fn the_shaders_for_edges_from_the_camera_are_valid() {
+        let look: String = include_str!("occlusion_look.wgsl").lines().filter(|l| !l.starts_with("#define_import_path")).collect::<Vec<_>>().join("\n");
+        for source in [include_str!("occlusion_sure.wgsl"), include_str!("occlusion_texels.wgsl"), include_str!("occlusion_matte.wgsl")] {
+            let body: String = source.lines().filter(|l| !l.starts_with("#import")).collect::<Vec<_>>().join("\n");
+            let text = format!("{look}\n{body}\n");
+            let module = wgpu::naga::front::wgsl::parse_str(&text).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&text)));
+            wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
+                .validate(&module)
+                .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&text)));
+        }
     }
 
     /// The pass's shader is valid WGSL, with and without MSAA. (A shader

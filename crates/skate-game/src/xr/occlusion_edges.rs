@@ -1,0 +1,236 @@
+//! Occlusion's edges found in the camera's image (the AR settings' "sharper
+//! edges", under occlusion): what this needs from outside the renderer.
+//!
+//! The depth image is right about surfaces and wrong about where they end,
+//! by a texel or three (a texel is some seven pixels of the picture), and
+//! its edges wander. The left passthrough camera sees the real edges: where
+//! a patch of the depth image has near things and far things, each pixel
+//! is put with whichever its colour in the camera's frame is like, and that
+//! answer is kept from frame to frame so it takes steady evidence to turn
+//! a pixel over (`occlusion_matte.wgsl`).
+//!
+//! The camera's thread (room lighting's: `room_light::camera`) leaves its
+//! newest frame here at half size, with the camera's calibration; the game
+//! adds where the camera was when it was taken, from the head's poses it
+//! has kept by time, and the renderer takes it from there. Frames are only
+//! ever looked at on the headset, and none is stored.
+use bevy::prelude::*;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// The game wants camera frames for edges (the setting is on, and allowed).
+static WANTED: AtomicBool = AtomicBool::new(false);
+static LATEST: Mutex<Option<GuideFrame>> = Mutex::new(None);
+
+/// A frame older than this is no guide (the camera stopped, or was lent out).
+const STALE_NS: i64 = 250_000_000;
+/// How many frames' head poses are kept (over half a second of them).
+const POSES: usize = 48;
+
+/// A camera frame for the renderer: half the stream's size, RGBA.
+#[derive(Clone)]
+pub(crate) struct GuideFrame {
+    pub pixels: Arc<Vec<u8>>,
+    pub width: u32,
+    pub height: u32,
+    /// When it was taken, on the steady clock (which is OpenXR's time here).
+    pub timestamp_ns: i64,
+    /// Camera2's lens pose: turns the head's axes into the camera's (x right,
+    /// y down, z ahead), and the lens in the head's space.
+    pub lens_rotation: Quat,
+    pub lens_translation: Vec3,
+    /// (fx, fy, cx, cy) over the sensor's size: a point `p` in the camera's
+    /// space is at `fx * p.x / p.z + cx` across the frame, 0-1.
+    pub intrinsics: Vec4,
+}
+
+pub(crate) fn wanted() -> bool {
+    WANTED.load(Ordering::Relaxed)
+}
+
+pub(crate) fn set_wanted(wanted: bool) {
+    WANTED.store(wanted, Ordering::Relaxed);
+    if !wanted {
+        *LATEST.lock().unwrap() = None;
+    }
+}
+
+/// The camera's thread: its newest frame.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn publish(frame: GuideFrame) {
+    *LATEST.lock().unwrap() = Some(frame);
+}
+
+fn latest() -> Option<GuideFrame> {
+    LATEST.lock().unwrap().clone()
+}
+
+/// The head (the middle of the eyes) in tracking space at each of the last
+/// frames' display times.
+#[derive(Resource, Default)]
+pub(crate) struct HeadPoses(VecDeque<(i64, Vec3, Quat)>);
+
+impl HeadPoses {
+    fn add(&mut self, time_ns: i64, position: Vec3, rotation: Quat) {
+        if self.0.back().is_some_and(|&(last, ..)| time_ns <= last) {
+            return;
+        }
+        if self.0.len() == POSES {
+            self.0.pop_front();
+        }
+        self.0.push_back((time_ns, position, rotation));
+    }
+
+    /// The head at a time, between the two poses about it (the nearest one
+    /// when the time is outside what is kept).
+    pub(crate) fn at(&self, time_ns: i64) -> Option<(Vec3, Quat)> {
+        let after = self.0.iter().position(|&(t, ..)| t >= time_ns);
+        match after {
+            None => self.0.back().map(|&(_, p, q)| (p, q)),
+            Some(0) => self.0.front().map(|&(_, p, q)| (p, q)),
+            Some(i) => {
+                let ((t0, p0, q0), (t1, p1, q1)) = (self.0[i - 1], self.0[i]);
+                let share = (time_ns - t0) as f32 / (t1 - t0).max(1) as f32;
+                Some((p0.lerp(p1, share), q0.slerp(q1, share)))
+            }
+        }
+    }
+}
+
+/// The eyes' poses as each frame is drawn.
+pub(super) fn keep_head_poses(
+    frame: Option<Res<bevy_mod_openxr::resources::OxrFrameState>>,
+    // (The eye cameras' own transforms are tracking space.)
+    eyes: Query<&Transform, With<bevy_mod_xr::camera::XrCamera>>,
+    mut poses: ResMut<HeadPoses>,
+) {
+    let (Some(frame), Some(first)) = (frame, eyes.iter().next()) else { return };
+    let count = eyes.iter().count() as f32;
+    let middle = eyes.iter().map(|t| t.translation).sum::<Vec3>() / count;
+    poses.add(frame.predicted_display_time.as_nanos(), middle, first.rotation);
+}
+
+/// The camera's space from tracking space, for a camera with this lens pose
+/// on a head at this pose.
+pub(crate) fn camera_from_tracking(head: (Vec3, Quat), lens_rotation: Quat, lens_translation: Vec3) -> Mat4 {
+    Mat4::from_quat(lens_rotation) * Mat4::from_translation(-lens_translation) * Mat4::from_rotation_translation(head.1, head.0).inverse()
+}
+
+/// What the renderer needs of the newest camera frame.
+#[derive(Clone)]
+pub(crate) struct Guide {
+    pub frame: GuideFrame,
+    pub camera_from_tracking: Mat4,
+}
+
+/// The newest frame with where its camera was; none while there is no
+/// fresh one (`now_ns`: the frame being drawn's time).
+pub(crate) fn guide(poses: &HeadPoses, now_ns: i64) -> Option<Guide> {
+    let frame = latest()?;
+    if now_ns - frame.timestamp_ns > STALE_NS {
+        return None;
+    }
+    let head = poses.at(frame.timestamp_ns)?;
+    Some(Guide { camera_from_tracking: camera_from_tracking(head, frame.lens_rotation, frame.lens_translation), frame })
+}
+
+/// A camera frame's planes (as Camera2's YUV_420_888 gives them) at half
+/// size, RGBA: each pixel the mean of four of the frame's.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn half_rgba(
+    y: (&[u8], usize, usize),
+    u: (&[u8], usize, usize),
+    v: (&[u8], usize, usize),
+    width: usize,
+    height: usize,
+) -> Vec<u8> {
+    let (w, h) = (width / 2, height / 2);
+    let mut out = vec![255u8; w * h * 4];
+    let at = |(data, row, pixel): (&[u8], usize, usize), x: usize, yy: usize| data.get(yy * row + x * pixel).copied().unwrap_or(0) as f32;
+    for py in 0..h {
+        for px in 0..w {
+            let luma = (at(y, px * 2, py * 2) + at(y, px * 2 + 1, py * 2) + at(y, px * 2, py * 2 + 1) + at(y, px * 2 + 1, py * 2 + 1)) * 0.25;
+            let (cb, cr) = (at(u, px, py) - 128.0, at(v, px, py) - 128.0);
+            let o = (py * w + px) * 4;
+            out[o] = (luma + 1.402 * cr).clamp(0.0, 255.0) as u8;
+            out[o + 1] = (luma - 0.344 * cb - 0.714 * cr).clamp(0.0, 255.0) as u8;
+            out[o + 2] = (luma + 1.772 * cb).clamp(0.0, 255.0) as u8;
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_head_at_a_time_is_between_the_poses_about_it() {
+        let mut poses = HeadPoses::default();
+        assert!(poses.at(5).is_none());
+        poses.add(100, Vec3::ZERO, Quat::IDENTITY);
+        poses.add(200, Vec3::X, Quat::from_rotation_y(1.0));
+        // (a time that goes back is left out)
+        poses.add(150, Vec3::splat(9.0), Quat::IDENTITY);
+        let (p, q) = poses.at(150).unwrap();
+        assert!((p - Vec3::X * 0.5).length() < 1e-5);
+        assert!(q.angle_between(Quat::from_rotation_y(0.5)) < 1e-4);
+        assert_eq!(poses.at(50).unwrap().0, Vec3::ZERO, "before them all: the first");
+        assert_eq!(poses.at(900).unwrap().0, Vec3::X, "after them all: the last");
+        for i in 0..100 {
+            poses.add(1000 + i, Vec3::ZERO, Quat::IDENTITY);
+        }
+        assert_eq!(poses.0.len(), POSES);
+    }
+
+    /// A point of a recorded session lands where the desk-side working of
+    /// the same session (numpy, checked by eye against the camera's frames)
+    /// puts it.
+    #[test]
+    fn a_point_in_the_room_lands_in_the_cameras_frame_where_the_recording_says() {
+        let head = (
+            Vec3::new(0.6093691415335974, 1.0596616018789826, 0.22870923971612417),
+            Quat::from_xyzw(0.04174255014991297, -0.9713376535451258, -0.17832329636807462, 0.1515306051095127),
+        );
+        let lens_rotation = Quat::from_xyzw(-0.9952278733253479, -0.00039808754809200764, -0.004327708855271339, 0.09748116880655289);
+        let lens_translation = Vec3::new(-0.03182709962129593, -0.01681988500058651, -0.06260181218385696);
+        let intrinsics = Vec4::new(1169.6590576171875, 1169.6590576171875, 864.3427124023438, 863.6021118164062) / 1728.0;
+        let p = camera_from_tracking(head, lens_rotation, lens_translation).transform_point3(Vec3::new(0.9, 0.7, 1.6));
+        assert!((p.z - 1.31182652).abs() < 1e-3, "{p}");
+        let uv = Vec2::new(intrinsics.x * p.x / p.z + intrinsics.z, intrinsics.y * p.y / p.z + intrinsics.w);
+        assert!((uv - Vec2::new(0.591012, 0.27882281)).length() < 1e-3, "{uv}");
+    }
+
+    #[test]
+    fn a_frame_at_half_size_is_the_mean_of_fours_in_colour() {
+        // 4x2 of grey 100 and 200 (left and right halves), no colour.
+        let y = [100, 100, 200, 200, 100, 100, 200, 200];
+        let (u, v) = ([128, 0, 128, 0], [128, 0, 128, 0]);
+        // (chroma with a pixel stride of 2, as the headset gives it)
+        let out = half_rgba((&y, 4, 1), (&u, 4, 2), (&v, 4, 2), 4, 2);
+        assert_eq!(out, [100, 100, 100, 255, 200, 200, 200, 255]);
+        // Red-difference raises red and lowers green.
+        let out = half_rgba((&y, 4, 1), (&u, 4, 2), (&[228, 0, 128, 0], 4, 2), 4, 2);
+        assert!(out[0] > 200 && out[1] < 60 && out[2] == 100, "{out:?}");
+    }
+
+    #[test]
+    fn a_stale_frame_is_no_guide() {
+        let mut poses = HeadPoses::default();
+        poses.add(1_000_000_000, Vec3::ZERO, Quat::IDENTITY);
+        publish(GuideFrame {
+            pixels: Arc::new(vec![0; 4]),
+            width: 1,
+            height: 1,
+            timestamp_ns: 1_000_000_000,
+            lens_rotation: Quat::IDENTITY,
+            lens_translation: Vec3::ZERO,
+            intrinsics: Vec4::ONE,
+        });
+        assert!(guide(&poses, 1_050_000_000).is_some());
+        assert!(guide(&poses, 1_400_000_000).is_none());
+        set_wanted(false);
+        assert!(guide(&poses, 1_050_000_000).is_none(), "turned off: the frame is let go");
+    }
+}

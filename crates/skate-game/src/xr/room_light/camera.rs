@@ -32,6 +32,11 @@ const SETTLE: Duration = Duration::from_secs(1);
 /// At most one line this often about black frames.
 const BLACK_LOG_EVERY: Duration = Duration::from_secs(10);
 const IDLE_EVERY: Duration = Duration::from_millis(500);
+/// Between looks for a new frame while occlusion's edges want every one
+/// (`occlusion_edges`).
+const EDGES_EVERY: Duration = Duration::from_millis(6);
+/// The stream's width for occlusion's edges (it is used at half this).
+const EDGES_WIDTH: i32 = 1280;
 /// A camera that keeps failing is left alone until room lighting is turned
 /// off and on again.
 const MAX_FAILURES: u32 = 3;
@@ -42,7 +47,7 @@ const AIMAGE_FORMAT_YUV_420_888: i32 = 0x23;
 pub(crate) static BORROWED: AtomicBool = AtomicBool::new(false);
 
 /// Which of the camera's stream sizes to open.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) enum Pick {
     /// The smallest square one, at the lowest frame rate (room lighting).
     SmallestSquare,
@@ -79,8 +84,12 @@ fn run(feed: &Feed, room: &Mutex<Room>) {
     // Frames count from here (the camera opened, the head came back).
     let mut usable_from = Instant::now();
     let mut black_logged: Option<Instant> = None;
+    let mut last_light = Instant::now();
     loop {
-        if !feed.wanted() || BORROWED.load(Ordering::Relaxed) {
+        // Occlusion's edges want the camera too: every frame of a larger
+        // stream, of which room lighting takes its five a second.
+        let edges = crate::xr::occlusion_edges::wanted();
+        if !(feed.wanted() || edges) || BORROWED.load(Ordering::Relaxed) {
             if stream.take().is_some() {
                 info!("Room light: camera closed");
             }
@@ -88,6 +97,11 @@ fn run(feed: &Feed, room: &Mutex<Room>) {
             feed.set_state(CameraState::Off);
             std::thread::sleep(IDLE_EVERY);
             continue;
+        }
+        let pick = if edges { Pick::UpTo(EDGES_WIDTH) } else { Pick::SmallestSquare };
+        if stream.as_ref().is_some_and(|s| s.pick != pick) {
+            // (the other size is wanted now)
+            stream = None;
         }
         if stream.as_ref().is_some_and(|s| s.shared.failed.load(Ordering::Relaxed)) {
             warn!("Room light: the camera stopped");
@@ -101,7 +115,7 @@ fn run(feed: &Feed, room: &Mutex<Room>) {
                 feed.set_state(CameraState::NoCamera);
             } else {
                 feed.set_state(CameraState::Starting);
-                match Stream::open(Pick::SmallestSquare) {
+                match Stream::open(pick) {
                     Ok(opened) => {
                         info!("Room light: camera {} at {}x{}", opened.id, opened.camera.width, opened.camera.height);
                         room.lock().unwrap().set_camera(&opened.camera);
@@ -117,14 +131,21 @@ fn run(feed: &Feed, room: &Mutex<Room>) {
             std::thread::sleep(IDLE_EVERY);
             continue;
         };
-        std::thread::sleep(FRAME_EVERY);
+        std::thread::sleep(if edges { EDGES_EVERY } else { FRAME_EVERY });
         // No head while the headset isn't showing the game (off the face, the
         // system menu): what the camera sees then isn't the room as played in.
-        let Some(head) = feed.head() else {
+        let head = feed.head();
+        if head.is_none() {
             usable_from = Instant::now() + SETTLE;
-            continue;
-        };
-        if !open.latest(&linear, &mut cells) || Instant::now() < usable_from {
+        }
+        let light = feed.wanted() && head.is_some() && (!edges || last_light.elapsed() >= FRAME_EVERY);
+        let (reduced, guide) = open.latest(&linear, light.then_some(&mut cells[..]), edges);
+        if let Some(guide) = guide {
+            crate::xr::occlusion_edges::publish(guide);
+        }
+        let (Some(head), true, true) = (head, light, reduced) else { continue };
+        last_light = Instant::now();
+        if Instant::now() < usable_from {
             continue;
         }
         feed.set_state(CameraState::Running);
@@ -163,6 +184,9 @@ struct Shared {
 /// everything, in the order Camera2 wants.
 pub(crate) struct Stream {
     id: String,
+    pick: Pick,
+    /// The lens in the head's space (`LENS_POSE_TRANSLATION`), m.
+    lens_translation: [f32; 3],
     camera: Camera,
     /// The camera as Camera2 describes it, for a capture's notes.
     pub(crate) calibration: serde_json::Value,
@@ -283,6 +307,8 @@ impl Stream {
         let context = Arc::as_ptr(&shared) as *mut c_void;
         let mut stream = Stream {
             id,
+            pick,
+            lens_translation: [0.0; 3],
             camera: Camera::default(),
             calibration: serde_json::Value::Null,
             shared,
@@ -330,6 +356,9 @@ impl Stream {
         unsafe { sys::ACameraMetadata_free(characteristics) };
         let (camera, fps, calibration) = described?;
         stream.camera = camera;
+        if let Some(t) = calibration["lens_pose_translation"].as_array().filter(|t| t.len() >= 3) {
+            stream.lens_translation = [0, 1, 2].map(|i| t[i].as_f64().unwrap_or(0.0) as f32);
+        }
         stream.calibration = calibration;
         // (a capture reads every frame, and may be a few behind)
         let images = if matches!(pick, Pick::SmallestSquare) { 2 } else { 6 };
@@ -429,14 +458,15 @@ impl Stream {
         }
     }
 
-    /// Reduces the newest frame into `cells`; false when there is none yet.
-    fn latest(&mut self, linear: &[f32; 256], cells: &mut [f32]) -> bool {
+    /// The newest frame: reduced into `cells` when they are given (true when
+    /// it was), and at half size for occlusion's edges when `guide` is asked.
+    fn latest(&mut self, linear: &[f32; 256], cells: Option<&mut [f32]>, guide: bool) -> (bool, Option<crate::xr::occlusion_edges::GuideFrame>) {
         unsafe {
             let mut image = null_mut();
             if sys::AImageReader_acquireLatestImage(self.reader, &mut image) != sys::media_status_t::AMEDIA_OK
                 || image.is_null()
             {
-                return false;
+                return (false, None);
             }
             let plane = |index: c_int| -> Option<Plane<'static>> {
                 let (mut data, mut length, mut row, mut pixel) = (null_mut(), 0, 0, 0);
@@ -450,18 +480,37 @@ impl Stream {
                     pixel_stride: pixel as usize,
                 })
             };
-            let (mut width, mut height) = (0, 0);
+            let (mut width, mut height, mut timestamp_ns) = (0, 0, 0i64);
             sys::AImage_getWidth(image, &mut width);
             sys::AImage_getHeight(image, &mut height);
+            sys::AImage_getTimestamp(image, &mut timestamp_ns);
             let planes = (plane(0), plane(1), plane(2));
-            let reduced = if let ((Some(y), Some(u), Some(v)), true) = (planes, width > 0 && height > 0) {
-                reduce::reduce(y, u, v, width as usize, height as usize, linear, cells);
-                true
-            } else {
-                false
-            };
+            let mut reduced = false;
+            let mut frame = None;
+            if let ((Some(y), Some(u), Some(v)), true) = (planes, width > 1 && height > 1) {
+                let (width, height) = (width as usize, height as usize);
+                if guide {
+                    let of = |p: &Plane<'static>| (p.data, p.row_stride, p.pixel_stride.max(1));
+                    let k = &self.camera;
+                    let (sw, sh) = (k.sensor_width.max(1) as f32, k.sensor_height.max(1) as f32);
+                    let q = k.lens_rotation;
+                    frame = Some(crate::xr::occlusion_edges::GuideFrame {
+                        pixels: Arc::new(crate::xr::occlusion_edges::half_rgba(of(&y), of(&u), of(&v), width, height)),
+                        width: (width / 2) as u32,
+                        height: (height / 2) as u32,
+                        timestamp_ns,
+                        lens_rotation: bevy::math::Quat::from_xyzw(q.x, q.y, q.z, q.w),
+                        lens_translation: self.lens_translation.into(),
+                        intrinsics: bevy::math::Vec4::new(k.fx / sw, k.fy / sh, k.cx / sw, k.cy / sh),
+                    });
+                }
+                if let Some(cells) = cells {
+                    reduce::reduce(y, u, v, width, height, linear, cells);
+                    reduced = true;
+                }
+            }
             sys::AImage_delete(image);
-            reduced
+            (reduced, frame)
         }
     }
 }

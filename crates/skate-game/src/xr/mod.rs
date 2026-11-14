@@ -18,6 +18,7 @@ pub(crate) mod build;
 pub(crate) mod link;
 pub(crate) mod occlusion;
 pub(crate) mod occlusion_capture;
+pub(crate) mod occlusion_edges;
 mod mesh_planes;
 pub(crate) mod panel;
 mod plane_view;

@@ -284,6 +284,10 @@ fn ar_widgets(world: &World) -> Vec<Widget> {
     if s.occlusion.on() {
         let problem = *world.resource::<crate::xr::occlusion::OcclusionProblem>().0.lock().unwrap();
         w.push(Widget::info(problem.unwrap_or("Uses the headset's depth sensing.")));
+        w.push(Widget::toggle("occlusion_edges", "Sharper edges, found by the headset's cameras", s.occlusion_edges));
+        if s.occlusion_edges && !crate::camera_access() {
+            w.push(Widget::info("The cameras aren't allowed yet: turn this off and on to be asked again."));
+        }
         // (developers: what occlusion works from, saved to work on at a desk)
         if super::sound_lab::dev(world) {
             w.push(Widget::button("occlusion_capture", format!("Record an occlusion capture ({} s)", crate::xr::occlusion_capture::SECONDS)));
@@ -344,8 +348,13 @@ fn ar_act(widget: &str, world: &mut World) -> Outcome {
         "hud" => s.hud = !s.hud,
         "room_light" => s.room_light = !s.room_light,
         "occlusion" => s.occlusion = s.occlusion.toggled(),
+        "occlusion_edges" => s.occlusion_edges = !s.occlusion_edges,
         _ => {}
     });
+    if widget == "occlusion_edges" && world.resource::<ArSettings>().occlusion_edges && !crate::camera_access() {
+        crate::request_camera_access();
+        return Outcome::Say("Edges are found by looking at your room through the headset's cameras. Nothing is saved or sent.".into());
+    }
     // The room's light is read from a passthrough camera: ask for it once.
     if widget == "room_light" && world.resource::<ArSettings>().room_light && !crate::camera_access() {
         crate::request_camera_access();
