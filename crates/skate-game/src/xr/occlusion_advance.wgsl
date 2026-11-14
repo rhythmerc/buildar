@@ -6,8 +6,8 @@
 // from the wrist to the shoulder (the arm) to have swung about the
 // shoulder as the wrist went. For each texel and each such part, the piece
 // of the part's surface that lands on the texel is looked for; where a
-// part has left and nothing came, the farthest of what stays put about it
-// shows through.
+// part has left and nothing came, what stays put nearest about it, and
+// behind it, shows.
 struct Part {
     // How the part's points moved, and back.
     forward: mat4x4<f32>,
@@ -132,22 +132,27 @@ fn fragment(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 
         }
     }
     if best >= none {
-        // Something left and nothing came: the farthest of what stays put about here.
-        var farthest = 0.0;
-        for (var reach = 4; reach <= 32; reach *= 2) {
+        // Something left and nothing came: what was just behind it shows, by
+        // what stays put nearest about here. The nearest ring of texels with
+        // any that are behind where the thing was; of those, the nearest
+        // behind. (The farthest instead made holes in real things a hand
+        // passed in front of.)
+        var behind = 0.0;
+        for (var reach = 2; reach <= 32 && behind <= 0.0; reach *= 2) {
             for (var way = 0; way < 8; way++) {
                 let dir = array<vec2<f32>, 8>(vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0), vec2(1.0, 1.0), vec2(-1.0, 1.0), vec2(1.0, -1.0), vec2(-1.0, -1.0))[way];
                 let there = image + dir * f32(reach) / vec2<f32>(size);
                 let m = metres_at(there, size);
-                if m > farthest && !moves_at(point(there, m)) {
-                    farthest = m;
+                if m > own * 0.97 && (behind <= 0.0 || m < behind) && !moves_at(point(there, m)) {
+                    behind = m;
                 }
             }
         }
-        if farthest <= 0.0 {
+        // (nothing found: as the image had it)
+        best = select(own, behind, behind > 0.0);
+        if best <= 0.0 {
             return 1.0;
         }
-        best = farthest;
     }
     return depth_of(best);
 }

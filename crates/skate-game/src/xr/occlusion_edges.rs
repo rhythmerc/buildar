@@ -77,11 +77,11 @@ pub(crate) struct HandPoses(pub [HeadPoses; 2]);
 
 /// The hands are taken to reach this far about a point a little behind the
 /// controller's aim pose, m; the wrist is this far behind that pose.
-const HAND_REACH_M: f32 = 0.16;
+const HAND_REACH_M: f32 = 0.13;
 const HAND_BACK_M: f32 = 0.05;
 const WRIST_BACK_M: f32 = 0.10;
 /// How thick an arm is about its line, m.
-const ARM_M: f32 = 0.09;
+const ARM_M: f32 = 0.07;
 /// Where a shoulder is from the head: out to its side, down, and back, m.
 const SHOULDER_M: Vec3 = Vec3::new(0.19, 0.22, 0.02);
 
