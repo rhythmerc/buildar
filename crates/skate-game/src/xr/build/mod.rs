@@ -25,10 +25,12 @@
 //! Left trigger: undo. Left stick click: a starter park. Y: rescan the room.
 //! Hold X: clear every piece.
 //!
-//! Pieces line up with table edges and with each other ([`snap`]). They live
-//! in tracking (STAGE) space, so they stay on the same real table, and are
-//! saved between launches ([`layout`]). Their collision and grind rails are
-//! built by `xr::real_world`.
+//! Pieces line up with table edges and with each other ([`snap`]); a
+//! ramp's point drawn or moved beside a table and raised to about its height
+//! is put level with it, on its edge. They live in tracking (STAGE) space,
+//! so they stay on the same real table, and are saved between launches
+//! ([`layout`]). Their collision and grind rails are built by
+//! `xr::real_world`.
 mod anchor;
 mod dress;
 mod layout;
@@ -106,7 +108,8 @@ const MAX_FINISHES: usize = 4;
 const HANDLE_DOT_M: f32 = 0.012;
 /// How near the pointer's ray a drawn piece's handle is taken, real metres.
 const HANDLE_REACH_M: f32 = 0.05;
-/// How near an edge (or an outline's first point) a point being drawn takes it, real metres.
+/// How near an edge (a piece's, or a table's when it is raised to its height, or an
+/// outline's first point) a point being drawn takes it, real metres.
 const DRAW_SNAP_M: f32 = 0.08;
 /// How fast the stick raises a point, real metres a second.
 const RISE_RATE: f32 = 0.25;
@@ -390,7 +393,8 @@ struct BuildState {
     free: bool,
     /// The piece in hand is joined to another's edge: how far that leaves
     /// its base above the surface (`Piece::lift`), and the edge (its middle,
-    /// the direction along it and its length, tracking space).
+    /// the direction along it and its length, tracking space). Also the
+    /// edge (a piece's or a table's) a point being drawn or moved is on.
     lift: f32,
     join: Option<(Vec3, Vec3, f32)>,
     /// The player has set the next piece's dimensions: a join leaves them.
@@ -407,6 +411,9 @@ struct BuildState {
     floating: bool,
     /// How far the stick raised the point being placed or moved this frame, m.
     rise: f32,
+    /// The height the stick has put the ramp's point being moved at (the
+    /// piece's own metres), whether or not it is shown level with a table.
+    raised: Option<f32>,
     /// The handle of the selected drawn piece the pointer is on, and the one held.
     handle: Option<Grab>,
     handle_drag: Option<Grab>,
@@ -461,6 +468,7 @@ impl Default for BuildState {
             level: None,
             floating: false,
             rise: 0.0,
+            raised: None,
             handle: None,
             handle_drag: None,
             menu_hold: None,
@@ -1070,6 +1078,7 @@ ends_down: [0.0; 2],
         placed.checkpoint();
         placed.shaping = true;
         state.handle_drag = state.handle;
+        state.raised = None;
     } else if pressed(now.grip, previous.grip) {
         if let Some(id) = placed.pointed.filter(|&id| Some(id) != placed.selected) {
             finish_edit(&mut placed);
@@ -1087,12 +1096,34 @@ ends_down: [0.0; 2],
                 .filter(|h| h.normal.y >= MIN_UP)
                 .map(|h| to_tracking.transform_point3(h.point));
             let rise = state.rise;
+            state.join = None;
             if let Some(item) = placed.get_mut(id) {
                 let k = metres * item.scale;
                 let to = to.map(|p| item.to_local(metres, p));
+                // A ramp's point goes up and down from where the stick has put it, not from a
+                // table's height it was put level with: pushing on lets it go again.
+                let ramp = match handle {
+                    Grab::Node(i) if item.piece.kind == PieceKind::Deck => Some(i),
+                    _ => None,
+                };
+                if let (Some(raised), Some(node)) = (state.raised, ramp.and_then(|i| item.path.as_mut()?.nodes.get_mut(i))) {
+                    node.at[1] = raised;
+                }
                 shape(item, handle, to, rise / k);
+                if let Some(node) = ramp.and_then(|i| item.path.as_ref()?.nodes.get(i).copied()) {
+                    state.raised = Some(node.at[1]);
+                    let (at, base) = (item.from_local(metres, Vec3::from_array(node.at)), item.position[1] + node.base * k);
+                    if let Some((on, edge)) = level_with_room(&world, &to_tracking, at, base) {
+                        let on = item.to_local(metres, on).to_array();
+                        if let Some(node) = ramp.and_then(|i| item.path.as_mut()?.nodes.get_mut(i)) {
+                            node.at = on;
+                        }
+                        state.join = Some(edge);
+                    }
+                }
             }
         } else {
+            state.raised = None;
             state.handle_drag = None;
             placed.shaping = false;
             placed.revision += 1;
@@ -1270,6 +1301,15 @@ ends_down: [0.0; 2],
                         state.level = Some(y);
                     }
                     node.at[1] = y;
+                    // A ramp's point raised to about a table's height beside it is put level with
+                    // the table, on its edge, so the ramp runs on off it without a step. (The
+                    // stick's height stays the stick's: pushing on lets it go again.)
+                    if kind == PieceKind::Deck {
+                        if let Some((on, edge)) = level_with_room(&world, &to_tracking, Vec3::from_array(node.at), node.base) {
+                            node.at = on.to_array();
+                            state.join = Some(edge);
+                        }
+                    }
                     // On another piece's edge (a rail's end for a rail), it starts or ends there.
                     let rail = kind == PieceKind::RailPath;
                     let edge = placed
@@ -1412,7 +1452,7 @@ fn describe(
             ];
             next.right = match (state.handle_drag.or(state.handle), &item.path) {
                 (Some(Grab::Node(i)), Some(path)) if state.handle_drag.is_some() => {
-                    let mut rows = vec![Row::new("Grip", "let go to leave it there")];
+                    let mut rows = vec![Row::new("Grip", if state.join.is_some() { "let go to leave it on that edge" } else { "let go to leave it there" })];
                     match item.piece.kind {
                         PieceKind::Pool => {}
                         PieceKind::Pad => rows.push(Row::new("Stick ↕", "raise / lower the pad")),
@@ -1483,6 +1523,8 @@ fn describe(
                     "Trigger",
                     match (state.closing, state.pending.is_some(), state.draft.is_empty()) {
                         (true, ..) => "close the outline",
+                        (_, true, true) if state.join.is_some() => "put its first point on that edge",
+                        (_, true, false) if state.join.is_some() => "put the next point on that edge",
                         (_, true, true) => "put its first point here",
                         (_, true, false) => "put the next point here",
                         _ if state.draft.len() >= drawn::MAX_NODES => "that's every point: A to finish",
@@ -1556,6 +1598,17 @@ fn draft_path(draft: &[drawn::Node], pending: Option<drawn::Node>, origin: Vec3,
         .map(|n| drawn::Node::new((Vec3::from_array(n.at) - origin) / metres, (n.base - origin.y) / metres))
         .collect();
     drawn::Path { nodes, ..default() }
+}
+
+/// A ramp's point (tracking space), raised from a surface at height `base`
+/// to about the height of a table beside it: where it goes, level with the
+/// table and on its edge ([`snap::level_with`]), and that edge as
+/// [`BuildState::join`] marks it.
+fn level_with_room(world: &ArWorld, to_tracking: &bevy::math::Affine3A, point: Vec3, base: f32) -> Option<(Vec3, (Vec3, Vec3, f32))> {
+    let faces = world.room_quads.iter().map(|q| q.map(|p| to_tracking.transform_point3(p)));
+    let level = snap::level_with(faces, point, base, DRAW_SNAP_M)?;
+    let (a, b) = level.edge;
+    Some((level.at, ((a + b) * 0.5, (b - a).normalize_or(Vec3::X), a.distance(b))))
 }
 
 /// Moves a handle of a drawn piece: a point to `to` (the piece's own
@@ -2504,7 +2557,7 @@ fn show_edit(
                     Transform { translation: at.transform_point(middle - middle * 1.04), scale: at.scale * 1.04, ..at }
                 })
             }
-            (Mark::Join, Some(root)) => state.join.filter(|_| placed.selected.is_none() || placed.dragging.is_some()).map(|(at, along, width)| Transform {
+            (Mark::Join, Some(root)) => state.join.filter(|_| placed.selected.is_none() || placed.dragging.is_some() || state.handle_drag.is_some()).map(|(at, along, width)| Transform {
                 translation: root.transform_point(at),
                 rotation: root.rotation * Quat::from_rotation_arc(Vec3::X, along),
                 scale: root.scale.x * Vec3::new(width.max(0.06), 0.012, 0.012),
@@ -2689,6 +2742,15 @@ mod tests {
             self.hold(2, |_| {});
         }
 
+        /// A desk in the room, as Space Setup gives it: its top 0.7 m up (x -0.6 to 0.6,
+        /// z -3.6 to -3) and its front face, which looks at the controller.
+        fn desk(&mut self) {
+            let mut world = self.world.resource_mut::<ArWorld>();
+            let (x, top, front, back) = (0.6, 0.7, -3.0, -3.6);
+            world.room_quads.push([Vec3::new(-x, top, back), Vec3::new(x, top, back), Vec3::new(x, top, front), Vec3::new(-x, top, front)]);
+            world.room_quads.push([Vec3::new(-x, 0.0, front), Vec3::new(x, 0.0, front), Vec3::new(x, top, front), Vec3::new(-x, top, front)]);
+        }
+
         fn state(&self) -> &BuildState {
             self.world.resource::<BuildState>()
         }
@@ -2715,6 +2777,111 @@ mod tests {
         let item = &bench.placed().items[0];
         let nodes = &item.path.as_ref().unwrap().nodes;
         assert!(item.position[1].abs() < 1e-4 && (nodes[0].at[1] - RISE_RATE).abs() < 0.01 && (nodes[1].at[1] - RISE_RATE).abs() < 0.01, "{item:?}");
+    }
+
+    /// Frames of the stick held full up (or down) that raise a point by `metres`.
+    fn rising(metres: f32) -> usize {
+        (metres / RISE_RATE * 72.0).round() as usize
+    }
+
+    #[test]
+    fn a_ramp_drawn_down_from_a_desk_starts_level_with_its_top_and_keeps_its_width() {
+        let mut bench = Bench::new(PieceKind::Deck);
+        bench.desk();
+        let deck = PieceKind::ALL.iter().position(|&k| k == PieceKind::Deck).unwrap();
+        bench.world.resource_mut::<BuildState>().widths[deck] = 1.3;
+        // Its first point on the floor 5 cm out from the desk's front, raised to a little under its top.
+        bench.aim(Vec3::new(0.2, 0.0, -2.95));
+        bench.hold(rising(0.68), |t| t.right_stick = [0.0, 1.0]);
+        let pending = bench.state().pending.expect("a point to put down");
+        assert!(Vec3::from_array(pending.at).distance(Vec3::new(0.2, 0.7, -3.0)) < 1e-4, "level with the desk, on its edge: {pending:?}");
+        assert!(pending.base.abs() < 1e-4, "it stands on the floor: {pending:?}");
+        let (at, along, length) = bench.state().join.expect("the desk's edge is marked");
+        assert!(at.distance(Vec3::new(0.0, 0.7, -3.0)) < 1e-4 && along.x.abs() > 0.999 && (length - 1.2).abs() < 1e-4);
+        bench.tap(|t| t.right_trigger = 1.0);
+        // The next on the floor nearer the player, lowered to it.
+        bench.aim(Vec3::new(0.2, 0.0, -1.0));
+        bench.hold(rising(1.0), |t| t.right_stick = [0.0, -1.0]);
+        bench.tap(|t| t.right_trigger = 1.0);
+        bench.tap(|t| t.a = true);
+        let item = &bench.placed().items[0];
+        let path = item.path.as_ref().unwrap();
+        let start = Vec3::from_array(item.position) + Vec3::from_array(path.nodes[0].at);
+        assert!(start.distance(Vec3::new(0.2, 0.7, -3.0)) < 1e-4 && path.nodes[1].at[1].abs() < 1e-4, "{item:?}");
+        // As wide as it was chosen, not as the desk is.
+        assert!((item.piece.width - 1.3).abs() < 1e-4 && (bench.state().widths[deck] - 1.3).abs() < 1e-4);
+        assert!((path.ends(item.piece)[0].2 - 2.6).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_ramp_point_raised_on_past_the_desk_lets_go_of_it() {
+        let mut bench = Bench::new(PieceKind::Deck);
+        bench.desk();
+        let up = |t: &mut TouchState| t.right_stick = [0.0, 1.0];
+        let down = |t: &mut TouchState| t.right_stick = [0.0, -1.0];
+        let pending = |bench: &Bench| Vec3::from_array(bench.state().pending.expect("a point to put down").at);
+        bench.aim(Vec3::new(0.2, 0.0, -2.95));
+        bench.hold(rising(0.68), up);
+        assert!(pending(&bench).distance(Vec3::new(0.2, 0.7, -3.0)) < 1e-4);
+        // On up to 7 cm over it: where the stick has it, out where the pointer is.
+        bench.hold(rising(0.09), up);
+        let at = pending(&bench);
+        assert!((at.y - 0.77).abs() < 0.005 && (at.z + 2.95).abs() < 1e-4 && bench.state().join.is_none(), "{at}");
+        // Back down to it, it is level again; on down past it, let go again.
+        bench.hold(rising(0.07), down);
+        assert!(pending(&bench).distance(Vec3::new(0.2, 0.7, -3.0)) < 1e-4, "{}", pending(&bench));
+        bench.hold(rising(0.1), down);
+        let at = pending(&bench);
+        assert!((at.y - 0.6).abs() < 0.005 && (at.z + 2.95).abs() < 1e-4, "{at}");
+        // At its height but 20 cm out from it: left where it is.
+        bench.aim(Vec3::new(0.2, 0.0, -2.8));
+        bench.hold(rising(0.1), up);
+        let at = pending(&bench);
+        assert!((at.y - 0.7).abs() < 0.005 && (at.z + 2.8).abs() < 1e-4 && bench.state().join.is_none(), "{at}");
+    }
+
+    #[test]
+    fn a_ramp_point_moved_beside_the_desk_goes_level_with_it_and_lets_go_when_raised_on() {
+        let mut bench = Bench::new(PieceKind::Deck);
+        bench.desk();
+        // A ramp on the floor in front of the desk: its high end 0.3 m up.
+        bench.aim(Vec3::new(0.2, 0.0, -2.2));
+        bench.hold(rising(0.3), |t| t.right_stick = [0.0, 1.0]);
+        bench.tap(|t| t.right_trigger = 1.0);
+        bench.aim(Vec3::new(0.2, 0.0, -0.8));
+        bench.hold(rising(0.5), |t| t.right_stick = [0.0, -1.0]);
+        bench.tap(|t| t.right_trigger = 1.0);
+        bench.tap(|t| t.a = true);
+        let item = bench.placed().items[0].clone();
+        let high = Vec3::from_array(item.position) + Vec3::from_array(item.path.as_ref().unwrap().nodes[0].at);
+        // Selected (pointing at its top, off its dots), its high end's dot taken with the grip.
+        bench.aim(Vec3::new(0.8, 0.15, -1.6));
+        bench.tap(|t| t.right_grip = 1.0);
+        assert_eq!(bench.placed().selected, Some(item.id));
+        bench.aim(high);
+        bench.hold(2, |t| t.right_grip = 1.0);
+        assert_eq!(bench.state().handle_drag, Some(Grab::Node(0)));
+        // Over the floor 5 cm out from the desk, raised to a little under its top.
+        let point = |bench: &Bench| {
+            let item = &bench.placed().items[0];
+            Vec3::from_array(item.position) + Vec3::from_array(item.path.as_ref().unwrap().nodes[0].at)
+        };
+        bench.aim(Vec3::new(0.2, 0.0, -2.95));
+        bench.hold(rising(0.68 - high.y), |t| {
+            t.right_grip = 1.0;
+            t.right_stick = [0.0, 1.0];
+        });
+        assert!(point(&bench).distance(Vec3::new(0.2, 0.7, -3.0)) < 1e-4, "{}", point(&bench));
+        assert!(bench.state().join.is_some());
+        // Raised on, it is let go; left there.
+        bench.hold(rising(0.09), |t| {
+            t.right_grip = 1.0;
+            t.right_stick = [0.0, 1.0];
+        });
+        bench.hold(3, |_| {});
+        let at = point(&bench);
+        assert!((at.y - 0.77).abs() < 0.005 && (at.z + 2.95).abs() < 1e-4, "{at}");
+        assert_eq!((bench.state().handle_drag, bench.placed().items[0].piece), (None, item.piece), "its width as it was");
     }
 
     #[test]

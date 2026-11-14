@@ -24,7 +24,7 @@ use super::rig::Rig;
 use bevy::prelude::*;
 
 const MIN_HALF_M: f32 = 0.01;
-const UPWARD_MIN_COS: f32 = 0.9;
+pub(crate) const UPWARD_MIN_COS: f32 = 0.9;
 /// A mesh triangle this close to a Scene plane or box surface is that surface.
 const COVER_DISTANCE_M: f32 = 0.08;
 /// Scan edges overhang the Scene rectangles a little.

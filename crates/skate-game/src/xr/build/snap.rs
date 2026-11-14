@@ -7,6 +7,11 @@
 //! With each other ([`join`]): a piece brought beside another of its kind,
 //! turned about the same way, takes its place flush against it, so two half
 //! pipes make one long one and walls run on in a line.
+//!
+//! A drawn ramp's point with the room's tables ([`level_with`]): raised to
+//! about a table's height beside it, it is put at exactly that height, on
+//! the table's edge, so the ramp runs on off the table without a step.
+use crate::xr::real_world::UPWARD_MIN_COS;
 use bevy::prelude::*;
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -212,6 +217,59 @@ pub(crate) fn meet(theirs: impl IntoIterator<Item = Edge>, position: Vec3, yaw: 
     best.map(|(_, met)| met)
 }
 
+/// How near a table's height a drawn point must be raised to be put level
+/// with it, m: past this either way it is let go.
+pub(crate) const LEVEL_HEIGHT_M: f32 = 0.05;
+
+/// A drawn point put level with a face of the room ([`level_with`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Level {
+    /// Where the point goes: at the face's height, over it or on its edge.
+    pub at: Vec3,
+    /// The face's edge nearest the point, end to end.
+    pub edge: (Vec3, Vec3),
+}
+
+/// Level with a table: `point` (tracking space), raised from a surface at
+/// height `base`, goes to the height of a level face among `faces` (a
+/// table's or shelf's top, corners in order) when it is within
+/// [`LEVEL_HEIGHT_M`] of that height and over the face or within `reach` of
+/// its edge over the ground; beside it, it also comes in onto the edge.
+/// Faces no higher than `base` are left out: the point is already on its
+/// own. Only where the point is changes, so the piece keeps its width. The
+/// nearest face over the ground wins.
+pub(crate) fn level_with(faces: impl IntoIterator<Item = [Vec3; 4]>, point: Vec3, base: f32, reach: f32) -> Option<Level> {
+    let p = point.xz();
+    let mut best: Option<(f32, Level)> = None;
+    for q in faces {
+        if (q[1] - q[0]).cross(q[3] - q[0]).normalize_or_zero().y.abs() < UPWARD_MIN_COS {
+            continue;
+        }
+        let height = q.iter().map(|c| c.y).sum::<f32>() / 4.0;
+        if height - base <= LEVEL_HEIGHT_M || (point.y - height).abs() > LEVEL_HEIGHT_M {
+            continue;
+        }
+        let edges = [0, 1, 2, 3].map(|i| (q[i], q[(i + 1) % 4]));
+        let nearest = |(a, b): (Vec3, Vec3)| {
+            let (a, ab) = (a.xz(), (b - a).xz());
+            a + ab * ((p - a).dot(ab) / ab.length_squared().max(1e-12)).clamp(0.0, 1.0)
+        };
+        let (edge, on) = edges
+            .into_iter()
+            .map(|e| (e, nearest(e)))
+            .min_by(|a, b| a.1.distance_squared(p).total_cmp(&b.1.distance_squared(p)))
+            .expect("four edges");
+        // Over the face (on the same side of every edge, whichever way it is wound), it stays where it is.
+        let sides = edges.map(|(a, b)| (b.x - a.x) * (p.y - a.z) - (b.z - a.z) * (p.x - a.x));
+        let over = sides.iter().all(|s| *s >= 0.0) || sides.iter().all(|s| *s <= 0.0);
+        let (to, distance) = if over { (p, 0.0) } else { (on, on.distance(p)) };
+        if distance <= reach && best.is_none_or(|(d, _)| distance < d) {
+            best = Some((distance, Level { at: Vec3::new(to.x, height, to.y), edge }));
+        }
+    }
+    best.map(|(_, level)| level)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +401,31 @@ mod tests {
         }
         assert!(join_ends([placed], rail(end + Vec3::new(0.6, 0.0, 0.0), 1.0), false).is_none(), "too far");
         assert!(join_ends([placed], rail(end + Vec3::Y * 0.3, 1.0), false).is_none(), "on another surface");
+    }
+
+    #[test]
+    fn a_point_raised_beside_a_desk_goes_level_with_its_top_and_onto_its_edge() {
+        // A desk top 0.7 up, its front edge along z = -3 (x -0.6 to 0.6); the floor; a wall.
+        let level = |x0: f32, z0: f32, x1: f32, z1: f32, y: f32| [Vec3::new(x0, y, z0), Vec3::new(x1, y, z0), Vec3::new(x1, y, z1), Vec3::new(x0, y, z1)];
+        let desk = level(-0.6, -3.6, 0.6, -3.0, 0.7);
+        let wall = [Vec3::new(-2.0, 0.0, -4.0), Vec3::new(2.0, 0.0, -4.0), Vec3::new(2.0, 2.5, -4.0), Vec3::new(-2.0, 2.5, -4.0)];
+        let faces = [level(-5.0, -5.0, 5.0, 5.0, 0.0), desk, wall];
+        // Raised from the floor 5 cm in front of it, a little under its height: up to it, and in onto the edge.
+        let found = level_with(faces, Vec3::new(0.2, 0.67, -2.95), 0.0, 0.08).expect("beside the desk");
+        assert!(found.at.distance(Vec3::new(0.2, 0.7, -3.0)) < 1e-5, "{found:?}");
+        assert!((found.edge.0.z + 3.0).abs() < 1e-5 && (found.edge.1.z + 3.0).abs() < 1e-5, "the front edge: {found:?}");
+        // A little over it, too; over the desk itself, it only comes to its height.
+        assert!(level_with(faces, Vec3::new(0.2, 0.74, -2.95), 0.0, 0.08).is_some_and(|l| (l.at.y - 0.7).abs() < 1e-6));
+        let over = level_with(faces, Vec3::new(0.2, 0.68, -3.2), 0.45, 0.08).expect("over the desk");
+        assert!(over.at.distance(Vec3::new(0.2, 0.7, -3.2)) < 1e-5);
+        // Clearly higher or lower, or too far out: left alone.
+        assert!(level_with(faces, Vec3::new(0.2, 0.77, -2.95), 0.0, 0.08).is_none());
+        assert!(level_with(faces, Vec3::new(0.2, 0.62, -2.95), 0.0, 0.08).is_none());
+        assert!(level_with(faces, Vec3::new(0.2, 0.7, -2.8), 0.0, 0.08).is_none());
+        // On the desk already, a little raise is its own; the floor is never a table; nor is the wall.
+        assert!(level_with(faces, Vec3::new(0.2, 0.72, -3.2), 0.7, 0.08).is_none());
+        assert!(level_with(faces, Vec3::new(0.2, 0.03, 0.0), 0.0, 0.08).is_none());
+        assert!(level_with([wall], Vec3::new(0.0, 0.0, -3.97), -1.0, 0.08).is_none());
     }
 
     fn top_of(table_yaw: f32, point: Vec3) -> Vec3 {
