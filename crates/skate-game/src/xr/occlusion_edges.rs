@@ -68,8 +68,87 @@ fn latest() -> Option<GuideFrame> {
 
 /// The head (the middle of the eyes) in tracking space at each of the last
 /// frames' display times.
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub(crate) struct HeadPoses(VecDeque<(i64, Vec3, Quat)>);
+
+/// The controllers' aim poses, left and right, the same way.
+#[derive(Resource, Default, Clone)]
+pub(crate) struct HandPoses(pub [HeadPoses; 2]);
+
+/// The hands are taken to reach this far about a point a little behind the
+/// controller's aim pose, m; the wrist is this far behind that pose.
+const HAND_REACH_M: f32 = 0.16;
+const HAND_BACK_M: f32 = 0.05;
+const WRIST_BACK_M: f32 = 0.10;
+/// How thick an arm is about its line, m.
+const ARM_M: f32 = 0.09;
+/// Where a shoulder is from the head: out to its side, down, and back, m.
+const SHOULDER_M: Vec3 = Vec3::new(0.19, 0.22, 0.02);
+
+/// A part of the player that moved between two times, for
+/// `occlusion_advance.wgsl`: how its points moved, its line now, and what
+/// of the room was it then.
+#[derive(Clone, Copy, Debug, Default, bevy::render::render_resource::ShaderType)]
+pub(crate) struct Part {
+    pub forward: Mat4,
+    pub backward: Mat4,
+    pub line_start: Vec4,
+    pub line_end: Vec4,
+    /// The hand's middle then, and its reach.
+    pub centre: Vec4,
+    /// An arm: the wrist then and the arm's length; the way to the shoulder
+    /// and the arm's thickness (0: a hand).
+    pub wrist: Vec4,
+    pub axis: Vec4,
+}
+
+/// The hands and arms as they moved from `then` to `now` (ns): each hand
+/// rigidly with its controller, each arm swung about its shoulder (which
+/// is taken to be under the head) as the wrist went.
+pub(crate) fn parts(head: &HeadPoses, hands: &HandPoses, then: i64, now: i64) -> Vec<Part> {
+    let mut out = Vec::new();
+    let Some((head_at, head_turn)) = head.at(then) else { return out };
+    let ahead = (head_turn * Vec3::NEG_Z).with_y(0.0).normalize_or_zero();
+    let right = ahead.cross(Vec3::Y);
+    for (side, poses) in [(-1.0, &hands.0[0]), (1.0, &hands.0[1])] {
+        let (Some((pa, qa)), Some((pb, qb))) = (poses.at(then), poses.at(now)) else { continue };
+        let was = Mat4::from_rotation_translation(qa, pa);
+        let is = Mat4::from_rotation_translation(qb, pb);
+        let forward = is * was.inverse();
+        let centre = pa + qa * Vec3::Z * HAND_BACK_M;
+        let centre_now = (pb + qb * Vec3::Z * HAND_BACK_M).extend(0.0);
+        out.push(Part {
+            forward,
+            backward: forward.inverse(),
+            line_start: centre_now,
+            line_end: centre_now,
+            centre: centre.extend(HAND_REACH_M),
+            wrist: Vec4::ZERO,
+            axis: Vec4::ZERO,
+        });
+        let shoulder = head_at + right * SHOULDER_M.x * side - Vec3::Y * SHOULDER_M.y - ahead * SHOULDER_M.z;
+        let (wrist, wrist_now) = (pa + qa * Vec3::Z * WRIST_BACK_M, pb + qb * Vec3::Z * WRIST_BACK_M);
+        let (arm, arm_now) = (wrist - shoulder, wrist_now - shoulder);
+        let length = arm.length();
+        if length < 0.05 || arm_now.length() < 0.05 {
+            continue;
+        }
+        let swing = Mat4::from_translation(shoulder)
+            * Mat4::from_scale(Vec3::splat(arm_now.length() / length))
+            * Mat4::from_quat(Quat::from_rotation_arc(arm / length, arm_now.normalize()))
+            * Mat4::from_translation(-shoulder);
+        out.push(Part {
+            forward: swing,
+            backward: swing.inverse(),
+            line_start: wrist_now.extend(0.0),
+            line_end: shoulder.extend(0.0),
+            centre: centre.extend(HAND_REACH_M),
+            wrist: wrist.extend(length),
+            axis: (-arm / length).extend(ARM_M),
+        });
+    }
+    out
+}
 
 impl HeadPoses {
     fn add(&mut self, time_ns: i64, position: Vec3, rotation: Quat) {
@@ -103,9 +182,15 @@ pub(super) fn keep_head_poses(
     frame: Option<Res<bevy_mod_openxr::resources::OxrFrameState>>,
     // (The eye cameras' own transforms are tracking space.)
     eyes: Query<&Transform, With<bevy_mod_xr::camera::XrCamera>>,
+    hands: Query<(&Transform, &super::actions::Hand), Without<bevy_mod_xr::camera::XrCamera>>,
     mut poses: ResMut<HeadPoses>,
+    mut hand_poses: ResMut<HandPoses>,
 ) {
     let (Some(frame), Some(first)) = (frame, eyes.iter().next()) else { return };
+    for (at, hand) in &hands {
+        let side = if matches!(hand, super::actions::Hand::Left) { 0 } else { 1 };
+        hand_poses.0[side].add(frame.predicted_display_time.as_nanos(), at.translation, at.rotation);
+    }
     let count = eyes.iter().count() as f32;
     let middle = eyes.iter().map(|t| t.translation).sum::<Vec3>() / count;
     poses.add(frame.predicted_display_time.as_nanos(), middle, first.rotation);
@@ -200,6 +285,37 @@ mod tests {
         assert!((p.z - 1.31182652).abs() < 1e-3, "{p}");
         let uv = Vec2::new(intrinsics.x * p.x / p.z + intrinsics.z, intrinsics.y * p.y / p.z + intrinsics.w);
         assert!((uv - Vec2::new(0.591012, 0.27882281)).length() < 1e-3, "{uv}");
+    }
+
+    #[test]
+    fn a_hand_moves_with_its_controller_and_its_arm_swings_about_the_shoulder() {
+        let mut head = HeadPoses::default();
+        head.add(0, Vec3::new(0.0, 1.2, 0.0), Quat::IDENTITY);
+        let mut hands = HandPoses::default();
+        // The right controller, ahead and to the right, goes 20 cm to the left and turns.
+        let (pa, pb) = (Vec3::new(0.3, 0.9, -0.4), Vec3::new(0.1, 0.9, -0.4));
+        hands.0[1].add(0, pa, Quat::IDENTITY);
+        hands.0[1].add(100, pb, Quat::from_rotation_y(0.5));
+        let parts = parts(&head, &hands, 0, 100);
+        assert_eq!(parts.len(), 2, "its hand and its arm (no left controller: no left parts)");
+        let (hand, arm) = (parts[0], parts[1]);
+        assert!((hand.forward.transform_point3(pa) - pb).length() < 1e-5);
+        assert!((hand.backward.transform_point3(pb) - pa).length() < 1e-5);
+        assert_eq!(hand.axis.w, 0.0);
+        // The wrist goes with the controller; the shoulder stays; the arm's middle goes about half as far.
+        let shoulder = Vec3::new(0.19, 0.98, 0.02);
+        let (wrist, wrist_now) = (pa + Vec3::Z * 0.10, pb + Quat::from_rotation_y(0.5) * Vec3::Z * 0.10);
+        assert!((arm.forward.transform_point3(wrist) - wrist_now).length() < 1e-4);
+        assert!((arm.forward.transform_point3(shoulder) - shoulder).length() < 1e-5);
+        let middle = (wrist + shoulder) * 0.5;
+        let moved = (arm.forward.transform_point3(middle) - middle).length();
+        assert!((moved / (wrist_now - wrist).length() - 0.5).abs() < 0.1, "{moved}");
+        // The arm's line runs from the wrist to the shoulder, and is its length.
+        assert!((arm.wrist.xyz() + arm.axis.xyz() * arm.wrist.w - shoulder).length() < 1e-4);
+        assert!((arm.line_end.xyz() - shoulder).length() < 1e-5);
+        // Nothing moved: nothing to do but the same.
+        let still = super::parts(&head, &hands, 100, 100);
+        assert!((still[0].forward.transform_point3(Vec3::ONE) - Vec3::ONE).length() < 1e-5);
     }
 
     #[test]

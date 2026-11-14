@@ -21,7 +21,7 @@
 //! headset's images came back wrong.
 use super::ar_settings::ArSettings;
 use super::occlusion_capture::{Capture, Readbacks};
-use super::occlusion_edges::{self, Guide, HeadPoses};
+use super::occlusion_edges::{self, Guide, HandPoses, HeadPoses, Part};
 use super::rig::Rig;
 use bevy::core_pipeline::FullscreenShader;
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
@@ -82,6 +82,10 @@ struct Wanted {
     /// Each pixel's answer at an edge is kept from frame to frame. (Its own
     /// setting: with or without the camera.)
     steady: bool,
+    /// The hands and arms in the depth image are moved on with the
+    /// controllers (`occlusion_advance.wgsl`): the head's and the
+    /// controllers' poses by time, for it.
+    hands: Option<(HeadPoses, HandPoses)>,
     world_from_tracking: Mat4,
     /// The mouths of the sunk pieces (bowls) nearest the head: the centre,
     /// in the game world, and the radius about it.
@@ -109,6 +113,7 @@ impl Plugin for OcclusionPlugin {
         bevy::asset::embedded_asset!(app, "occlusion_sure.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_texels.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_matte.wgsl");
+        bevy::asset::embedded_asset!(app, "occlusion_advance.wgsl");
         bevy::shader::load_shader_library!(app, "occlusion_look.wgsl");
         let problem = OcclusionProblem::default();
         let capture = Capture::default();
@@ -116,6 +121,7 @@ impl Plugin for OcclusionPlugin {
             .insert_resource(problem.clone())
             .insert_resource(capture.clone())
             .init_resource::<HeadPoses>()
+            .init_resource::<HandPoses>()
             .add_systems(Update, (super::occlusion_capture::log_frames, occlusion_edges::keep_head_poses))
             .add_plugins(ExtractResourcePlugin::<Wanted>::default())
             .add_systems(PostUpdate, want)
@@ -152,12 +158,14 @@ fn want(
     placed: Res<super::build::PlacedPieces>,
     heads: Query<&GlobalTransform, With<XrCamera>>,
     poses: Res<HeadPoses>,
+    hand_poses: Res<HandPoses>,
     mut wanted: ResMut<Wanted>,
 ) {
     let root = rig.root_transform();
     wanted.mode = if root.is_some() { settings.occlusion } else { Occlusion::Off };
     wanted.edges = wanted.mode.on() && settings.occlusion_edges;
     wanted.steady = wanted.mode.on() && settings.occlusion_steady;
+    wanted.hands = (wanted.mode.on() && settings.occlusion_hands).then(|| (poses.clone(), hand_poses.clone()));
     occlusion_edges::set_wanted(wanted.edges && crate::camera_access());
     wanted.guide = if wanted.edges { occlusion_edges::guide(&poses, super::occlusion_capture::clocks().0) } else { None };
     wanted.world_from_tracking = root.map_or(Mat4::IDENTITY, |r| r.to_matrix());
@@ -211,6 +219,9 @@ struct RoomDepth {
     old_views: [Option<(Mat4, Vec4)>; 2],
     sure_of: Option<(usize, i64)>,
     find_sure: bool,
+    /// The hands are moved on this frame: each eye's `Moves`.
+    moving: bool,
+    moves: [Option<UniformBuffer<Moves>>; 2],
     /// The pass's pipeline failed (said once).
     broken: bool,
 }
@@ -236,6 +247,9 @@ struct Made {
     /// from the other, the kept one, turn about.
     sure: (Texture, [TextureView; 2]),
     texels: (Texture, [TextureView; 2]),
+    /// The depth image with the hands moved on (`occlusion_advance.wgsl`),
+    /// each eye's.
+    advanced: (Texture, [TextureView; 2]),
     mattes: [[(Texture, TextureView); 2]; 2],
 }
 
@@ -256,6 +270,25 @@ struct Look {
     keep: f32,
     most: f32,
 }
+
+/// What `occlusion_advance.wgsl` is told.
+#[derive(ShaderType, Clone, Copy, Default)]
+struct Moves {
+    view_from_tracking: Mat4,
+    tracking_from_view: Mat4,
+    tangents: Vec4,
+    near: f32,
+    far: f32,
+    count: u32,
+    parts: [Part; 4],
+}
+
+/// How old what the player sees of the room is when it is shown (the
+/// passthrough's own wait, by others' measurements): the hands are moved
+/// on to then, not to now.
+const SEEN_AGO_NS: i64 = 40_000_000;
+/// The depth image's age when its time isn't given.
+const DEPTH_AGO_NS: i64 = 84_000_000;
 
 /// The mattes' size each way: over twice the depth image's.
 const MATTE: u32 = 768;
@@ -452,6 +485,28 @@ fn make(session: &OxrSession, device: &RenderDevice) -> Result<Made, &'static st
             });
             (texture, each)
         };
+        let advanced = {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("room depth, hands moved on"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: TextureFormat::Depth32Float,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let each = [0, 1].map(|layer| {
+                texture.create_view(&TextureViewDescriptor {
+                    dimension: Some(TextureViewDimension::D2),
+                    aspect: TextureAspect::DepthOnly,
+                    base_array_layer: layer,
+                    array_layer_count: Some(1),
+                    ..default()
+                })
+            });
+            (texture, each)
+        };
         let sure = layered("room depth, sure", TextureFormat::R16Float);
         let texels = layered("room depth, colours", TextureFormat::Rgba16Float);
         let matte = || {
@@ -486,6 +541,7 @@ fn make(session: &OxrSession, device: &RenderDevice) -> Result<Made, &'static st
             size: (state.width, state.height),
             sure,
             texels,
+            advanced,
             mattes,
         })
     }
@@ -600,6 +656,9 @@ struct OcclusionPipeline {
     sure: CachedRenderPipelineId,
     texels: CachedRenderPipelineId,
     matte: CachedRenderPipelineId,
+    /// The hands moved on: what it reads, and it.
+    advance_layout: BindGroupLayoutDescriptor,
+    advance: CachedRenderPipelineId,
 }
 
 #[derive(PartialEq, Eq, Hash, Clone, Copy)]
@@ -674,7 +733,28 @@ fn init_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>, asse
     let sure = edge_pass("occlusion sure", &filter_layout, "embedded://skate_game/xr/occlusion_sure.wgsl", TextureFormat::R16Float);
     let texels = edge_pass("occlusion texels", &texels_layout, "embedded://skate_game/xr/occlusion_texels.wgsl", TextureFormat::Rgba16Float);
     let matte = edge_pass("occlusion matte", &matte_layout, "embedded://skate_game/xr/occlusion_matte.wgsl", TextureFormat::Rgba16Float);
+    let advance_layout = BindGroupLayoutDescriptor::new(
+        "occlusion advance",
+        &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (texture_depth_2d(), uniform_buffer::<Moves>(false))),
+    );
+    // (it writes depth and no colour: a depth image like the headset's own, for the passes after it)
+    let advance = cache.queue_render_pipeline(RenderPipelineDescriptor {
+        label: Some("occlusion advance".into()),
+        layout: vec![advance_layout.clone()],
+        vertex: fullscreen.to_vertex_state(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: TextureFormat::Depth32Float,
+            depth_write_enabled: true,
+            depth_compare: wgpu::CompareFunction::Always,
+            stencil: default(),
+            bias: default(),
+        }),
+        fragment: Some(FragmentState { shader: assets.load("embedded://skate_game/xr/occlusion_advance.wgsl"), targets: vec![], ..default() }),
+        ..default()
+    });
     commands.insert_resource(OcclusionPipeline {
+        advance_layout,
+        advance,
         look_layout,
         texels_layout,
         matte_layout,
@@ -791,9 +871,32 @@ fn prepare(
     } else {
         depth.sure_of = None;
     }
+    // The hands and arms as they moved since the depth image was taken.
+    let parts = wanted.hands.as_ref().map(|(head, hands)| {
+        let then = if latest.capture_time > 0 { latest.capture_time } else { latest.display_time - DEPTH_AGO_NS };
+        occlusion_edges::parts(head, hands, then, (latest.display_time - SEEN_AGO_NS).max(then))
+    });
+    depth.moving = parts.is_some();
     let tracking_from_world = wanted.world_from_tracking.inverse();
     for layer in 0..2 {
         let (view_from_tracking, tangents) = latest.views[layer];
+        if let Some(parts) = &parts {
+            let mut moves = Moves {
+                view_from_tracking,
+                tracking_from_view: view_from_tracking.inverse(),
+                tangents,
+                near: latest.near,
+                far: if latest.far.is_finite() { latest.far } else { 0.0 },
+                count: parts.len().min(4) as u32,
+                parts: default(),
+            };
+            for (slot, part) in moves.parts.iter_mut().zip(parts) {
+                *slot = *part;
+            }
+            let buffer = depth.moves[layer].get_or_insert_with(UniformBuffer::default);
+            buffer.set(moves);
+            buffer.write_buffer(&device, &queue);
+        }
         if depth.edging {
             // (kept answers only from the frame before: none when edges were just turned on)
             let old = depth.old_views[layer].filter(|_| was_edging && wanted.steady);
@@ -864,11 +967,43 @@ impl ViewNode for OcclusionNode {
             return Ok(());
         };
         let device = context.render_device().clone();
-        let room = device.create_bind_group(
+        // The room's image as the headset gave it; and, where the hands are
+        // moved on, the image with that done, which the passes after go by.
+        let raw = device.create_bind_group(
             "occlusion room",
             &cache.get_bind_group_layout(&pipeline.filter_layout),
             &BindGroupEntries::single(&layers[layer]),
         );
+        let mut room = raw.clone();
+        if let (true, Some(advance), Some(moves)) =
+            (depth.moving, cache.get_render_pipeline(pipeline.advance), depth.moves[layer].as_ref().and_then(|m| m.binding()))
+        {
+            let reads = device.create_bind_group(
+                "occlusion advance",
+                &cache.get_bind_group_layout(&pipeline.advance_layout),
+                &BindGroupEntries::sequential((&layers[layer], moves)),
+            );
+            let mut pass = context.command_encoder().begin_render_pass(&RenderPassDescriptor {
+                label: Some("occlusion advance"),
+                color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &made.advanced.1[layer],
+                    depth_ops: Some(Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(advance);
+            pass.set_bind_group(0, &reads, &[]);
+            pass.draw(0..3, 0..1);
+            drop(pass);
+            room = device.create_bind_group(
+                "occlusion room, hands moved on",
+                &cache.get_bind_group_layout(&pipeline.filter_layout),
+                &BindGroupEntries::single(&made.advanced.1[layer]),
+            );
+        }
         let matte = &made.mattes[layer][depth.turn].1;
         let bind_group = device.create_bind_group(
             "occlusion",
@@ -937,7 +1072,7 @@ impl ViewNode for OcclusionNode {
         }
         // A capture is running: the image as it came is copied out to be read back.
         if let (Some(_), Some(copy)) = (world.resource::<Capture>().sender(), cache.get_render_pipeline(pipeline.copy)) {
-            draw_room(context, "occlusion copy", &made.copied.1[layer], copy);
+            draw(context, "occlusion copy", &made.copied.1[layer], copy, &[&raw]);
             let (width, height) = made.size;
             let row_bytes = Readbacks::row_bytes(width);
             let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1034,7 +1169,7 @@ mod tests {
     /// that isn't only shows as a log line on the headset, and no occlusion.)
     #[test]
     fn the_shaders_that_read_the_rooms_image_are_valid() {
-        for text in [include_str!("occlusion_filter.wgsl"), include_str!("occlusion_copy.wgsl")] {
+        for text in [include_str!("occlusion_filter.wgsl"), include_str!("occlusion_copy.wgsl"), include_str!("occlusion_advance.wgsl")] {
             let module = wgpu::naga::front::wgsl::parse_str(text).unwrap_or_else(|e| panic!("{}", e.emit_to_string(text)));
             wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::all())
                 .validate(&module)

@@ -92,6 +92,10 @@ pub(crate) struct ArSettings {
     /// Occlusion's edges are kept from frame to frame, so they hold still.
     #[serde(default)]
     pub occlusion_steady: bool,
+    /// The hands and arms in occlusion's depth image are moved on with the
+    /// controllers, so occlusion keeps up with them.
+    #[serde(default)]
+    pub occlusion_hands: bool,
     /// Developer's pages in the menu (the sound lab). No row turns it on: it is set in the file.
     #[serde(default)]
     pub dev: bool,
@@ -117,6 +121,7 @@ impl Default for ArSettings {
             occlusion: Default::default(),
             occlusion_edges: false,
             occlusion_steady: false,
+            occlusion_hands: false,
             dev: false,
             revision: 0,
         }
