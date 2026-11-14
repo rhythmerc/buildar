@@ -79,6 +79,9 @@ struct Wanted {
     /// newest camera frame for it (none: no camera, or none lately).
     edges: bool,
     guide: Option<Guide>,
+    /// Each pixel's answer at an edge is kept from frame to frame. (Its own
+    /// setting: with or without the camera.)
+    steady: bool,
     world_from_tracking: Mat4,
     /// The mouths of the sunk pieces (bowls) nearest the head: the centre,
     /// in the game world, and the radius about it.
@@ -154,6 +157,7 @@ fn want(
     let root = rig.root_transform();
     wanted.mode = if root.is_some() { settings.occlusion } else { Occlusion::Off };
     wanted.edges = wanted.mode.on() && settings.occlusion_edges;
+    wanted.steady = wanted.mode.on() && settings.occlusion_steady;
     occlusion_edges::set_wanted(wanted.edges && crate::camera_access());
     wanted.guide = if wanted.edges { occlusion_edges::guide(&poses, super::occlusion_capture::clocks().0) } else { None };
     wanted.world_from_tracking = root.map_or(Mat4::IDENTITY, |r| r.to_matrix());
@@ -743,7 +747,7 @@ fn prepare(
     // Edges from the camera: its newest frame goes to its texture, and this
     // frame's matte is written from the other one of the eye's two.
     let was_edging = depth.edging;
-    depth.edging = wanted.edges;
+    depth.edging = wanted.edges || wanted.steady;
     if depth.edging {
         depth.turn ^= 1;
         let image = (latest.image, latest.capture_time);
@@ -792,7 +796,7 @@ fn prepare(
         let (view_from_tracking, tangents) = latest.views[layer];
         if depth.edging {
             // (kept answers only from the frame before: none when edges were just turned on)
-            let old = depth.old_views[layer].filter(|_| was_edging);
+            let old = depth.old_views[layer].filter(|_| was_edging && wanted.steady);
             let look = Look {
                 tracking_from_view: view_from_tracking.inverse(),
                 camera_from_tracking: wanted.guide.as_ref().map_or(Mat4::IDENTITY, |g| g.camera_from_tracking),

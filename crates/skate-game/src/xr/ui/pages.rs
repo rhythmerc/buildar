@@ -285,6 +285,7 @@ fn ar_widgets(world: &World) -> Vec<Widget> {
         let problem = *world.resource::<crate::xr::occlusion::OcclusionProblem>().0.lock().unwrap();
         w.push(Widget::info(problem.unwrap_or("Uses the headset's depth sensing.")));
         w.push(Widget::toggle("occlusion_edges", "Sharper edges, found by the headset's cameras", s.occlusion_edges));
+        w.push(Widget::toggle("occlusion_steady", "Steadier edges, remembered from frame to frame", s.occlusion_steady));
         if s.occlusion_edges && !crate::camera_access() {
             w.push(Widget::info("The cameras aren't allowed yet: turn this off and on to be asked again."));
         }
@@ -349,6 +350,7 @@ fn ar_act(widget: &str, world: &mut World) -> Outcome {
         "room_light" => s.room_light = !s.room_light,
         "occlusion" => s.occlusion = s.occlusion.toggled(),
         "occlusion_edges" => s.occlusion_edges = !s.occlusion_edges,
+        "occlusion_steady" => s.occlusion_steady = !s.occlusion_steady,
         _ => {}
     });
     if widget == "occlusion_edges" && world.resource::<ArSettings>().occlusion_edges && !crate::camera_access() {

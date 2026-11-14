@@ -89,6 +89,9 @@ pub(crate) struct ArSettings {
     /// sharper and steadier, and it needs the headset's cameras.
     #[serde(default)]
     pub occlusion_edges: bool,
+    /// Occlusion's edges are kept from frame to frame, so they hold still.
+    #[serde(default)]
+    pub occlusion_steady: bool,
     /// Developer's pages in the menu (the sound lab). No row turns it on: it is set in the file.
     #[serde(default)]
     pub dev: bool,
@@ -113,6 +116,7 @@ impl Default for ArSettings {
             build_surfaces: false,
             occlusion: Default::default(),
             occlusion_edges: false,
+            occlusion_steady: false,
             dev: false,
             revision: 0,
         }
