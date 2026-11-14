@@ -10,7 +10,9 @@
 //!   that differs from the one before it: its view, and where it is in
 //!   `depth.bin`), `camera_info` (the left passthrough camera's calibration)
 //!   and `camera` (a camera frame: its time, and where it is in
-//!   `camera.bin`).
+//!   `camera.bin`); `camera_right_info` and `camera_right` for the right
+//!   camera, whose frames are kept at half size. A `frame` also has the
+//!   controllers' aim poses (`hands`).
 //! - `depth.bin`: the depth images, 16 bits a texel as the headset gave
 //!   them (little endian, the image's first row first).
 //! - `camera.bin`: the camera's frames: the Y plane, then U and V at half
@@ -81,7 +83,13 @@ impl Capture {
         #[cfg(target_os = "android")]
         {
             let (tx, stop) = (tx.clone(), stop.clone());
-            let _ = std::thread::Builder::new().name("sk8-capture-camera".into()).spawn(move || camera(&tx, &stop));
+            // (the left camera is lent by room lighting's thread; the right is nobody's)
+            let lent = Arc::new(AtomicBool::new(false));
+            let _ = std::thread::Builder::new().name("sk8-capture-camera".into()).spawn({
+                let (tx, stop, lent) = (tx.clone(), stop.clone(), lent.clone());
+                move || camera(&tx, &stop, false, &lent)
+            });
+            let _ = std::thread::Builder::new().name("sk8-capture-right".into()).spawn(move || camera(&tx, &stop, true, &lent));
         }
         *self.0.status.lock().unwrap() = format!("Recording for {SECONDS} seconds...");
         *running = Some(Running { tx, until: Instant::now() + Duration::from_secs(SECONDS), stop });
@@ -187,6 +195,7 @@ pub(super) fn log_frames(
     frame: Option<Res<bevy_mod_openxr::resources::OxrFrameState>>,
     rig: Res<super::rig::Rig>,
     eyes: Query<(&Transform, &bevy_mod_xr::camera::XrCamera)>,
+    hands: Query<(&Transform, &super::actions::Hand)>,
 ) {
     capture.tick();
     let Some(tx) = capture.sender() else { return };
@@ -202,19 +211,56 @@ pub(super) fn log_frames(
         "mono": mono,
         "boot": boot,
         "eyes": eyes,
+        // (the controllers' aim poses, tracking space, as predicted for the frame's display time)
+        "hands": hands
+            .iter()
+            .map(|(t, hand)| json!({ "hand": if matches!(hand, super::actions::Hand::Left) { "left" } else { "right" }, "p": t.translation.to_array(), "q": t.rotation.to_array() }))
+            .collect::<Vec<_>>(),
         "world_from_tracking": rig.root_transform().map(|r| r.to_matrix().to_cols_array()),
     })));
 }
 
-/// The left passthrough camera's frames for as long as the capture runs.
-/// (Room lighting's capture gives the camera up meanwhile.)
+/// A passthrough camera's frames for as long as the capture runs: the
+/// left's whole, the right's at half size. (Room lighting's capture gives
+/// the left camera up meanwhile; the right waits for that, so the two
+/// start together.)
 #[cfg(target_os = "android")]
-fn camera(tx: &Sender<Item>, stop: &AtomicBool) {
+fn camera(tx: &Sender<Item>, stop: &AtomicBool, right: bool, lent: &AtomicBool) {
     use super::room_light::camera::{BORROWED, Pick, Stream};
+    let (info_kind, kind) = if right { ("camera_right_info", "camera_right") } else { ("camera_info", "camera") };
     let missing = |why: String| {
-        warn!("Occlusion capture: no camera: {why}");
-        let _ = tx.send(Item::Note(json!({ "kind": "camera_missing", "why": why })));
+        warn!("Occlusion capture: no camera ({kind}): {why}");
+        let _ = tx.send(Item::Note(json!({ "kind": "camera_missing", "which": kind, "why": why })));
     };
+    if right {
+        let Some(id) = crate::right_passthrough_camera() else { return missing("no right passthrough camera".into()) };
+        if !crate::camera_access() {
+            return;
+        }
+        while !lent.load(Ordering::Relaxed) && !stop.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut stream = match Stream::open_camera(id, Pick::UpTo(1280)) {
+            Ok(stream) => stream,
+            Err(why) => return missing(why),
+        };
+        let mut info = stream.calibration.clone();
+        info["kind"] = json!(info_kind);
+        let _ = tx.send(Item::Note(info));
+        while !stop.load(Ordering::Relaxed) {
+            let Some(frame) = stream.next_packed() else {
+                std::thread::sleep(Duration::from_millis(3));
+                continue;
+            };
+            let (mono, _) = clocks();
+            let (data, width, height) = halved(&frame.data, frame.width, frame.height);
+            let note = json!({ "kind": kind, "timestamp": frame.timestamp_ns, "mono": mono, "width": width, "height": height });
+            if tx.send(Item::Camera(note, data)).is_err() {
+                break;
+            }
+        }
+        return;
+    }
     if !crate::camera_access() {
         return missing("the cameras aren't allowed (turn room lighting on once)".into());
     }
@@ -236,6 +282,7 @@ fn camera(tx: &Sender<Item>, stop: &AtomicBool) {
         }
         std::thread::sleep(Duration::from_millis(300));
     }
+    lent.store(true, Ordering::Relaxed);
     let mut stream = match opened {
         Ok(stream) => stream,
         Err(why) => return missing(why),
@@ -263,6 +310,29 @@ fn camera(tx: &Sender<Item>, stop: &AtomicBool) {
             break;
         }
     }
+}
+
+/// A packed frame (Y, then U and V at half size) at half size each way.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn halved(data: &[u8], width: usize, height: usize) -> (Vec<u8>, usize, usize) {
+    let (w, h) = (width / 2, height / 2);
+    let mut out = Vec::with_capacity(w * h * 3 / 2);
+    let at = |x: usize, y: usize| data.get(y * width + x).copied().unwrap_or(0) as u16;
+    for y in 0..h {
+        for x in 0..w {
+            out.push(((at(x * 2, y * 2) + at(x * 2 + 1, y * 2) + at(x * 2, y * 2 + 1) + at(x * 2 + 1, y * 2 + 1)) / 4) as u8);
+        }
+    }
+    // (colour: every other one of each plane's)
+    for plane in 0..2 {
+        let from = width * height + plane * w * h;
+        for y in 0..h / 2 {
+            for x in 0..w / 2 {
+                out.push(data.get(from + y * 2 * w + x * 2).copied().unwrap_or(128));
+            }
+        }
+    }
+    (out, w, h)
 }
 
 /// A depth image on its way back from the GPU.
@@ -391,6 +461,17 @@ mod tests {
         assert_eq!(std::fs::read(folder.join("depth.bin")).unwrap(), [1, 2, 3, 4, 5, 6]);
         assert_eq!(std::fs::read(folder.join("camera.bin")).unwrap(), [9; 6]);
         let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[test]
+    fn a_frame_halved_keeps_its_planes_in_order() {
+        // 4x4 of Y (rows of 10, 20, 30, 40), then 2x2 U (all 7) and V (all 9).
+        let mut data: Vec<u8> = [10u8, 20, 30, 40].iter().flat_map(|&v| [v; 4]).collect();
+        data.extend([7; 4]);
+        data.extend([9; 4]);
+        let (out, w, h) = halved(&data, 4, 4);
+        assert_eq!((w, h), (2, 2));
+        assert_eq!(out, [15, 15, 35, 35, 7, 9]);
     }
 
     #[test]

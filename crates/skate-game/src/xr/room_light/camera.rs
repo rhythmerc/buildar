@@ -298,10 +298,13 @@ fn media_ok(status: sys::media_status_t, what: &str) -> Result<(), String> {
 
 impl Stream {
     pub(crate) fn open(pick: Pick) -> Result<Self, String> {
-        use sys::acamera_metadata_tag as tag;
         // The left passthrough camera, by Meta's vendor tags (the entry point
         // looks it up: the NDK can't read a vendor tag by its name).
-        let id = crate::passthrough_camera().ok_or("no passthrough camera on this headset")?;
+        Self::open_camera(crate::passthrough_camera().ok_or("no passthrough camera on this headset")?, pick)
+    }
+
+    pub(crate) fn open_camera(id: String, pick: Pick) -> Result<Self, String> {
+        use sys::acamera_metadata_tag as tag;
         let c_id = CString::new(id.clone()).map_err(|e| e.to_string())?;
         let shared = Arc::new(Shared::default());
         let context = Arc::as_ptr(&shared) as *mut c_void;

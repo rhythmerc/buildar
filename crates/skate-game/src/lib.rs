@@ -155,6 +155,8 @@ pub struct CameraHooks {
     pub request_access: fn(),
     /// The left passthrough camera's Camera2 id, if the headset has one.
     pub passthrough_camera: fn() -> Option<String>,
+    /// The right one's (a developer's capture records it too).
+    pub right_passthrough_camera: fn() -> Option<String>,
 }
 
 static CAMERA_HOOKS: std::sync::OnceLock<CameraHooks> = std::sync::OnceLock::new();
@@ -179,6 +181,11 @@ pub(crate) fn request_camera_access() {
 #[cfg_attr(not(all(feature = "xr", target_os = "android")), allow(dead_code))]
 pub(crate) fn passthrough_camera() -> Option<String> {
     CAMERA_HOOKS.get().and_then(|h| (h.passthrough_camera)())
+}
+
+#[cfg_attr(not(all(feature = "xr", target_os = "android")), allow(dead_code))]
+pub(crate) fn right_passthrough_camera() -> Option<String> {
+    CAMERA_HOOKS.get().and_then(|h| (h.right_passthrough_camera)())
 }
 
 /// Startup loading. `Err` is the exit to return, including the asset

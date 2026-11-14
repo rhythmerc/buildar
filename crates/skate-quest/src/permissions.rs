@@ -77,6 +77,15 @@ pub fn request_headset_camera() {
 /// tags aren't public keys, so they are found by name among the camera's
 /// characteristics (which the NDK's camera API can't do).
 pub fn left_passthrough_camera() -> Option<String> {
+    passthrough_camera(0)
+}
+
+/// The right one (`position` 1).
+pub fn right_passthrough_camera() -> Option<String> {
+    passthrough_camera(1)
+}
+
+fn passthrough_camera(side: i32) -> Option<String> {
     let app = bevy::android::ANDROID_APP.get()?;
     let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
     let result = vm.attach_current_thread(|env| -> jni::errors::Result<Option<String>> {
@@ -109,7 +118,7 @@ pub fn left_passthrough_camera() -> Option<String> {
                 .l()?;
             let source = vendor_tag(env, &characteristics, "com.meta.extra_metadata.camera_source")?;
             let position = vendor_tag(env, &characteristics, "com.meta.extra_metadata.position")?;
-            if source == Some(0) && position == Some(0) {
+            if source == Some(0) && position == Some(side) {
                 return id.try_to_string(env).map(Some);
             }
         }

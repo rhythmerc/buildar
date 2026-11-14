@@ -26,6 +26,7 @@ pub fn main() {
             has_access: permissions::has_headset_camera,
             request_access: permissions::request_headset_camera,
             passthrough_camera: permissions::left_passthrough_camera,
+            right_passthrough_camera: permissions::right_passthrough_camera,
         });
     }
     #[cfg(target_os = "android")]
