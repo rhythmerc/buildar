@@ -75,11 +75,13 @@ pub(crate) struct HeadPoses(VecDeque<(i64, Vec3, Quat)>);
 #[derive(Resource, Default, Clone)]
 pub(crate) struct HandPoses(pub [HeadPoses; 2]);
 
-/// The hands are taken to reach this far about a point a little behind the
-/// controller's aim pose, m; the wrist is this far behind that pose.
-const HAND_REACH_M: f32 = 0.13;
-const HAND_BACK_M: f32 = 0.05;
-const WRIST_BACK_M: f32 = 0.10;
+/// The palm from the controller's aim pose (in that pose's axes), m, and
+/// how far about it the hand is taken to reach. The hand turns with the
+/// controller about the palm; a wider reach, or a middle further from the
+/// palm, took in the wrist and what the hand was near, and a twist of the
+/// controller swung them about with it.
+const PALM_M: Vec3 = Vec3::new(0.0, -0.03, 0.06);
+const HAND_REACH_M: f32 = 0.09;
 /// How thick an arm is about its line, m.
 const ARM_M: f32 = 0.07;
 /// Where a shoulder is from the head: out to its side, down, and back, m.
@@ -115,8 +117,8 @@ pub(crate) fn parts(head: &HeadPoses, hands: &HandPoses, then: i64, now: i64) ->
         let was = Mat4::from_rotation_translation(qa, pa);
         let is = Mat4::from_rotation_translation(qb, pb);
         let forward = is * was.inverse();
-        let centre = pa + qa * Vec3::Z * HAND_BACK_M;
-        let centre_now = (pb + qb * Vec3::Z * HAND_BACK_M).extend(0.0);
+        let centre = pa + qa * PALM_M;
+        let centre_now = (pb + qb * PALM_M).extend(0.0);
         out.push(Part {
             forward,
             backward: forward.inverse(),
@@ -127,7 +129,8 @@ pub(crate) fn parts(head: &HeadPoses, hands: &HandPoses, then: i64, now: i64) ->
             axis: Vec4::ZERO,
         });
         let shoulder = head_at + right * SHOULDER_M.x * side - Vec3::Y * SHOULDER_M.y - ahead * SHOULDER_M.z;
-        let (wrist, wrist_now) = (pa + qa * Vec3::Z * WRIST_BACK_M, pb + qb * Vec3::Z * WRIST_BACK_M);
+        // (the arm's line is from the palm: a twist of the controller about it doesn't swing the arm)
+        let (wrist, wrist_now) = (centre, centre_now.truncate());
         let (arm, arm_now) = (wrist - shoulder, wrist_now - shoulder);
         let length = arm.length();
         if length < 0.05 || arm_now.length() < 0.05 {
@@ -304,7 +307,7 @@ mod tests {
         assert_eq!(hand.axis.w, 0.0);
         // The wrist goes with the controller; the shoulder stays; the arm's middle goes about half as far.
         let shoulder = Vec3::new(0.19, 0.98, 0.02);
-        let (wrist, wrist_now) = (pa + Vec3::Z * 0.10, pb + Quat::from_rotation_y(0.5) * Vec3::Z * 0.10);
+        let (wrist, wrist_now) = (pa + PALM_M, pb + Quat::from_rotation_y(0.5) * PALM_M);
         assert!((arm.forward.transform_point3(wrist) - wrist_now).length() < 1e-4);
         assert!((arm.forward.transform_point3(shoulder) - shoulder).length() < 1e-5);
         let middle = (wrist + shoulder) * 0.5;
@@ -313,6 +316,13 @@ mod tests {
         // The arm's line runs from the wrist to the shoulder, and is its length.
         assert!((arm.wrist.xyz() + arm.axis.xyz() * arm.wrist.w - shoulder).length() < 1e-4);
         assert!((arm.line_end.xyz() - shoulder).length() < 1e-5);
+        // A twist of the controller about the palm leaves the arm where it was.
+        let mut twisted = HandPoses::default();
+        let twist = Quat::from_rotation_z(1.0);
+        twisted.0[1].add(0, pa, Quat::IDENTITY);
+        twisted.0[1].add(100, pa + PALM_M - twist * PALM_M, twist);
+        let arm = super::parts(&head, &twisted, 0, 100)[1];
+        assert!((arm.forward.transform_point3(middle) - middle).length() < 1e-4);
         // Nothing moved: nothing to do but the same.
         let still = super::parts(&head, &hands, 100, 100);
         assert!((still[0].forward.transform_point3(Vec3::ONE) - Vec3::ONE).length() < 1e-5);
