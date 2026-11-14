@@ -287,6 +287,7 @@ fn ar_widgets(world: &World) -> Vec<Widget> {
         w.push(Widget::toggle("occlusion_edges", "Sharper edges, found by the headset's cameras", s.occlusion_edges));
         w.push(Widget::toggle("occlusion_steady", "Steadier edges, remembered from frame to frame", s.occlusion_steady));
         w.push(Widget::toggle("occlusion_hands", "Hands keep up, moved with the controllers", s.occlusion_hands));
+        w.push(Widget::toggle("occlusion_controllers", "Controllers hide things too, by their own shapes", s.occlusion_controllers));
         if s.occlusion_edges && !crate::camera_access() {
             w.push(Widget::info("The cameras aren't allowed yet: turn this off and on to be asked again."));
         }
@@ -353,6 +354,7 @@ fn ar_act(widget: &str, world: &mut World) -> Outcome {
         "occlusion_edges" => s.occlusion_edges = !s.occlusion_edges,
         "occlusion_steady" => s.occlusion_steady = !s.occlusion_steady,
         "occlusion_hands" => s.occlusion_hands = !s.occlusion_hands,
+        "occlusion_controllers" => s.occlusion_controllers = !s.occlusion_controllers,
         _ => {}
     });
     if widget == "occlusion_edges" && world.resource::<ArSettings>().occlusion_edges && !crate::camera_access() {

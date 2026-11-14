@@ -16,6 +16,7 @@ pub(crate) mod actions;
 pub(crate) mod ar_settings;
 pub(crate) mod build;
 pub(crate) mod link;
+mod controller_shapes;
 pub(crate) mod occlusion;
 pub(crate) mod occlusion_capture;
 pub(crate) mod occlusion_edges;
@@ -62,6 +63,7 @@ pub(crate) fn plugins(base: PluginGroupBuilder) -> PluginGroupBuilder {
     raw.fb_scene = true;
     // The headset's depth of the room, for real things hiding virtual ones (`occlusion`).
     occlusion::enable(raw);
+    controller_shapes::enable(raw);
     // The room's triangle mesh, for objects Scene has no plane or box for.
     raw.meta_spatial_entity_mesh = true;
     // In-app "rescan the room" (runs Space Setup).
@@ -116,6 +118,7 @@ impl Plugin for XrPlugin {
             .add_plugins(link::LinkPlugin)
             .add_plugins(bevy_mod_openxr::features::fb_passthrough::OxrFbPassthroughPlugin)
             .add_plugins(occlusion::OcclusionPlugin)
+            .add_plugins(controller_shapes::ControllerShapesPlugin)
             .insert_resource(OxrSessionConfig {
                 blend_mode_preference: vec![
                     openxr::EnvironmentBlendMode::ALPHA_BLEND,

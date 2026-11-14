@@ -68,6 +68,14 @@ required = false
 [[package.metadata.android.uses_permission]]
 name = "com.oculus.permission.HAND_TRACKING"
 
+# The controllers' own shapes, for occlusion (XR_FB_render_model).
+[[package.metadata.android.uses_permission]]
+name = "com.oculus.permission.RENDER_MODEL"
+
+[[package.metadata.android.uses_feature]]
+name = "com.oculus.feature.RENDER_MODEL"
+required = false
+
 [[package.metadata.android.uses_permission]]
 name = "com.oculus.permission.USE_SCENE"
 

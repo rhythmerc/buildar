@@ -96,6 +96,10 @@ pub(crate) struct ArSettings {
     /// controllers, so occlusion keeps up with them.
     #[serde(default)]
     pub occlusion_hands: bool,
+    /// The controllers hide what is behind them by their own shapes
+    /// (`xr::controller_shapes`): the depth image often misses them.
+    #[serde(default)]
+    pub occlusion_controllers: bool,
     /// Developer's pages in the menu (the sound lab). No row turns it on: it is set in the file.
     #[serde(default)]
     pub dev: bool,
@@ -122,6 +126,7 @@ impl Default for ArSettings {
             occlusion_edges: false,
             occlusion_steady: false,
             occlusion_hands: false,
+            occlusion_controllers: false,
             dev: false,
             revision: 0,
         }

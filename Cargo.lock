@@ -4880,6 +4880,7 @@ dependencies = [
  "bevy_mod_openxr",
  "bevy_mod_xr",
  "blake3",
+ "gltf",
  "half",
  "image",
  "libloading 0.8.9",

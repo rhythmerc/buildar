@@ -42,13 +42,15 @@ retail = [
     "dep:blake3", "dep:image", "dep:zip", "zip/deflate-flate2-zlib-rs",
 ]
 # OpenXR passthrough mode (`--xr`); the Quest build always enables it.
-xr = ["dep:bevy_mod_openxr", "dep:bevy_mod_xr", "dep:openxr", "dep:roomtone-sys", "dep:wgpu", "dep:wgpu-hal", "dep:ash"]
+xr = ["dep:gltf", "dep:bevy_mod_openxr", "dep:bevy_mod_xr", "dep:openxr", "dep:roomtone-sys", "dep:wgpu", "dep:wgpu-hal", "dep:ash"]
 # Desktop XR keeps a mirror window beside the headset view.
 xr-window = ["xr", "bevy_mod_openxr/window_support"]
 
 [dependencies]
 bevy = { workspace = true, features = ["jpeg", "trace", "debug"] }
 tracing-log = { version = "0.2", optional = true }
+# (the controllers' shapes come from the headset as glTF: xr::controller_shapes)
+gltf = { version = "1.4", default-features = false, optional = true }
 skate-core = { workspace = true, optional = true }
 skate-data = { workspace = true, optional = true }
 skate-audio-formats = { workspace = true, optional = true }

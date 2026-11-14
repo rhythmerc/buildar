@@ -33,6 +33,8 @@ pub(crate) struct TouchActions {
     menu: openxr::Action<bool>,
     pub(crate) left_aim: openxr::Action<openxr::Posef>,
     pub(crate) right_aim: openxr::Action<openxr::Posef>,
+    left_hold: openxr::Action<openxr::Posef>,
+    right_hold: openxr::Action<openxr::Posef>,
 }
 
 /// The latest raw controller frame, for systems other than the pad (the rig
@@ -41,11 +43,16 @@ pub(crate) struct TouchActions {
 pub(crate) struct LatestTouch(pub TouchState);
 
 /// Marks the controller aim-pose space entities.
-#[derive(Component)]
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Hand {
     Left,
     Right,
 }
+
+/// Marks the controller grip-pose space entities (where the controllers'
+/// own shapes are: `controller_shapes`).
+#[derive(Component)]
+pub(crate) struct Grip(pub Hand);
 
 /// Touch state for this frame is read (and the pad published) in this set.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -98,12 +105,14 @@ fn create(instance: Res<OxrInstance>, mut commands: Commands) {
         menu: action!("menu", "Menu"),
         left_aim: action!("left_aim", "Left aim pose"),
         right_aim: action!("right_aim", "Right aim pose"),
+        left_hold: action!("left_grip_pose", "Left grip pose"),
+        right_hold: action!("right_grip_pose", "Right grip pose"),
         set,
     });
 }
 
 fn suggest(actions: Res<TouchActions>, mut bindings: MessageWriter<OxrSuggestActionBinding>) {
-    let pairs: [(openxr::sys::Action, &'static str); 15] = [
+    let pairs: [(openxr::sys::Action, &'static str); 17] = [
         (actions.left_stick.as_raw(), "/user/hand/left/input/thumbstick"),
         (actions.right_stick.as_raw(), "/user/hand/right/input/thumbstick"),
         (actions.left_trigger.as_raw(), "/user/hand/left/input/trigger/value"),
@@ -119,6 +128,8 @@ fn suggest(actions: Res<TouchActions>, mut bindings: MessageWriter<OxrSuggestAct
         (actions.menu.as_raw(), "/user/hand/left/input/menu/click"),
         (actions.left_aim.as_raw(), "/user/hand/left/input/aim/pose"),
         (actions.right_aim.as_raw(), "/user/hand/right/input/aim/pose"),
+        (actions.left_hold.as_raw(), "/user/hand/left/input/grip/pose"),
+        (actions.right_hold.as_raw(), "/user/hand/right/input/grip/pose"),
     ];
     for (action, path) in pairs {
         bindings.write(OxrSuggestActionBinding {
@@ -140,6 +151,14 @@ fn spawn_aim_spaces(actions: Res<TouchActions>, session: Res<OxrSession>, mut co
                 commands.spawn((space, hand));
             }
             Err(error) => error!("XR aim space: {error}"),
+        }
+    }
+    for (action, hand) in [(&actions.left_hold, Hand::Left), (&actions.right_hold, Hand::Right)] {
+        match session.create_action_space(action, openxr::Path::NULL, Isometry3d::IDENTITY) {
+            Ok(space) => {
+                commands.spawn((space, Grip(hand)));
+            }
+            Err(error) => error!("XR grip space: {error}"),
         }
     }
 }
