@@ -19,11 +19,7 @@ pub(crate) struct PublishedTickInput(pub TickInput);
 
 impl Default for PublishedTickInput {
     fn default() -> Self {
-        Self(TickInput::new(
-            0,
-            skate_core::input::gameplay_map::GameplayActions::from_values([0.0; 18]),
-            false,
-        ))
+        Self(skate3_sim::input::idle_tick_input())
     }
 }
 
@@ -124,9 +120,6 @@ fn publish_actions(
     mut published: ResMut<PublishedTickInput>,
     menu: Option<Res<crate::graphics_menu::Menu>>,
 ) {
-    if !crate::graphics_menu::gameplay_active(menu) {
-        input.discard_gameplay();
-    }
-    input.publish_actions();
-    published.0 = input.tick_input();
+    let gameplay = crate::graphics_menu::gameplay_active(menu);
+    published.0 = skate3_sim::input::publish(&mut input, gameplay);
 }
