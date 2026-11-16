@@ -62,6 +62,9 @@ Replay stays inert until it gets a headset UI.
 **Headset check:** smooth interpolation, the same frozen pose while held, and left menu + X no longer
 freezes the skater.
 
+**Done (2026-11-16):** `replay::controls` keeps only B to leave (View and F6 no longer enter), and
+`presentation::capture` no longer records. The module is marked parked; its tests call `enter` directly.
+
 ### Pass 3: graphics_menu + map_transition together (M)
 
 The two modules reference each other: map_transition calls `resource_mut::<Menu>()`, and `interact` and

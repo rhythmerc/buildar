@@ -1,5 +1,10 @@
 //! A rolling presentation recording, never a second simulation or a rewind of
 //! live state. Root, skin (including the board), and camera share one playhead.
+//!
+//! Parked (legacy pass 2): kept for a later headset feature, but inert. Nothing records into it
+//! (`presentation::capture` doesn't) and there is no way in (the View/Back chord and F6 are gone),
+//! so `active` stays false until it gets a headset UI.
+#![cfg_attr(not(test), allow(dead_code))]
 use crate::{
     app::SimulationSet,
     presentation::{Snapshot, blend},
@@ -8,7 +13,6 @@ use bevy::prelude::*;
 use std::collections::VecDeque;
 
 const WINDOW: f64 = 30.0;
-const SELECT: u16 = 0x0020;
 const A: u16 = 0x1000;
 const B: u16 = 0x2000;
 const Y: u16 = 0x8000;
@@ -165,16 +169,9 @@ fn controls(
     let pressed = pad.buttons & !replay.previous_buttons;
     replay.previous_buttons = pad.buttons;
     let menu_open = !crate::graphics_menu::gameplay_active(menu);
-    if !menu_open {
-        if pressed & SELECT != 0 || keys.just_pressed(KeyCode::F6) {
-            if replay.active {
-                replay.exit();
-            } else {
-                replay.enter();
-            }
-        } else if replay.active && pressed & B != 0 {
-            replay.exit();
-        }
+    // (no way in while it is parked: see the module doc)
+    if !menu_open && replay.active && pressed & B != 0 {
+        replay.exit();
     }
     // Continue reading the UI controller while fixed gameplay ticks are gated.
     // On exit, require release so a held scrub/flight control cannot become a
@@ -273,7 +270,7 @@ fn setup_ui(mut commands: Commands) {
             bar.spawn((Playhead, Node { width: percent(100), height: percent(100), ..default() },
                 BackgroundColor(Color::srgb(0.35, 0.9, 0.7))));
         });
-        panel.spawn((Text::new("LT / RT  Scrub   |   D-pad left / right  Frame step   |   A  Play / pause   |   Y  Free camera   |   View / B  Exit\nFree camera: Left stick  Move   |   Right stick  Look   |   LB / RB  Down / up   |   L-stick click  Fast\nKeyboard: F6  Replay   |   Arrows  Scrub   |   , / .  Frame step   |   Space  Play   |   C  Camera   |   WASD / Q / E  Move   |   RMB drag  Look"),
+        panel.spawn((Text::new("LT / RT  Scrub   |   D-pad left / right  Frame step   |   A  Play / pause   |   Y  Free camera   |   B  Exit\nFree camera: Left stick  Move   |   Right stick  Look   |   LB / RB  Down / up   |   L-stick click  Fast\nKeyboard: Arrows  Scrub   |   , / .  Frame step   |   Space  Play   |   C  Camera   |   WASD / Q / E  Move   |   RMB drag  Look"),
             TextFont { font_size: 14., ..default() }, TextColor(Color::srgb(0.75, 0.82, 0.86))));
     });
 }

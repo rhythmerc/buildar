@@ -140,13 +140,13 @@ fn controller_replay_scrub_camera_and_exit_do_not_leak_gameplay_input() {
             .advance_by(std::time::Duration::from_secs_f64(1. / 60.));
         app.world_mut().run_schedule(Update);
     };
+    // View (left menu + X in the headset) no longer enters it: replay is parked.
+    const SELECT: u16 = 0x0020;
     tick(&mut app, SELECT, [0; 2], [0; 2]);
+    assert!(!app.world().resource::<Replay>().active, "View must not enter the parked replay");
+    tick(&mut app, 0, [0; 2], [0; 2]);
+    app.world_mut().resource_mut::<Replay>().enter();
     assert!(app.world().resource::<Replay>().active);
-    tick(&mut app, SELECT, [0; 2], [0; 2]);
-    assert!(
-        app.world().resource::<Replay>().active,
-        "held View must not toggle repeatedly"
-    );
     let end = app.world().resource::<Replay>().cursor;
     tick(&mut app, 0, [255, 0], [0; 2]);
     let rewound = app.world().resource::<Replay>().cursor;
