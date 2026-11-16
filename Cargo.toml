@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/skate3/skate-core", "crates/skate3/skate-data", "crates/skate3/sim", "crates/skate-game", "crates/skate-mods", "crates/skate-vehicles", "crates/skate-net", "crates/skate-steam-relay", "crates/skate3/skate-audio-formats", "crates/skate3/skate-audio-core", "crates/skate-quest", "crates/sk8-quest", "crates/skate-lite-sys", "crates/roomtone-sys", "crates/thug2-sys", "crates/engine-api"]
+members = ["crates/skate-game", "crates/skate-mods", "crates/skate-vehicles", "crates/skate-net", "crates/skate-steam-relay", "crates/skate-quest", "crates/sk8-quest", "crates/skate-lite-sys", "crates/roomtone-sys", "crates/thug2-sys", "crates/engine-api"]
 resolver = "3"
 
 [workspace.package]
@@ -19,10 +19,13 @@ bevy = { version = "=0.18.1", default-features = false, features = [
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-skate-core = { path = "crates/skate3/skate-core" }
-skate-data = { path = "crates/skate3/skate-data" }
-skate-audio-formats = { path = "crates/skate3/skate-audio-formats" }
-skate-audio-core = { path = "crates/skate3/skate-audio-core" }
+# The Skate 3 engine's simulation: https://github.com/rhythmerc/skate3-headless (Bevy-free; the app renders).
+# Bump all five revs together. To build against a local checkout instead, uncomment the [patch] block below.
+skate3-sim = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
+skate-core = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
+skate-data = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
+skate-audio-formats = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
+skate-audio-core = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
 
 [profile.dev]
 opt-level = 3
@@ -33,6 +36,14 @@ strip = false
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# Local skate3-headless checkout (a sibling of this repo):
+# [patch."https://github.com/rhythmerc/skate3-headless"]
+# skate3-sim = { path = "../skate3-headless/sim" }
+# skate-core = { path = "../skate3-headless/skate-core" }
+# skate-data = { path = "../skate3-headless/skate-data" }
+# skate-audio-formats = { path = "../skate3-headless/skate-audio-formats" }
+# skate-audio-core = { path = "../skate3-headless/skate-audio-core" }
 
 [patch.crates-io]
 bevy_pbr = { path = "vendor/bevy_pbr" }

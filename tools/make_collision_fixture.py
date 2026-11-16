@@ -20,4 +20,4 @@ for mode in range(3):
  m=bytearray(160);struct.pack_into('>3f',m,0,mode*10,0,0);struct.pack_into('>3f',m,16,mode*10+1,0,1)
  struct.pack_into('>I',m,40,1);struct.pack_into('>II',m,48,96,144);struct.pack_into('>fHBBI',m,56,.25,0x10,2,2,1);struct.pack_into('>I',m,80,256);struct.pack_into('>I',m,144,160);m+=c
  name=f'compression-{mode}'.encode();records.append(struct.pack('<I',len(name))+name+struct.pack('<I',len(m))+m)
- p=Path('crates/skate3/skate-data/tests/fixtures/retail-collision.rwcmset');p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(b'RWCMSET1'+struct.pack('<I',3)+b''.join(records))
+ p=Path('../skate3-headless/skate-data/tests/fixtures/retail-collision.rwcmset');p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(b'RWCMSET1'+struct.pack('<I',3)+b''.join(records))

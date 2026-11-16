@@ -640,3 +640,11 @@ Steps 4a/4b stay. Step 6 becomes S5. Step 9 becomes S1-S6.
     no catch-up burst on resume. Test: `app::tests::a_held_skate3_stops_its_tick_and_resumes_without_catching_up`.
   - Façade: `skate3_sim::{SkaterPose, Link}::of(..)` (what `Sim::pose`/`Sim::link` now call) serve the parts-held
     adapter: `presentation::capture` and `link_retail::publish_pose` read them instead of the raw fields.
+- **S6 done (2026-11-16):** the sim is [rhythmerc/skate3-headless](https://github.com/rhythmerc/skate3-headless)
+  (public, GPL-3.0; `git subtree split --prefix=crates/skate3`, 8 commits of history, plus a commit with the
+  standalone workspace, README, licence and lockfile). Before the split it lost its `skate-net` dependency (its
+  `physics::network` keeps plain snapshot types and an identical FNV-1a fingerprint; `skate-game/src/net_snapshot.rs`
+  converts) and got its own copy of `format-demo.skate`. The app pins all five crates by `rev` in the root
+  `[workspace.dependencies]`; a commented `[patch."https://github.com/rhythmerc/skate3-headless"]` block points them
+  at a sibling checkout for local work. `crates/skate3/` is gone from this repo. To change the sim: commit and push
+  in skate3-headless, then bump the five revs here (or use the patch block while iterating).

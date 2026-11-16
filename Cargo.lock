@@ -4855,21 +4855,22 @@ dependencies = [
 [[package]]
 name = "skate-audio-core"
 version = "0.1.0"
-dependencies = [
- "skate-audio-formats",
-]
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=ff026ef823fcafaa818e6313d8e54e61e2bdf652#ff026ef823fcafaa818e6313d8e54e61e2bdf652"
 
 [[package]]
 name = "skate-audio-formats"
 version = "0.1.0"
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=ff026ef823fcafaa818e6313d8e54e61e2bdf652#ff026ef823fcafaa818e6313d8e54e61e2bdf652"
 
 [[package]]
 name = "skate-core"
 version = "0.1.0"
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=ff026ef823fcafaa818e6313d8e54e61e2bdf652#ff026ef823fcafaa818e6313d8e54e61e2bdf652"
 
 [[package]]
 name = "skate-data"
 version = "0.1.0"
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=ff026ef823fcafaa818e6313d8e54e61e2bdf652#ff026ef823fcafaa818e6313d8e54e61e2bdf652"
 dependencies = [
  "flate2",
  "serde",
@@ -4981,6 +4982,7 @@ dependencies = [
 [[package]]
 name = "skate3-sim"
 version = "0.1.0"
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=ff026ef823fcafaa818e6313d8e54e61e2bdf652#ff026ef823fcafaa818e6313d8e54e61e2bdf652"
 dependencies = [
  "glam 0.30.10",
  "serde",

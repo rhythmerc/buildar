@@ -16,15 +16,11 @@ fn main() {
         }
     }
     println!("cargo:rerun-if-changed=src");
-    println!("cargo:rerun-if-changed=../skate3/skate-core/src");
-    println!("cargo:rerun-if-changed=../skate3/skate-data/src");
     println!("cargo:rerun-if-changed=../skate-net/src");
     println!("cargo:rerun-if-changed=../../Cargo.lock");
     for path in [
         "../../Cargo.toml",
         "Cargo.toml",
-        "../skate3/skate-core/Cargo.toml",
-        "../skate3/skate-data/Cargo.toml",
         "../skate-net/Cargo.toml",
         "../../vendor/bevy_pbr",
         "../../vendor/bevy_core_pipeline",
