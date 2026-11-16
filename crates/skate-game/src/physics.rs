@@ -16,40 +16,8 @@ pub(crate) use skate3_sim::physics::*;
 #[derive(Resource, Deref, DerefMut)]
 pub(crate) struct GamePhysics(pub skate3_sim::physics::GamePhysics);
 
-impl GamePhysics {
-    pub fn load_with_difficulty(
-        asset_root: &std::path::Path,
-        map: Option<&skate_data::skate_map::SkateMap>,
-        difficulty: crate::difficulty::Difficulty,
-    ) -> Result<Self, String> {
-        skate3_sim::physics::GamePhysics::load_with_difficulty(asset_root, map, difficulty).map(Self)
-    }
-}
-
 #[derive(Resource, Deref, DerefMut)]
 pub(crate) struct SkaterRuntime(pub skate3_sim::physics::SkaterRuntime);
-
-impl SkaterRuntime {
-    pub fn load(
-        asset_root: &std::path::Path,
-        graphs: &skate3_sim::graph_runtime::StockGraphs,
-        physics: &skate3_sim::physics::GamePhysics,
-        mode: &str,
-    ) -> Result<Self, String> {
-        skate3_sim::physics::SkaterRuntime::load(asset_root, graphs, physics, mode).map(Self)
-    }
-
-    pub fn load_for_world(
-        asset_root: &std::path::Path,
-        graphs: &skate3_sim::graph_runtime::StockGraphs,
-        physics: &skate3_sim::physics::GamePhysics,
-        mode: &str,
-        source: Option<std::sync::Arc<skate3_sim::skater_animation::AnimationSource>>,
-    ) -> Result<Self, String> {
-        skate3_sim::physics::SkaterRuntime::load_for_world(asset_root, graphs, physics, mode, source)
-            .map(Self)
-    }
-}
 
 #[derive(Resource, Deref, DerefMut)]
 pub(crate) struct PlayerControls(pub skate3_sim::physics::PlayerControls);

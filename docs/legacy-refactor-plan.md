@@ -101,6 +101,21 @@ The two modules reference each other: map_transition calls `resource_mut::<Menu>
 **Desktop:** `--clean` is unchanged. The retail `--test-world` renders straight to the window, without
 the Escape menu.
 
+**Done (2026-11-16), in one commit with pass 5** (map_transition and the daylight code only served maps):
+- graphics_menu, map_transition and its test are deleted, with `gameplay_active`, `MenuInput`,
+  `PresentationSetup`, `start_paused`, `WorldChanged`/`world_changed` and the reload systems,
+  `MapAssets`, `set_world_environment`, `advance_day`, `position_celestial_bodies` and
+  `no_eye_occlusion_culling`.
+- **Eyes and occlusion culling, checked first:** the only code that inserted `OcclusionCulling` or
+  `DepthPrepass` was `graphics_menu::apply` (on its first run, on every `Camera3d`). Nothing in the app,
+  bevy_mod_xr/openxr 0.5 or the vendored bevy_pbr/core_pipeline does (core_3d only mirrors `DepthPrepass`
+  into the render world). So no eye gets it, and the observer had nothing left to strip.
+- `apply` also set the eyes' `Msaa` on Skate 3's first turn (to the saved setting, default 4). The eyes now
+  keep Bevy's default, `Sample4`.
+- **Moved in from pass 4:** `CurrentMap` was only inserted by map_transition, so scoring_hud's `reset`,
+  `Hud.generation` and its `Res<CurrentMap>` (in `advance` and `xr::finish`) went here, along with
+  `.run_if(gameplay_active)` and `.after(PresentationSetup)`.
+
 ### Pass 4: reduce scoring_hud (S-M); keep it, it is live
 
 **What the headset uses:**
@@ -143,6 +158,22 @@ game engines into custom stages for supported modes.
 - The skater spawns at the same height.
 - The lighting is the same with the room light on and off.
 - AR collision and rails still rebuild.
+
+**Done (2026-11-16), with pass 3:**
+- `world.rs` spawns the course itself, in the same Startup system: `ClearColor` and ambient 350 are
+  inserted at build and again at Startup, as before, plus one `DirectionalLight` (11,000 lux, shadows,
+  from (4, 7, 4) at the origin, default cascades). The desktop also gets the four floor surfaces. A test
+  pins all of this.
+- **Deleted:** map_render (all of it: the staging and publishing existed only for maps), skate_world,
+  retail_shadow_geometry, retail_backdrop, retail_sky, and the retail world material (`retail_world`,
+  `retail_depth`, `retail_material_bindings`, `retail_sky` wgsl), `retail_shadow_visibility` and its
+  tests, and `retail_shader_tests` (they validated the world shaders). `retail_render.rs` keeps only what
+  pass 6 removes.
+- **Config:** `--map`, `default_map`, `map`, `map_path` and `map_fingerprint` are gone. `--test-world` is
+  accepted and does nothing. `RetailScene` is gone: no Hdr/tone on the camera. `WorldOrigin` is always
+  `FLOOR_HEIGHT`, `GrindGeometry` is always the test course's, and the sim gets `map: None`.
+- The map-only tails of `retail_character::load` and `retail_exposure::load` went too, which left those
+  modules inert until pass 6.
 
 ### Pass 6 (decided 2026-11-16): strip the character customisers and retail character shading
 

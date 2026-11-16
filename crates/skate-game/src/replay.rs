@@ -163,14 +163,12 @@ fn controls(
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
     time: Res<Time<Real>>,
-    menu: Option<Res<crate::graphics_menu::Menu>>,
 ) {
     let pad = input.raw_input();
     let pressed = pad.buttons & !replay.previous_buttons;
     replay.previous_buttons = pad.buttons;
-    let menu_open = !crate::graphics_menu::gameplay_active(menu);
     // (no way in while it is parked: see the module doc)
-    if !menu_open && replay.active && pressed & B != 0 {
+    if replay.active && pressed & B != 0 {
         replay.exit();
     }
     // Continue reading the UI controller while fixed gameplay ticks are gated.
@@ -186,7 +184,7 @@ fn controls(
             replay.release_controls = false;
         }
     }
-    if !replay.active || menu_open {
+    if !replay.active {
         return;
     }
     let dt = time.delta_secs().min(0.1);

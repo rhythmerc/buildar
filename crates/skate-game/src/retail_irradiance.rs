@@ -1,4 +1,6 @@
 //! Spatial SH samples from RX2 0xEB0024. TU3 827E6AC8 selects a nearest sample.
+//! (per map: unused since maps went, removed with the retail character in pass 6)
+#![allow(dead_code)]
 use bevy::prelude::*;
 
 #[derive(Clone)]

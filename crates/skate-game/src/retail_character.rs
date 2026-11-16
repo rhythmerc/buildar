@@ -1,4 +1,7 @@
 //! Character SH/key/rim shader, independent of the world's additive lights.
+//!
+//! Inactive since maps went (legacy pass 5: its lighting was per map); removed in pass 6.
+#![allow(dead_code)]
 use crate::retail_irradiance::Irradiance;
 use bevy::{
     asset::embedded_asset,
@@ -24,12 +27,6 @@ impl Plugin for CharacterLightingPlugin {
         app.insert_resource(CharacterShader(common));
         app.add_plugins(MaterialPlugin::<CharacterMaterial>::default())
             .add_systems(Startup, load)
-            .add_systems(
-                PreUpdate,
-                load.after(crate::map_transition::MapTransitionSet)
-                    .run_if(crate::retail_render::world_changed)
-                    .in_set(crate::app::SKATE3),
-            )
             .add_systems(Update, (bind, shadow_views, update).chain().in_set(crate::app::SKATE3));
     }
 }
@@ -116,10 +113,8 @@ struct OriginalCharacterMaterial {
 }
 fn load(
     mut commands: Commands,
-    config: Res<crate::config::Config>,
     sources: Query<Entity, With<ShadowSource>>,
     mut shadow: ResMut<crate::retail_render::ShadowState>,
-    retail: Res<crate::retail_render::RetailScene>,
     originals: Query<(Entity, &OriginalCharacterMaterial)>,
     cameras: Query<(Entity, &RenderLayers), With<crate::camera::GameplayCamera>>,
     mut customiser: ResMut<Assets<crate::customiser_material::SkaterMaterial>>,
@@ -146,84 +141,7 @@ fn load(
     for (entity, layers) in &cameras {
         commands.entity(entity).insert(layers.clone().without(28));
     }
-    if !retail.0 {
-        return;
-    }
-    let Some(map_path) = &config.map_path else {
-        return;
-    };
-    let path = config.asset_root.join("private/character-lighting.json");
-    let mut data = match std::fs::read(&path)
-        .map_err(|e| e.to_string())
-        .and_then(|b| serde_json::from_slice::<LightingData>(&b).map_err(|e| e.to_string()))
-    {
-        Ok(data) => data,
-        Err(e) => {
-            warn!("SKATE_CHARACTER_LIGHTING: {e}");
-            return;
-        }
-    };
-    data.native = std::fs::read(
-        crate::customiser_parts::asset_directory(&config.asset_root).join("native-lighting.json"),
-    )
-    .ok()
-    .and_then(|b| serde_json::from_slice(&b).ok())
-    .unwrap_or_default();
-    let name = map_path.file_stem().unwrap_or_default().to_string_lossy();
-    let overlay = config
-        .asset_root
-        .join("private/native-lighting")
-        .join(format!("{name}.irradiance"));
-    let probe_path = if overlay.is_file() {
-        overlay
-    } else {
-        map_path.with_extension("irradiance")
-    };
-    let probes = match std::fs::read(probe_path)
-        .map_err(|e| e.to_string())
-        .and_then(|b| Irradiance::parse(&b))
-    {
-        Ok(probes) => probes,
-        Err(e) => {
-            warn!("SKATE_CHARACTER_LIGHTING: spatial data unavailable: {e}");
-            return;
-        }
-    };
-    let sky_path = config
-        .asset_root
-        .join("private/native-skies")
-        .join(format!("{name}.json"));
-    let sky: serde_json::Value = match std::fs::read(sky_path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-    {
-        Some(sky) => sky,
-        None => {
-            warn!("SKATE_CHARACTER_LIGHTING: missing authored light direction");
-            return;
-        }
-    };
-    let Some(sun) = sky["environment"]["sun_direction"].as_array() else {
-        return;
-    };
-    if sun.len() != 3 {
-        return;
-    }
-    let mut light = Vec4::new(0., 0., 0., 2.5); // Existing retail scene exposure.
-    for i in 0..3 {
-        let Some(v) = sun[i].as_f64() else {
-            return;
-        };
-        light[i] = v as f32;
-    }
-    info!("SKATE_CHARACTER_LIGHTING: loaded authored {name} irradiance and character parameters");
-    spawn_shadow_sources(&mut commands, light.truncate());
-    commands.insert_resource(Lighting {
-        data,
-        probes,
-        light,
-        display_sh: None,
-    });
+    // (its lighting was per map: with no maps it never loads)
 }
 fn spawn_shadow_sources(commands: &mut Commands, light: Vec3) {
     // World + skater casters, sampled only by the character shader.
@@ -607,17 +525,6 @@ mod tests {
     fn custom_scene_restores_character_and_removes_only_gameplay_shadow_layer() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
-        world.insert_resource(crate::config::Config {
-            asset_root: "unused".into(),
-            map: None,
-            map_path: None,
-            difficulty: crate::difficulty::Difficulty::Hardcore,
-            check_assets: false,
-            start_paused: false,
-            xr: None,
-            map_fingerprint: 0,
-        });
-        world.insert_resource(crate::retail_render::RetailScene(false));
         world.init_resource::<Assets<crate::customiser_material::SkaterMaterial>>();
         world.insert_resource(crate::retail_render::ShadowState(
             Vec4::ONE,

@@ -35,13 +35,6 @@ impl Default for Settings {
         }
     }
 }
-#[derive(serde::Deserialize)]
-struct Authored {
-    target_luminance: f32,
-    min: f32,
-    max: f32,
-    damping: f32,
-}
 
 pub(super) fn install(app: &mut App) {
     embedded_asset!(app, "retail_exposure.wgsl");
@@ -51,12 +44,6 @@ pub(super) fn install(app: &mut App) {
             ExtractComponentPlugin::<super::RetailTone>::default(),
         ))
         .add_systems(Startup, load)
-        .add_systems(
-            PreUpdate,
-            load.after(crate::map_transition::MapTransitionSet)
-                .run_if(super::world_changed)
-                .in_set(crate::app::SKATE3),
-        )
         .add_systems(Update, advance.in_set(crate::app::SKATE3));
     if let Some(render) = app.get_sub_app_mut(RenderApp) {
         render
@@ -78,53 +65,11 @@ pub(super) fn install(app: &mut App) {
     }
 }
 
-fn load(
-    config: Res<crate::config::Config>,
-    retail: Res<super::RetailScene>,
-    mut settings: ResMut<Settings>,
-) {
+/// Back to the defaults (the authored exposure was per map: with no maps nothing is loaded).
+fn load(mut settings: ResMut<Settings>) {
     let generation = settings.timing.y + 1.;
     *settings = Settings::default();
     settings.timing.y = generation;
-    if !retail.0 {
-        return;
-    }
-    if std::env::var_os("SKATE_FIXED_EXPOSURE").is_some_and(|v| v == "1") {
-        info!("RETAIL_EXPOSURE: fixed 2.5 comparison mode");
-        return;
-    }
-    let profile = config
-        .map_path
-        .as_ref()
-        .and_then(|p| p.file_stem())
-        .and_then(|name| {
-            let bytes =
-                std::fs::read(config.asset_root.join("private/exposure-profiles.json")).ok()?;
-            let mut profiles: std::collections::BTreeMap<String, Authored> =
-                serde_json::from_slice(&bytes).ok()?;
-            profiles.remove(&name.to_string_lossy().to_lowercase())
-        });
-    let fallback = || {
-        std::fs::read(config.asset_root.join("private/exposure.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice::<Authored>(&b).ok())
-    };
-    if let Some(a) = profile.or_else(fallback) {
-        if [a.target_luminance, a.min, a.max, a.damping]
-            .iter()
-            .all(|x| x.is_finite())
-            && a.min > 0.
-            && a.max >= a.min
-            && a.target_luminance > 0.
-            && a.damping >= 0.
-        {
-            settings.tuning = Vec4::new(a.target_luminance, a.min, a.max, a.damping);
-            info!(
-                "RETAIL_EXPOSURE: authored target={} range={}..{} damping={}; portable GPU meter",
-                a.target_luminance, a.min, a.max, a.damping
-            );
-        }
-    }
 }
 fn advance(time: Res<Time>, mut settings: ResMut<Settings>) {
     settings.timing.x = time.delta_secs().clamp(0., 0.05);

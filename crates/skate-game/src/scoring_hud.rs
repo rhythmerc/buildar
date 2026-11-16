@@ -69,11 +69,9 @@ struct Hud {
     /// Its target is a size of its own (the headset's: `xr_setup`), not the window's.
     fixed: bool,
     runtime: hud_runtime::Runtime,
-    source: serde_json::Value,
     shapes: apt_scene::Shapes,
     textures: BTreeMap<String, Handle<Image>>,
     slots: Vec<Slot>,
-    generation: u64,
     failed: bool,
 }
 pub(crate) struct ScoringHudPlugin;
@@ -91,7 +89,6 @@ impl Plugin for ScoringHudPlugin {
         .add_systems(
             PostStartup,
             setup
-                .after(crate::graphics_menu::PresentationSetup)
                 // A flat-screen overlay: in XR nothing shows it, and loading
                 // it stalled the first frame ~4.5 s on Quest (input queued
                 // that long is an ANR).
@@ -110,12 +107,11 @@ impl Plugin for ScoringHudPlugin {
             FixedUpdate,
             (advance, multiplier_sounds)
                 .after(crate::app::SimulationSet::Physics)
-                .run_if(crate::graphics_menu::gameplay_active)
                 .in_set(crate::app::SKATE3),
         )
         .add_systems(
             Update,
-            (resize_target, reset, render)
+            (resize_target, render)
                 .chain()
                 .after(crate::app::FrameSet::Physics)
                 .in_set(crate::app::SKATE3),
@@ -132,7 +128,6 @@ fn hud_root(config: &Config) -> PathBuf {
 /// The HUD read from its files (all but the GPU's part): its movie started, its shapes and its textures' pixels.
 struct Loaded {
     runtime: hud_runtime::Runtime,
-    source: serde_json::Value,
     shapes: apt_scene::Shapes,
     textures: Vec<(String, [u32; 2], Vec<u8>)>,
 }
@@ -164,7 +159,7 @@ fn load(root: &std::path::Path, input: hud_runtime::Input) -> Result<Loaded, Str
         }
         textures.push((path, size, bytes));
     }
-    Ok(Loaded { runtime, source, shapes, textures })
+    Ok(Loaded { runtime, shapes, textures })
 }
 
 impl Loaded {
@@ -193,11 +188,9 @@ impl Loaded {
             rebind_after_resize: false,
             fixed: false,
             runtime: self.runtime,
-            source: self.source,
             shapes: self.shapes,
             textures,
             slots: Vec::new(),
-            generation: 0,
             failed: false,
         }
     }
@@ -383,7 +376,6 @@ mod tests {
         ));
         hud.target = target.clone();
         hud.fixed = true;
-        hud.generation = 0;
         app.world_mut().spawn((
             Camera2d,
             Projection::Orthographic(OrthographicProjection {
@@ -495,38 +487,14 @@ mod tests {
         }
     }
 }
-fn reset(
-    hud: Option<ResMut<Hud>>,
-    skater: Res<SkaterRuntime>,
-    map: Res<crate::map_transition::CurrentMap>,
-) {
-    let Some(mut hud) = hud else {
-        return;
-    };
-    if hud.generation == map.generation {
-        return;
-    }
-    match hud_runtime::Runtime::load(&hud.source, skater.scoring.hud_input()) {
-        Ok(runtime) => {
-            hud.runtime = runtime;
-            hud.generation = map.generation;
-            hud.failed = false;
-        }
-        Err(error) => {
-            error!("Original scoring HUD reset: {error}");
-            hud.failed = true;
-        }
-    }
-}
 fn advance(
     hud: Option<ResMut<Hud>>,
     skater: Res<SkaterRuntime>,
-    map: Res<crate::map_transition::CurrentMap>,
 ) {
     let Some(mut hud) = hud else {
         return;
     };
-    if hud.failed || hud.generation != map.generation {
+    if hud.failed {
         return;
     }
     if let Err(error) = hud.runtime.update(
@@ -675,7 +643,6 @@ mod xr {
         mut images: ResMut<Assets<Image>>,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
-        map: Res<crate::map_transition::CurrentMap>,
     ) {
         let Some(result) = block_on(future::poll_once(&mut loading.0)) else {
             return;
@@ -698,8 +665,6 @@ mod xr {
         ));
         hud.target = target.clone();
         hud.fixed = true;
-        // (started for the map that's there: `reset` would start it again, on this thread)
-        hud.generation = map.generation;
         let camera = commands
             .spawn((
                 engine_api::EngineHudCamera,

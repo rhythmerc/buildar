@@ -123,6 +123,8 @@ impl CustomModels {
             })
             .collect()
     }
+    // (nothing opens it since the flat menu went; removed with the customisers in pass 6)
+    #[allow(dead_code)]
     pub fn begin(&mut self) {
         self.open = true;
         self.just_opened = true;
@@ -262,7 +264,6 @@ impl Plugin for CustomModelsPlugin {
         .add_systems(
             PreUpdate,
             interact
-                .after(crate::graphics_menu::MenuInput)
                 .in_set(crate::app::SKATE3),
         )
         .add_systems(

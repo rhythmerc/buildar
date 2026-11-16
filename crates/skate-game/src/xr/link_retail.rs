@@ -48,8 +48,7 @@ fn pad_from_touch(
 ) {
     use crate::xr::touch::{START, XboxState};
     let mut state = mapper.map(&touch.0, time.delta_secs());
-    // A menu tap is Start, which opens the flat pause menu; its camera is off
-    // in XR, so the game would freeze behind a menu nobody can see.
+    // A menu tap is the shared layer's (its menu), never the game's Start.
     state.buttons &= !START;
     if held.held {
         state = XboxState { buttons: 0, triggers: [0, 0], left: [0, 0], right: [0, 0] };

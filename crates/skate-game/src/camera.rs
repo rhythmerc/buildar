@@ -30,15 +30,11 @@ impl Plugin for CameraPlugin {
         );
     }
 }
-fn spawn(
-    mut commands: Commands,
-    config: Res<Config>,
-    retail: Res<crate::retail_render::RetailScene>,
-) {
+fn spawn(mut commands: Commands, config: Res<Config>) {
     let runtime = CameraRuntime::load(&config.asset_root)
         .unwrap_or_else(|error| panic!("Cannot initialize normal gameplay camera: {error}"));
     commands.insert_resource(runtime);
-    let mut camera = commands.spawn((
+    commands.spawn((
         GameplayCamera,
         Camera3d::default(),
         Camera {
@@ -47,13 +43,6 @@ fn spawn(
         },
         Transform::default(),
     ));
-    if retail.0 {
-        camera.insert((
-            bevy::render::view::Hdr,
-            bevy::core_pipeline::tonemapping::Tonemapping::None,
-            crate::retail_render::RetailTone::default(),
-        ));
-    }
 }
 
 pub(crate) fn present(
@@ -93,67 +82,5 @@ pub(crate) fn present(
         }
         // In XR the eye cameras are the only views (see `xr::headset_only_rendering`).
         camera.is_active = config.xr.is_none();
-    }
-}
-
-/// Keep the presentation camera/target/settings while replacing world-specific
-/// postprocessing. A procedural scene must not inherit native HDR/tone state.
-pub(crate) fn set_world_environment(world: &mut World, retail: bool) {
-    let cameras: Vec<_> = world
-        .query_filtered::<Entity, With<GameplayCamera>>()
-        .iter(world)
-        .collect();
-    for id in cameras {
-        let mut camera = world.entity_mut(id);
-        if retail {
-            camera.insert((
-                bevy::render::view::Hdr,
-                bevy::core_pipeline::tonemapping::Tonemapping::None,
-                crate::retail_render::RetailTone::default(),
-            ));
-        } else {
-            camera.remove::<(bevy::render::view::Hdr, crate::retail_render::RetailTone)>();
-            camera.insert(bevy::core_pipeline::tonemapping::Tonemapping::default());
-        }
-        camera.get_mut::<Camera>().unwrap().is_active = false;
-        *camera.get_mut::<Transform>().unwrap() = Transform::default();
-    }
-}
-
-#[cfg(test)]
-mod environment_tests {
-    use super::*;
-    #[test]
-    fn native_procedural_switch_clears_tone_hdr_and_retains_camera_settings() {
-        let mut world = World::new();
-        let id = world
-            .spawn((
-                GameplayCamera,
-                Camera3d::default(),
-                Msaa::Sample4,
-                bevy::camera::RenderTarget::default(),
-            ))
-            .id();
-        for retail in [true, false, true, false] {
-            set_world_environment(&mut world, retail);
-            let entity = world.entity(id);
-            assert_eq!(entity.contains::<bevy::render::view::Hdr>(), retail);
-            assert_eq!(
-                entity.contains::<crate::retail_render::RetailTone>(),
-                retail
-            );
-            assert_eq!(*entity.get::<Msaa>().unwrap(), Msaa::Sample4);
-            assert!(!entity.get::<Camera>().unwrap().is_active);
-            assert_eq!(
-                *entity
-                    .get::<bevy::core_pipeline::tonemapping::Tonemapping>()
-                    .unwrap(),
-                if retail {
-                    bevy::core_pipeline::tonemapping::Tonemapping::None
-                } else {
-                    bevy::core_pipeline::tonemapping::Tonemapping::default()
-                }
-            );
-        }
     }
 }

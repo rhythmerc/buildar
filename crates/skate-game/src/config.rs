@@ -7,12 +7,8 @@ use std::path::PathBuf;
 #[derive(Resource)]
 pub(crate) struct Config {
     pub asset_root: PathBuf,
-    pub map: Option<skate_data::skate_map::SkateMap>,
-    pub map_path: Option<PathBuf>,
     pub difficulty: crate::difficulty::Difficulty,
     pub check_assets: bool,
-    pub start_paused: bool,
-    pub map_fingerprint: u64,
     /// `--xr [--xr-scale K]`: OpenXR passthrough miniature.
     pub xr: Option<XrOptions>,
 }
@@ -35,33 +31,19 @@ impl Config {
     pub fn from_env() -> Result<Self, String> {
         let mut config = Self {
             asset_root: crate::setup::asset_root()?,
-            map: None,
-            map_path: None,
             difficulty: crate::difficulty::Difficulty::default(),
             check_assets: false,
-            start_paused: false,
-            map_fingerprint: 0,
             xr: None,
         };
         let mut difficulty_override = None;
-        let mut explicit_map = false;
         let mut args = std::env::args_os().skip(1);
         while let Some(arg) = args.next() {
             match arg.to_str() {
                 Some("--assets") => {
                     config.asset_root = args.next().ok_or("--assets requires a directory")?.into()
                 }
-                Some("--map") => {
-                    let path = PathBuf::from(args.next().ok_or("--map requires a .skate file")?);
-                    config.map = Some(skate_data::skate_map::SkateMap::load(&path)?);
-                    config.map_path = Some(path.canonicalize().map_err(|e| e.to_string())?);
-                    explicit_map = true;
-                }
-                Some("--test-world") => {
-                    explicit_map = true;
-                    config.map = None;
-                    config.map_path = None;
-                }
+                // (the only world there is: Skate 3 has no maps)
+                Some("--test-world") => {}
                 Some("--xr") => {
                     if !cfg!(feature = "xr") {
                         return Err("--xr needs a build with the `xr` feature".into());
@@ -81,7 +63,6 @@ impl Config {
                     config.xr.get_or_insert_default().scale = scale;
                 }
                 Some("--check-assets") => config.check_assets = true,
-                Some("--start-paused") => config.start_paused = true,
                 Some("--difficulty") => {
                     let value = args
                         .next()
@@ -92,7 +73,7 @@ impl Config {
                 }
                 _ => {
                     return Err(format!(
-                        "Unknown argument {arg:?}. Usage: skate3rust [--assets DIRECTORY] [--map MAP.skate | --test-world] [--difficulty easy|normal|hardcore] [--check-assets] [--start-paused] [--xr [--xr-scale K]]"
+                        "Unknown argument {arg:?}. Usage: skate3rust [--assets DIRECTORY] [--test-world] [--difficulty easy|normal|hardcore] [--check-assets] [--xr [--xr-scale K]]"
                     ));
                 }
             }
@@ -108,42 +89,6 @@ impl Config {
             Some(mode) => mode,
             None => crate::difficulty::Difficulty::load(&config.asset_root)?,
         };
-        if !explicit_map {
-            if let Some(path) = crate::map_library::default_map(&config.asset_root)? {
-                config.map = Some(skate_data::skate_map::SkateMap::load(&path)?);
-                config.map_path = Some(path.canonicalize().map_err(|e| e.to_string())?);
-            }
-        }
-        config.map_fingerprint = map_fingerprint(config.map_path.as_deref())?;
         Ok(config)
     }
-}
-
-/// 64-bit FNV-1a (the map fingerprint's hash; the same function as the former `skate_net::hash`).
-#[cfg(feature = "retail")]
-fn fnv1a(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf29ce484222325u64, |hash, b| (hash ^ u64::from(*b)).wrapping_mul(0x100000001b3))
-}
-
-/// Hash map bytes identically for startup and background map replacement.
-#[cfg(feature = "retail")]
-pub(crate) fn map_fingerprint(path: Option<&std::path::Path>) -> Result<u64, String> {
-    Ok(if let Some(path) = path {
-        use std::io::Read;
-        let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-        let mut hash = 0xcbf29ce484222325u64;
-        let mut buffer = [0; 65536];
-        loop {
-            let n = file.read(&mut buffer).map_err(|e| e.to_string())?;
-            if n == 0 {
-                break;
-            }
-            for b in &buffer[..n] {
-                hash = (hash ^ u64::from(*b)).wrapping_mul(0x100000001b3);
-            }
-        }
-        hash
-    } else {
-        fnv1a(b"skate-test-world-v1")
-    })
 }

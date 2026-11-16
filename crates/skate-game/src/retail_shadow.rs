@@ -106,9 +106,6 @@ fn read_pca(root: &std::path::Path) -> Option<OceanPca> {
         && pca.frames.iter().flatten().flatten().all(|v| v.is_finite()))
     .then_some(pca)
 }
-pub(super) fn pca_available(root: &std::path::Path) -> bool {
-    read_pca(root).is_some()
-}
 fn load_pca(mut commands: Commands, config: Res<crate::config::Config>) {
     if let Some(pca) = read_pca(&config.asset_root) {
         info!("RETAIL_OCEAN: loaded 30 authored PCA frames");

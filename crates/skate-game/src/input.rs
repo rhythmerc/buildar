@@ -105,15 +105,11 @@ impl Plugin for InputPlugin {
             .init_resource::<Navigation>()
             .add_systems(
                 PreUpdate,
-                navigation
-                    .before(crate::graphics_menu::MenuInput)
-                    .in_set(crate::app::SKATE3),
+                navigation.in_set(crate::app::SKATE3),
             )
             .add_systems(
                 PreUpdate,
-                poll_controllers
-                    .run_if(crate::graphics_menu::gameplay_active)
-                    .in_set(crate::app::SKATE3),
+                poll_controllers.in_set(crate::app::SKATE3),
             )
             .add_systems(FixedUpdate, publish_actions.in_set(SimulationSet::Input));
     }
@@ -153,8 +149,7 @@ pub(crate) fn poll_controllers(
 fn publish_actions(
     mut input: ResMut<ControllerInput>,
     mut published: ResMut<PublishedTickInput>,
-    menu: Option<Res<crate::graphics_menu::Menu>>,
 ) {
-    let gameplay = crate::graphics_menu::gameplay_active(menu);
-    published.0 = skate3_sim::input::publish(&mut input, gameplay);
+    // (always gameplay: the flat pause menu is gone, and the headset's menus hold the fixed tick instead: `app::Hold`)
+    published.0 = skate3_sim::input::publish(&mut input, true);
 }

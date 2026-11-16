@@ -24,14 +24,12 @@ impl Plugin for CharacterPlugin {
             .add_systems(
                 PreUpdate,
                 preferences
-                    .after(crate::map_transition::MapTransitionSet)
                     .before(crate::input::poll_controllers)
                     .in_set(crate::app::SKATE3),
             )
             .add_systems(
                 Update,
                 update
-                    .after(crate::graphics_menu::interact)
                     .before(crate::app::FrameSet::Animation)
                     .in_set(crate::app::SKATE3),
             );
