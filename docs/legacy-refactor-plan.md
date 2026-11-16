@@ -98,7 +98,7 @@ The two modules reference each other: map_transition calls `resource_mut::<Menu>
 - No "Resource does not exist" panics.
 - The room light still fades the AR light.
 
-**Desktop:** `--clean` is unchanged. The retail `--test-world` renders straight to the window, without
+**Desktop:** `--clean` is unchanged. The retail run (then `--test-world`, a flag since removed) renders straight to the window, without
 the Escape menu.
 
 **Done (2026-11-16), in one commit with pass 5** (map_transition and the daylight code only served maps):
