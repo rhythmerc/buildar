@@ -1,6 +1,6 @@
 # Desktop-era modules in the headset's Skate 3 path: removal plan
 
-Status: plan, 2026-11-16. It follows the first cleanup pass, which removed modding and vehicles,
+Status: done (passes 1-6, 2026-11-16); kept as the record. Originally: plan, 2026-11-16. It follows the first cleanup pass, which removed modding and vehicles,
 multiplayer and skate-net, the updater, crash reporting, profiling, session markers, the customiser menu,
 the teleport menu, XInput and desktop setup. Line numbers are as of `198b719`.
 
@@ -175,7 +175,7 @@ game engines into custom stages for supported modes.
   tests, and `retail_shader_tests` (they validated the world shaders). `retail_render.rs` keeps only what
   pass 6 removes.
 - **Config:** `--map`, `default_map`, `map`, `map_path` and `map_fingerprint` are gone. `--test-world` is
-  accepted and does nothing. `RetailScene` is gone: no Hdr/tone on the camera. `WorldOrigin` is always
+  accepted and does nothing (since removed). `RetailScene` is gone: no Hdr/tone on the camera. `WorldOrigin` is always
   `FLOOR_HEIGHT`, `GrindGeometry` is always the test course's, and the sim gets `map: None`.
 - The map-only tails of `retail_character::load` and `retail_exposure::load` went too, which left those
   modules inert until pass 6.

@@ -22,6 +22,7 @@ engine's headless repo, and the app hosts the shared renderer. Prerequisite: the
    - Stream, bank and ambience decoding (`skate_audio.rs:253-815`) is only reached through
      `SKATE_AUDIO_PLAY*` environment variables.
    - Most of `TouchMapper`'s chords have no effect (Start is masked; replay is parked).
+   - (Done 2026-11-16: the decode path and the Start/Back/D-pad chords are removed.)
 
 ## Inventory
 

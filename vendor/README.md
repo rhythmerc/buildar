@@ -43,8 +43,8 @@ changes. Its original Apache 2.0 license is included.
 new resource slots instead of first-fit allocation. It prefers already resident
 textures, then fuller slabs, while keeping existing allocation/refcount/free logic
 and capacity limits. This adds work during material allocation, not each frame.
-The game's explicit Vulkan shader probe tests reuse and retirement using real GPU
-texture identities. See `docs/cpu-followup-optimizations.md` for scope and limits.
+(It was measured on the desktop's retail maps, since removed; the write-up is in git
+history as `docs/cpu-followup-optimizations.md`.)
 
 ## Conservative occlusion depth pyramid
 
