@@ -175,7 +175,7 @@ pub(super) fn install(app: &mut App) {
     embedded_asset!(app, "effect.wgsl");
     app.add_plugins(Material2dPlugin::<Effect>::default())
         .add_systems(Startup, load)
-        .add_systems(Update, present);
+        .add_systems(Update, present.in_set(crate::app::SKATE3));
 }
 fn load(
     mut commands: Commands,

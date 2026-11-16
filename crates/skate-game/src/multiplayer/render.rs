@@ -98,7 +98,8 @@ impl Plugin for RemoteRenderPlugin {
             Update,
             (spawn, bind, present)
                 .chain()
-                .after(crate::modding::vehicles::present),
+                .after(crate::modding::vehicles::present)
+                .in_set(crate::app::SKATE3),
         );
     }
 }

@@ -63,9 +63,15 @@ pub(super) fn install(app: &mut App) {
             PreUpdate,
             input
                 .after(crate::graphics_menu::MenuInput)
-                .before(crate::map_transition::MapTransitionSet),
+                .before(crate::map_transition::MapTransitionSet)
+                .in_set(crate::app::SKATE3),
         )
-        .add_systems(Update, (sync, draw, scroll, scrollbar::update).chain());
+        .add_systems(
+            Update,
+            (sync, draw, scroll, scrollbar::update)
+                .chain()
+                .in_set(crate::app::SKATE3),
+        );
 }
 fn button(parent: &mut ChildSpawnerCommands, text: &str, action: Action) {
     parent

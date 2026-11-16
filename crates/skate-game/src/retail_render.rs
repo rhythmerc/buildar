@@ -26,7 +26,7 @@ impl Plugin for RetailRenderPlugin {
         shadow::install(app);
         exposure::install(app);
         if std::env::var_os("SKATE_WEATHERING_COMPARE").is_some_and(|v| v == "1") {
-            app.add_systems(Update, compare_weathering);
+            app.add_systems(Update, compare_weathering.in_set(crate::app::SKATE3));
         }
         app.add_plugins(crate::retail_character::CharacterLightingPlugin);
         if std::env::var_os("SKATE_DEBUG_FOLIAGE").is_some_and(|v| v == "1") {

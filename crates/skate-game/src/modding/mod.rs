@@ -83,15 +83,23 @@ impl Plugin for ModdingPlugin {
         .init_resource::<ModMenu>()
         .add_systems(
             PreUpdate,
-            maintenance.after(crate::map_transition::MapTransitionSet),
+            maintenance
+                .after(crate::map_transition::MapTransitionSet)
+                .in_set(crate::app::SKATE3),
         )
         .add_systems(
             FixedUpdate,
             fixed
                 .after(crate::app::SimulationSet::Physics)
-                .run_if(crate::graphics_menu::gameplay_active),
+                .run_if(crate::graphics_menu::gameplay_active)
+                .in_set(crate::app::SKATE3),
         )
-        .add_systems(Update, update.after(crate::app::FrameSet::Animation));
+        .add_systems(
+            Update,
+            update
+                .after(crate::app::FrameSet::Animation)
+                .in_set(crate::app::SKATE3),
+        );
         vehicles::install(app);
         network::install(app);
         menu::install(app);

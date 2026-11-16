@@ -364,21 +364,36 @@ impl Plugin for MultiplayerPlugin {
                 PreUpdate,
                 (world_changed, receive)
                     .chain()
-                    .after(crate::map_transition::MapTransitionSet),
+                    .after(crate::map_transition::MapTransitionSet)
+                    .in_set(crate::app::SKATE3),
             )
             .add_systems(Startup, setup_hud)
-            .add_systems(Update, hud)
-            .add_systems(Update, send_pose.after(crate::modding::vehicles::present))
+            .add_systems(Update, hud.in_set(crate::app::SKATE3))
+            .add_systems(
+                Update,
+                send_pose
+                    .after(crate::modding::vehicles::present)
+                    .in_set(crate::app::SKATE3),
+            )
             .add_systems(
                 FixedUpdate,
                 prepare
                     .before(SimulationSet::Physics)
-                    .after(SimulationSet::Controls),
+                    .after(SimulationSet::Controls)
+                    .in_set(crate::app::SKATE3),
             )
-            .add_systems(FixedUpdate, send.after(SimulationSet::Physics))
+            .add_systems(
+                FixedUpdate,
+                send.after(SimulationSet::Physics).in_set(crate::app::SKATE3),
+            )
             .init_resource::<appearance::Appearances>()
-            .add_systems(Last, appearance::cleanup)
-            .add_systems(Update, appearance::sync.before(render::spawn))
+            .add_systems(Last, appearance::cleanup.in_set(crate::app::SKATE3))
+            .add_systems(
+                Update,
+                appearance::sync
+                    .before(render::spawn)
+                    .in_set(crate::app::SKATE3),
+            )
             .add_plugins(render::RemoteRenderPlugin);
     }
 }

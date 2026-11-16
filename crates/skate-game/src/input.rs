@@ -64,7 +64,9 @@ impl Plugin for InputPlugin {
             .init_resource::<PublishedTickInput>()
             .add_systems(
                 PreUpdate,
-                poll_controllers.run_if(crate::graphics_menu::gameplay_active),
+                poll_controllers
+                    .run_if(crate::graphics_menu::gameplay_active)
+                    .in_set(crate::app::SKATE3),
             )
             .add_systems(FixedUpdate, publish_actions.in_set(SimulationSet::Input));
     }

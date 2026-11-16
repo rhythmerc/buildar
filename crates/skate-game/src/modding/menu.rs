@@ -87,9 +87,10 @@ pub(super) fn install(app: &mut App) {
             PreUpdate,
             input
                 .after(crate::graphics_menu::MenuInput)
-                .before(crate::map_transition::MapTransitionSet),
+                .before(crate::map_transition::MapTransitionSet)
+                .in_set(crate::app::SKATE3),
         )
-        .add_systems(Update, draw);
+        .add_systems(Update, draw.in_set(crate::app::SKATE3));
 }
 fn setup(mut commands: Commands) {
     commands.spawn((Root,GlobalZIndex(20),Node{display:Display::None,width:percent(100),height:percent(100),position_type:PositionType::Absolute,align_items:AlignItems::Center,justify_content:JustifyContent::Center,..default()},BackgroundColor(Color::srgba(0.015,0.025,0.04,0.98)))).with_children(|root| {

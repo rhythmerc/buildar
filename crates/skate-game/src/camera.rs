@@ -26,7 +26,8 @@ impl Plugin for CameraPlugin {
             Update,
             present
                 .after(FrameSet::Animation)
-                .before(FrameSet::Verification),
+                .before(FrameSet::Verification)
+                .in_set(crate::app::SKATE3),
         );
     }
 }
@@ -70,6 +71,7 @@ pub(crate) fn present(
     windows: Query<&Window>,
     history: Res<crate::presentation::Presentation>,
     time: Res<Time<Fixed>>,
+    hold: Res<crate::app::Hold>,
     replay: Res<crate::replay::Replay>,
     virtual_time: Res<Time<Virtual>>,
     mut vehicle_blend: Local<VehicleCameraBlend>,
@@ -89,7 +91,7 @@ pub(crate) fn present(
             runtime.set_aspect_ratio(width / height);
         }
     }
-    let Some((previous, current, alpha)) = history.view(&replay, time.overstep_fraction()) else {
+    let Some((previous, current, alpha)) = history.view(&replay, hold.alpha(&time)) else {
         return;
     };
     for (mut camera, mut transform, mut projection) in &mut cameras {

@@ -624,3 +624,19 @@ Steps 4a/4b stay. Step 6 becomes S5. Step 9 becomes S1-S6.
   is not folded into `Sim::advance`; `PlayerAudio` is not `Send` (prepare it on its render thread).
 - **Verified:** same 2420 test names and results as the baseline, and the 137 asset-gated tests give
   the same per-test outcomes before and after against the converted data (plus the new façade test).
+- **S5 done (adapter shape, 2026-11-16), without the `engine-skate3` crate extraction:**
+  - Skate 3 registers with `engines::add_engine` like THUG2 and SK8; `add_engine_inferred` and its test are gone.
+    Its per-frame systems are in `app::SKATE3` (= `EngineSet(Engine::Skate3)`): `SimulationSet::*`, `FrameSet::*`,
+    `MapTransitionSet` and `MenuInput` are put in it in `add_retail`, every other system joins it where its plugin
+    adds it (`xr/link_retail.rs` too). Shared now (were owned under the inferred registration): Bevy's per-type
+    systems from the plugins Skate 3 adds (`MaterialPlugin`/`Material2dPlugin`/`UiMaterialPlugin`/extract plugins,
+    `add_audio_source` playback) and the profiler's frame markers (`profiling::install`). The clean audio sources
+    are added once (`player_audio_clean::add_sources`), since a second shared copy of Bevy's playback systems would
+    start each sound twice. Render-world (sub-app) systems are still ungated.
+  - Pause on `PadHeld::pause` (`app::Hold`, set by `link_retail::hold` after `HostInput`): `FixedUpdate`'s
+    `SKATE3` set doesn't run, the presentation blend (`physics::present`, `animation::present`, `camera::present`)
+    is frozen at the alpha it had, and both audio drivers treat it as retail's paused state. `Time<Virtual>` isn't
+    paused (the shared layer runs on it); the fixed clock keeps draining with Skate 3's systems skipped, so there is
+    no catch-up burst on resume. Test: `app::tests::a_held_skate3_stops_its_tick_and_resumes_without_catching_up`.
+  - Façade: `skate3_sim::{SkaterPose, Link}::of(..)` (what `Sim::pose`/`Sim::link` now call) serve the parts-held
+    adapter: `presentation::capture` and `link_retail::publish_pose` read them instead of the raw fields.

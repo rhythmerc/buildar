@@ -160,14 +160,17 @@ impl Plugin for GraphicsMenuPlugin {
             )
             .add_systems(
                 Update,
-                (crate::map_render::advance_day, apply, labels).chain(),
+                (crate::map_render::advance_day, apply, labels)
+                    .chain()
+                    .in_set(crate::app::SKATE3),
             )
             .add_systems(
                 PostUpdate,
                 crate::map_render::position_celestial_bodies
-                    .before(bevy::transform::TransformSystems::Propagate),
+                    .before(bevy::transform::TransformSystems::Propagate)
+                    .in_set(crate::app::SKATE3),
             )
-            .add_systems(Last, pace);
+            .add_systems(Last, pace.in_set(crate::app::SKATE3));
     }
 }
 fn setup(

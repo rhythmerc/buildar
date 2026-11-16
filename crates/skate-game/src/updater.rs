@@ -92,7 +92,7 @@ impl Plugin for UpdaterPlugin {
             .add_systems(Startup, |mut updater: ResMut<Updater>| {
                 updater.open(true);
             })
-            .add_systems(Update, poll);
+            .add_systems(Update, poll.in_set(crate::app::SKATE3));
     }
 }
 fn poll(mut updater: ResMut<Updater>, mut exit: MessageWriter<AppExit>) {

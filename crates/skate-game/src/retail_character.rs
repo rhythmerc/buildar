@@ -27,9 +27,10 @@ impl Plugin for CharacterLightingPlugin {
             .add_systems(
                 PreUpdate,
                 load.after(crate::map_transition::MapTransitionSet)
-                    .run_if(crate::retail_render::world_changed),
+                    .run_if(crate::retail_render::world_changed)
+                    .in_set(crate::app::SKATE3),
             )
-            .add_systems(Update, (bind, shadow_views, update).chain());
+            .add_systems(Update, (bind, shadow_views, update).chain().in_set(crate::app::SKATE3));
     }
 }
 #[derive(Clone, Debug, Deserialize)]

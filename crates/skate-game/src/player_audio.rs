@@ -54,7 +54,7 @@ pub(super) fn install(app: &mut App) {
         return;
     }
     app.add_systems(Startup, start)
-        .add_systems(Update, (forward, follow_skater, report).chain());
+        .add_systems(Update, (forward, follow_skater, report).chain().in_set(crate::app::SKATE3));
 }
 
 
@@ -123,6 +123,7 @@ fn forward(
     mut marker_sounds: MessageReader<crate::skate_audio::FrontEndSoundRequest>,
     virtual_time: Res<Time<bevy::time::Virtual>>,
     real_time: Res<Time<bevy::time::Real>>,
+    hold: Option<Res<crate::app::Hold>>,
 ) {
     let Some(host) = host.as_deref_mut() else {
         return;
@@ -135,9 +136,10 @@ fn forward(
         .extend(marker_sounds.read().map(|sound| sound.0));
     // Retail keeps publishing an audio state every frame while the game is paused — its physics
     // values simply stay frozen — and silences the player path through SFXObj_Pause's input. The
-    // simulation schedule does not run while `Time<Virtual>` is paused, so repeat the last
+    // simulation schedule does not run while `Time<Virtual>` is paused (the desktop's menu) or
+    // Skate 3 is held (the headset's menus and build mode: `crate::app::Hold`), so repeat the last
     // observation at the simulation rate with `paused` set, which is what retail's frozen state is.
-    if virtual_time.is_paused() {
+    if virtual_time.is_paused() || hold.is_some_and(|h| h.paused()) {
         if let Some(last) = host.last_observation.clone() {
             host.paused_carry += real_time.delta_secs();
             while host.paused_carry >= FRAME_SECONDS {

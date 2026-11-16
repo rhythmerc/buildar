@@ -15,7 +15,7 @@ struct State {
 pub(super) fn install(app: &mut App) {
     app.add_audio_source::<Engine>()
         .init_resource::<State>()
-        .add_systems(Update, update.after(super::present));
+        .add_systems(Update, update.after(super::present).in_set(crate::app::SKATE3));
 }
 fn update(
     mut commands: Commands,

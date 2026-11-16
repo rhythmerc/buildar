@@ -8,8 +8,6 @@
 //!   systems) stays shared.
 //! - Its start-up systems (`PreStartup`, `Startup`, `PostStartup` added while it registers) are set aside and run
 //!   the first time the engine is chosen, not at launch: an engine never picked never starts.
-//! - Skate 3, until it is an engine in a crate of its own, registers the old way ([`add_engine_inferred`]): all
-//!   it adds is taken to be its own.
 //! - What they spawn is the engine's ([`EngineOwned`]): while another engine runs, its things are hidden and its
 //!   sounds paused, and they come back as they were when it is picked again. Nothing is unloaded: going back is
 //!   instant and its game carries on where it was.
@@ -23,7 +21,7 @@
 //! `PlaybackSettings` tags it).
 use bevy::ecs::change_detection::{CheckChangeTicks, Tick};
 use bevy::ecs::query::FilteredAccessSet;
-use bevy::ecs::schedule::{ConditionWithAccess, InternedScheduleLabel, InternedSystemSet, ScheduleLabel, SystemKey};
+use bevy::ecs::schedule::{InternedScheduleLabel, InternedSystemSet, ScheduleLabel, SystemKey};
 use bevy::ecs::system::{RunSystemError, ScheduleSystem, SystemIn, SystemParamValidationError, SystemStateFlags};
 use bevy::ecs::world::DeferredWorld;
 use bevy::ecs::world::unsafe_world_cell::UnsafeWorldCell;
@@ -159,35 +157,6 @@ pub(crate) fn add_engine(app: &mut App, engine: Engine, available: Availability,
     carry(app, engine, available, startup);
 }
 
-/// The old way, kept for Skate 3 until it is an engine in a crate of its own (docs/engine-packaging-proposal.md):
-/// every per-frame system added while it registers is taken to be its own, whatever added it - a shared plugin
-/// first added there included.
-pub(crate) fn add_engine_inferred(app: &mut App, engine: Engine, available: Availability, plugins: impl FnOnce(&mut App)) {
-    registry(app);
-    let kept = set_startup_aside(app);
-    let before = system_keys(app);
-    plugins(app);
-    let startup = take_startup(app, engine, kept);
-    // (and what it put in its set itself)
-    own_set(app, engine);
-    {
-        let mut schedules = app.world_mut().resource_mut::<Schedules>();
-        let mut gated = Vec::new();
-        for (_, schedule) in schedules.iter_mut() {
-            let label = schedule.label();
-            // (the start-up schedules here are the shared ones: the engine's own were taken)
-            if is_transition(label) || is_startup(label) {
-                continue;
-            }
-            if own(schedule, engine, before.get(&label)) > 0 {
-                gated.push(format!("{label:?}"));
-            }
-        }
-        info!("engines: {} added (inferred); its systems in {}", engine.name(), gated.join(", "));
-    }
-    carry(app, engine, available, startup);
-}
-
 /// The registry, the first time an engine is added.
 fn registry(app: &mut App) {
     if !app.world().contains_resource::<Engines>() {
@@ -213,7 +182,7 @@ fn take_startup(app: &mut App, engine: Engine, kept: Vec<Schedule>) -> Vec<Sched
     let mut own_startup = Vec::new();
     for label in STARTUP {
         if let Some(mut schedule) = schedules.remove(label()) {
-            own(&mut schedule, engine, None);
+            own(&mut schedule, engine);
             own_startup.push(schedule);
         }
     }
@@ -325,34 +294,17 @@ fn new_systems(app: &mut App, before: &HashMap<InternedScheduleLabel, HashSet<Sy
     names
 }
 
-/// State transition schedules (`OnEnter(..)` and the like) are left alone: a run condition there would read the
-/// state already changed.
-fn is_transition(label: InternedScheduleLabel) -> bool {
-    let name = format!("{label:?}");
-    name.starts_with("OnEnter") || name.starts_with("OnExit") || name.starts_with("OnTransition")
-}
-
-/// The systems of `schedule` not in `old` made `engine`'s: wrapped (so what they spawn is known) and, unless it is
-/// a start-up schedule (`old` none), run only while the engine runs. How many.
-fn own(schedule: &mut Schedule, engine: Engine, old: Option<&HashSet<SystemKey>>) -> usize {
-    let gate = old.is_some() || !schedule_is_startup(schedule);
+/// Every system of one of the engine's own start-up schedules made `engine`'s: wrapped, so what they spawn is known
+/// (they run on its first turn: no condition needed).
+fn own(schedule: &mut Schedule, engine: Engine) {
     let systems = &mut schedule.graph_mut().systems;
-    let new: Vec<SystemKey> =
-        systems.iter().map(|(key, _, _)| key).filter(|key| old.is_none_or(|o| !o.contains(key))).collect();
-    for &key in &new {
+    let keys: Vec<SystemKey> = systems.iter().map(|(key, _, _)| key).collect();
+    for key in keys {
         if let Some(node) = systems.get_mut(key) {
             let inner = std::mem::replace(&mut node.system, Box::new(IntoSystem::into_system(|| {})));
             node.system = Box::new(Owned { engine, inner });
         }
-        if gate && let Some(conditions) = systems.get_conditions_mut(key) {
-            conditions.push(ConditionWithAccess::new(Box::new(IntoSystem::into_system(running(engine)))));
-        }
     }
-    new.len()
-}
-
-fn schedule_is_startup(schedule: &Schedule) -> bool {
-    STARTUP.iter().any(|label| label() == schedule.label())
 }
 
 /// An engine's system: the engine named while it runs and while its commands are applied.
@@ -679,20 +631,6 @@ mod tests {
         app.world_mut().resource_mut::<Engines>().request(Engine::Sk8);
         frame(&mut app);
         assert_eq!(visibility(&mut app, "b later"), Visibility::Hidden, "what it spawned is THUG2's");
-    }
-
-    /// The old way (Skate 3's): everything added while it registers is its own.
-    #[test]
-    fn an_inferred_engine_owns_all_it_adds() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins).init_resource::<Ran>();
-        add_engine(&mut app, Engine::Sk8, |_| Ok(()), |_| {});
-        add_engine_inferred(&mut app, Engine::Skate3, |_| Ok(()), |app| {
-            app.add_systems(Update, |mut ran: ResMut<Ran>| ran.0.push("s3"));
-        });
-        assert!(!frame(&mut app).contains(&"s3"));
-        app.world_mut().resource_mut::<Engines>().request(Engine::Skate3);
-        assert!(frame(&mut app).contains(&"s3"));
     }
 
     #[test]

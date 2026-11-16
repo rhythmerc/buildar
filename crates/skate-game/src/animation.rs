@@ -289,6 +289,7 @@ fn present(
     skater: Res<SkaterRuntime>,
     replay: Res<crate::replay::Replay>,
     time: Res<Time<Fixed>>,
+    hold: Res<crate::app::Hold>,
     animation: Res<AnimationStatus>,
     mut nodes: Query<&mut Transform>,
 ) {
@@ -299,7 +300,7 @@ fn present(
     // rotated -90 degrees about X relative to the native frames. Both files'
     // world positions are Y-up. This is a skin basis change, not a physics turn.
     let basis = render_basis();
-    let Some((previous, current, alpha)) = history.view(&replay, time.overstep_fraction()) else {
+    let Some((previous, current, alpha)) = history.view(&replay, hold.alpha(&time)) else {
         let pose: Vec<_> = skater
             .render_pose
             .iter()
