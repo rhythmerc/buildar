@@ -225,6 +225,9 @@ pub(crate) fn add_xr_engines(app: &mut App, files: &std::path::Path, first: crat
     }
 }
 
+/// SK8's per-frame systems (its own when the app carries engines; on the desktop just a set).
+const SK8: crate::engines::EngineSet = crate::engines::EngineSet(crate::engines::Engine::Sk8);
+
 /// The SK8 engine: the clean-room skater and its menus, sounds and (in the headset) its adapter to the XR layer.
 fn add_sk8(app: &mut App, files: &std::path::Path, xr: bool) {
     app.insert_resource(CleanSkate::new())
@@ -259,9 +262,10 @@ fn add_sk8(app: &mut App, files: &std::path::Path, xr: bool) {
             )
                 .chain()
                 .after(crate::xr::ui::UiSet)
-                .before(feed_sounds),
+                .before(feed_sounds)
+                .in_set(SK8),
         )
-        .add_systems(Update, xr_menu::feed_hud.after(menu::draw));
+        .add_systems(Update, xr_menu::feed_hud.after(menu::draw).in_set(SK8));
         app.world_mut()
             .resource_mut::<crate::xr::ui::UiProviders>()
             .0
@@ -272,17 +276,19 @@ fn add_sk8(app: &mut App, files: &std::path::Path, xr: bool) {
             Update,
             (menu::keyboard_nav, menu::update, input::log_gamepads, input::read_desktop, input::demo_rail_gizmo, sim::step, view::chase, view::views)
                 .chain()
-                .before(feed_sounds),
+                .before(feed_sounds)
+                .in_set(SK8),
         );
     }
     app.init_resource::<skater::Clock>()
-        .add_systems(Update, (feed_sounds, skater::bind, skater::animate, menu::draw).chain())
+        .add_systems(Update, (feed_sounds, skater::bind, skater::animate, menu::draw).chain().in_set(SK8))
         .add_systems(
             PostUpdate,
             (mirror::apply, procedural::layer)
                 .chain()
                 .after(bevy::app::AnimationSystems)
-                .before(bevy::transform::TransformSystems::Propagate),
+                .before(bevy::transform::TransformSystems::Propagate)
+                .in_set(SK8),
         );
 }
 

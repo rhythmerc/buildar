@@ -1,7 +1,6 @@
 //! OpenXR actions for the two Touch controllers: every input the skate pad
 //! needs, plus the grip and aim poses used for placing the miniature.
-use super::touch::{TouchMapper, TouchState};
-use crate::input::ExternalPad;
+use super::touch::TouchState;
 use bevy::prelude::*;
 use bevy_mod_openxr::{
     action_binding::{OxrSendActionBindings, OxrSuggestActionBinding},
@@ -54,15 +53,26 @@ pub(crate) enum Hand {
 #[derive(Component)]
 pub(crate) struct Grip(pub Hand);
 
-/// Touch state for this frame is read (and the pad published) in this set.
+/// Touch state for this frame is read in this set.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct TouchRead;
+
+/// The shared layer's input for this frame (PreUpdate): the controllers read ([`LatestTouch`]), and whether the
+/// shared layer has them ([`PadHeld`]). An engine reads its pad after this.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct HostInput;
+
+/// The controllers are the shared layer's this frame (a menu open, build mode, aiming a spawn, placing the skater
+/// or a park): engines give their skater a neutral pad.
+#[derive(Resource, Default, Clone, Copy, Debug)]
+pub(crate) struct PadHeld(pub bool);
 
 pub(crate) struct TouchActionsPlugin;
 
 impl Plugin for TouchActionsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LatestTouch>()
+            .init_resource::<PadHeld>()
             .add_systems(Startup, create.run_if(session_available))
             .add_systems(OxrSendActionBindings, suggest)
             .add_systems(XrSessionCreated, (attach, spawn_aim_spaces))
@@ -70,9 +80,7 @@ impl Plugin for TouchActionsPlugin {
                 PreUpdate,
                 (
                     request_sync.before(OxrActionSetSyncSet),
-                    read.in_set(TouchRead)
-                        .after(OxrActionSetSyncSet)
-                        .before(crate::input::poll_controllers),
+                    read.in_set(TouchRead).in_set(HostInput).after(OxrActionSetSyncSet),
                 )
                     .run_if(openxr_session_running),
             );
@@ -170,10 +178,8 @@ fn request_sync(actions: Res<TouchActions>, mut sync: MessageWriter<OxrSyncActio
 fn read(
     actions: Res<TouchActions>,
     session: Res<OxrSession>,
-    time: Res<Time<Real>>,
-    mut mapper: Local<TouchMapper>,
     mut latest: ResMut<LatestTouch>,
-    mut pad: ResMut<ExternalPad>,
+    mut held: ResMut<PadHeld>,
     ui: Option<Res<super::ui::UiOwnsControllers>>,
 ) {
     let session: &openxr::Session<openxr::AnyGraphics> = &session;
@@ -232,13 +238,7 @@ fn read(
         }
     };
     latest.0 = touch;
-    let mut state = mapper.map(&touch, time.delta_secs());
-    // A menu tap is Start, which opens the flat pause menu; its camera is off
-    // in XR, so the game would freeze behind a menu nobody can see.
-    state.buttons &= !super::touch::START;
-    // A headset menu owns the controllers: the skater gets a neutral pad.
-    if ui.is_some_and(|ui| ui.0) {
-        state = super::touch::XboxState { buttons: 0, triggers: [0, 0], left: [0, 0], right: [0, 0] };
-    }
-    pad.set(state);
+    // A headset menu owns the controllers: the skater gets a neutral pad (aiming a spawn, build mode and placing a
+    // park say so too, after this).
+    held.0 = ui.is_some_and(|ui| ui.0);
 }

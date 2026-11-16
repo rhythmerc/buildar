@@ -695,7 +695,7 @@ mod xr {
         hud.generation = map.generation;
         let camera = commands
             .spawn((
-                crate::xr::panel::XrPanelCamera,
+                crate::xr::hand_hud::EngineHudCamera,
                 Camera2d,
                 Projection::Orthographic(OrthographicProjection {
                     scaling_mode: ScalingMode::Fixed { width, height },

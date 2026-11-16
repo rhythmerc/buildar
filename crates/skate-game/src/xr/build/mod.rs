@@ -46,12 +46,10 @@ use super::planes::{SceneCapture, SceneShapes, Shape};
 use super::rig::{Rig, heading};
 use super::link::{ArWorld, TeleportSkater};
 use super::spawn::ray_triangle;
-use crate::input::ExternalPad;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_mod_openxr::openxr_session_running;
 use serde::{Deserialize, Serialize};
-use crate::xr::touch::XboxState;
 
 const HOLD_TO_TOGGLE_SECONDS: f32 = 1.0;
 /// Left stick deflection that makes a menu hold a D-pad chord instead.
@@ -589,7 +587,7 @@ impl Plugin for BuildPlugin {
                 (toggle_build, place_park, build_controls)
                     .chain()
                     .after(TouchRead)
-                    .before(crate::input::poll_controllers)
+                    .in_set(super::actions::HostInput)
                     .run_if(openxr_session_running),
             )
             .add_plugins(legend::LegendPlugin)
@@ -709,7 +707,7 @@ fn build_controls(
     world: Res<ArWorld>,
     mut teleport: MessageWriter<TeleportSkater>,
     shapes: Res<SceneShapes>,
-    mut pad: ResMut<ExternalPad>,
+    mut held: ResMut<super::actions::PadHeld>,
     mut state: ResMut<BuildState>,
     mut placed: ResMut<PlacedPieces>,
     mut capture: ResMut<SceneCapture>,
@@ -734,12 +732,7 @@ fn build_controls(
         }
         return;
     }
-    pad.set(XboxState {
-        buttons: 0,
-        triggers: [0, 0],
-        left: [0, 0],
-        right: [0, 0],
-    });
+    held.0 = true;
     let touch = &touch.0;
     let dt = time.delta_secs();
     state.pending = None;
@@ -1931,7 +1924,7 @@ fn place_park(world: &mut World, mut previous: Local<Option<(bool, bool)>>) {
     let touch = world.resource::<LatestTouch>().0;
     let dt = world.resource::<Time<Real>>().delta_secs();
     world.resource_mut::<BuildMode>().active = false;
-    world.resource_mut::<ExternalPad>().set(XboxState { buttons: 0, triggers: [0, 0], left: [0, 0], right: [0, 0] });
+    world.resource_mut::<super::actions::PadHeld>().0 = true;
     let put = touch.a || touch.right_trigger > PRESS;
     // (the press that chose the park is not the one that puts it)
     let Some((was_put, was_b)) = previous.replace((put, touch.b)) else { return };
@@ -3196,7 +3189,7 @@ mod tests {
             world.init_resource::<PlacedPieces>();
             world.init_resource::<SceneShapes>();
             world.init_resource::<SceneCapture>();
-            world.init_resource::<ExternalPad>();
+            world.init_resource::<crate::xr::actions::PadHeld>();
             world.init_resource::<Messages<TeleportSkater>>();
             world.spawn((Hand::Right, Transform::from_xyz(0.0, 1.5, 0.0)));
             let mut schedule = Schedule::default();

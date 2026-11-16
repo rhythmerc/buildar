@@ -55,10 +55,6 @@ mod grind_world;
 mod hud_runtime;
 #[cfg(feature = "retail")]
 mod input;
-// The store build: the pad plumbing the imported-disc tier reads, as stand-ins.
-#[cfg(not(feature = "retail"))]
-#[path = "input_store.rs"]
-mod input;
 #[cfg(feature = "retail")]
 mod map_library;
 #[cfg(feature = "retail")]

@@ -2,10 +2,14 @@
 //! clean-room engine (`crate::clean`); Skate 3, the faithful port on the player's imported data; THUG2, the
 //! decomp's engine on the player's own game files (`crate::thug2`).
 //!
-//! Each engine's plugins are added inside [`add_engine`], which makes everything they schedule that engine's:
-//! - Their per-frame systems (every schedule but the start-up ones) run only while it is the running engine.
-//! - Their start-up systems (`PreStartup`, `Startup`, `PostStartup`) are set aside and run the first time the
-//!   engine is chosen, not at launch: an engine never picked never starts.
+//! Each engine's plugins are added inside [`add_engine`], and what is the engine's is said, not guessed:
+//! - Its per-frame systems are the ones it puts in [`EngineSet`]`(engine)` (any schedule): they run only while it
+//!   is the running engine. Anything else added meanwhile (a Bevy plugin, an audio source, a shared helper's
+//!   systems) stays shared.
+//! - Its start-up systems (`PreStartup`, `Startup`, `PostStartup` added while it registers) are set aside and run
+//!   the first time the engine is chosen, not at launch: an engine never picked never starts.
+//! - Skate 3, until it is an engine in a crate of its own, registers the old way ([`add_engine_inferred`]): all
+//!   it adds is taken to be its own.
 //! - What they spawn is the engine's ([`EngineOwned`]): while another engine runs, its things are hidden and its
 //!   sounds paused, and they come back as they were when it is picked again. Nothing is unloaded: going back is
 //!   instant and its game carries on where it was.
@@ -84,6 +88,9 @@ pub(crate) struct Engines {
     /// Where the choice is kept between launches.
     file: Option<PathBuf>,
     not_at_launch: HashSet<Engine>,
+    /// The systems made an engine's through its set (each once), and the schedules its set is gated in.
+    wrapped: HashSet<(InternedScheduleLabel, SystemKey)>,
+    gated_sets: HashSet<(InternedScheduleLabel, Engine)>,
 }
 
 impl Engines {
@@ -98,6 +105,8 @@ impl Engines {
             paused: HashSet::new(),
             file: None,
             not_at_launch: HashSet::new(),
+            wrapped: HashSet::new(),
+            gated_sets: HashSet::new(),
         }
     }
 
@@ -199,57 +208,170 @@ pub(crate) fn running(engine: Engine) -> impl Fn(Option<Res<Engines>>) -> bool +
 const STARTUP: [fn() -> InternedScheduleLabel; 3] =
     [|| PreStartup.intern(), || Startup.intern(), || PostStartup.intern()];
 
-/// Adds `engine` to the app: `plugins` adds its plugins and systems, which become the engine's (see the module
+fn is_startup(label: InternedScheduleLabel) -> bool {
+    STARTUP.iter().any(|startup| startup() == label)
+}
+
+/// The set an engine's per-frame systems go in, in any schedule: what is in it (directly or through sets of its
+/// own) is that engine's - run only while it runs, and what it spawns is its own. Nothing else is: a plugin of
+/// Bevy's or of the shared layer's added while an engine registers stays shared.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct EngineSet(pub Engine);
+
+/// Adds `engine` to the app: `plugins` adds its plugins and systems. Its per-frame systems are the ones it puts in
+/// [`EngineSet`]`(engine)`; the start-up systems added here are its own too, run on its first turn (see the module
 /// notes). `available` says whether it can run (checked when it is chosen).
 pub(crate) fn add_engine(app: &mut App, engine: Engine, available: Availability, plugins: impl FnOnce(&mut App)) {
+    registry(app);
+    let kept = set_startup_aside(app);
+    let before = system_keys(app);
+    plugins(app);
+    let startup = take_startup(app, engine, kept);
+    let owned = own_set(app, engine);
+    // (what it added outside its set is shared: listed, so a system left out by mistake can be seen)
+    let shared: Vec<String> = new_systems(app, &before).into_iter().filter(|name| !owned.contains(name)).collect();
+    info!("engines: {} added; {} systems its own", engine.name(), owned.len());
+    if !shared.is_empty() {
+        debug!("engines: {} added these shared (outside its set): {}", engine.name(), shared.join(", "));
+    }
+    carry(app, engine, available, startup);
+}
+
+/// The old way, kept for Skate 3 until it is an engine in a crate of its own (docs/engine-packaging-proposal.md):
+/// every per-frame system added while it registers is taken to be its own, whatever added it - a shared plugin
+/// first added there included.
+pub(crate) fn add_engine_inferred(app: &mut App, engine: Engine, available: Availability, plugins: impl FnOnce(&mut App)) {
+    registry(app);
+    let kept = set_startup_aside(app);
+    let before = system_keys(app);
+    plugins(app);
+    let startup = take_startup(app, engine, kept);
+    // (and what it put in its set itself)
+    own_set(app, engine);
+    {
+        let mut schedules = app.world_mut().resource_mut::<Schedules>();
+        let mut gated = Vec::new();
+        for (_, schedule) in schedules.iter_mut() {
+            let label = schedule.label();
+            // (the start-up schedules here are the shared ones: the engine's own were taken)
+            if is_transition(label) || is_startup(label) {
+                continue;
+            }
+            if own(schedule, engine, before.get(&label)) > 0 {
+                gated.push(format!("{label:?}"));
+            }
+        }
+        info!("engines: {} added (inferred); its systems in {}", engine.name(), gated.join(", "));
+    }
+    carry(app, engine, available, startup);
+}
+
+/// The registry, the first time an engine is added.
+fn registry(app: &mut App) {
     if !app.world().contains_resource::<Engines>() {
         app.insert_resource(Engines::new())
             .init_resource::<BeforeSwitch>()
             .add_message::<EngineSwitched>()
             .add_systems(First, (scripted, switch).chain())
             .add_observer(tag::<Visibility>)
-            .add_observer(tag::<bevy::audio::PlaybackSettings>);
+            .add_observer(tag::<bevy::audio::PlaybackSettings>)
+            .add_plugins(EnginesPlugin);
     }
-    // The start-up schedules set aside, so the engine's own land in fresh ones.
-    let kept: Vec<Schedule> = {
-        let mut schedules = app.world_mut().resource_mut::<Schedules>();
-        STARTUP.iter().filter_map(|label| schedules.remove(label())).collect()
-    };
-    let before = system_keys(app);
-    plugins(app);
+}
+
+/// The start-up schedules set aside, so the engine's own land in fresh ones.
+fn set_startup_aside(app: &mut App) -> Vec<Schedule> {
+    let mut schedules = app.world_mut().resource_mut::<Schedules>();
+    STARTUP.iter().filter_map(|label| schedules.remove(label())).collect()
+}
+
+/// The engine's start-up schedules (made while it registered: all its own), and the shared ones put back.
+fn take_startup(app: &mut App, engine: Engine, kept: Vec<Schedule>) -> Vec<Schedule> {
+    let mut schedules = app.world_mut().resource_mut::<Schedules>();
     let mut own_startup = Vec::new();
-    {
-        let mut schedules = app.world_mut().resource_mut::<Schedules>();
-        for label in STARTUP {
-            if let Some(mut schedule) = schedules.remove(label()) {
-                own(&mut schedule, engine, None);
-                own_startup.push(schedule);
-            }
+    for label in STARTUP {
+        if let Some(mut schedule) = schedules.remove(label()) {
+            own(&mut schedule, engine, None);
+            own_startup.push(schedule);
         }
-        for schedule in kept {
-            schedules.insert(schedule);
-        }
-        let mut gated = Vec::new();
-        for (_, schedule) in schedules.iter_mut() {
-            let label = schedule.label();
-            // (the start-up schedules here are the shared ones, put back: the engine's own were taken above. Their
-            // systems aren't new - `before` was taken with them set aside - and made the engine's, they marked
-            // everything the shared layer starts with as the engine's: the menu, hidden when it was left)
-            if is_transition(label) || STARTUP.iter().any(|startup| startup() == label) {
-                continue;
-            }
-            let old = before.get(&label);
-            if own(schedule, engine, old) > 0 {
-                gated.push(format!("{label:?}"));
-            }
-        }
-        info!("engines: {} added; its systems in {}", engine.name(), gated.join(", "));
     }
+    for schedule in kept {
+        schedules.insert(schedule);
+    }
+    own_startup
+}
+
+fn carry(app: &mut App, engine: Engine, available: Availability, startup: Vec<Schedule>) {
     let mut engines = app.world_mut().resource_mut::<Engines>();
     engines.carried.push((engine, available));
-    engines.startup.insert(engine, own_startup);
+    engines.startup.insert(engine, startup);
     if engines.wanted.is_none() {
         engines.wanted = Some(engine);
+    }
+}
+
+/// Makes what is in `EngineSet(engine)`, in every schedule, the engine's (once each: systems added to the set later
+/// are made its own when this runs again). The names of its systems.
+fn own_set(app: &mut App, engine: Engine) -> HashSet<String> {
+    let set = EngineSet(engine).intern();
+    let mut names = HashSet::new();
+    app.world_mut().resource_scope(|world, mut engines: Mut<Engines>| {
+        let mut schedules = world.resource_mut::<Schedules>();
+        for (_, schedule) in schedules.iter_mut() {
+            let label = schedule.label();
+            let Some(key) = schedule.graph().system_sets.get_key(set) else { continue };
+            let members = members(schedule.graph(), key);
+            let systems = &mut schedule.graph_mut().systems;
+            for system in members {
+                let Some(node) = systems.get_mut(system) else { continue };
+                names.insert(node.system.name().to_string());
+                if !engines.wrapped.insert((label, system)) {
+                    continue;
+                }
+                let inner = std::mem::replace(&mut node.system, Box::new(IntoSystem::into_system(|| {})));
+                node.system = Box::new(Owned { engine, inner });
+            }
+            if engines.gated_sets.insert((label, engine)) {
+                schedule.configure_sets(EngineSet(engine).run_if(running(engine)));
+            }
+        }
+    });
+    names
+}
+
+/// The systems under a set, through the sets in it.
+fn members(graph: &bevy::ecs::schedule::ScheduleGraph, set: bevy::ecs::schedule::SystemSetKey) -> Vec<SystemKey> {
+    use bevy::ecs::schedule::NodeId;
+    let hierarchy = graph.hierarchy().graph();
+    let mut found = Vec::new();
+    let mut seen = HashSet::new();
+    let mut open = vec![NodeId::Set(set)];
+    while let Some(node) = open.pop() {
+        if !seen.insert(node) || !hierarchy.contains_node(node) {
+            continue;
+        }
+        for child in hierarchy.neighbors_directed(node, bevy::ecs::schedule::graph::Direction::Outgoing).collect::<Vec<_>>() {
+            match child {
+                NodeId::System(system) => found.push(system),
+                NodeId::Set(_) => open.push(child),
+            }
+        }
+    }
+    found
+}
+
+/// Runs [`own_set`] again for every engine once the plugins are all built: systems put in an engine's set after it
+/// registered (a plugin's `finish`, a later `add_systems`) are its own too.
+struct EnginesPlugin;
+
+impl Plugin for EnginesPlugin {
+    fn build(&self, _: &mut App) {}
+
+    fn cleanup(&self, app: &mut App) {
+        let engines: Vec<Engine> = app.world().resource::<Engines>().carried.iter().map(|(e, _)| *e).collect();
+        for engine in engines {
+            own_set(app, engine);
+        }
     }
 }
 
@@ -260,6 +382,25 @@ fn system_keys(app: &mut App) -> HashMap<InternedScheduleLabel, HashSet<SystemKe
         .iter()
         .map(|(_, schedule)| (schedule.label(), schedule.graph().systems.iter().map(|(key, _, _)| key).collect()))
         .collect()
+}
+
+/// The names of the per-frame systems added since `before`.
+fn new_systems(app: &mut App, before: &HashMap<InternedScheduleLabel, HashSet<SystemKey>>) -> Vec<String> {
+    let schedules = app.world_mut().resource_mut::<Schedules>();
+    let mut names = Vec::new();
+    for (_, schedule) in schedules.iter() {
+        let label = schedule.label();
+        if is_startup(label) {
+            continue;
+        }
+        let old = before.get(&label);
+        for (key, system, _) in schedule.graph().systems.iter() {
+            if old.is_none_or(|o| !o.contains(&key)) {
+                names.push(system.name().to_string());
+            }
+        }
+    }
+    names
 }
 
 /// State transition schedules (`OnEnter(..)` and the like) are left alone: a run condition there would read the
@@ -523,16 +664,21 @@ mod tests {
                 ran.0.push("a start");
                 commands.spawn((Thing, Visibility::Visible, Name::new("a")));
             })
-            .add_systems(Update, |mut ran: ResMut<Ran>| ran.0.push("a"));
+            .add_systems(Update, (|mut ran: ResMut<Ran>| ran.0.push("a")).in_set(EngineSet(Engine::Sk8)))
+            // (a shared helper's system, added while it registers but outside its set: everyone's)
+            .add_systems(Update, |mut ran: ResMut<Ran>| ran.0.push("helper"));
         });
         add_engine(&mut app, Engine::Thug2, |_| Ok(()), |app| {
-            app.add_systems(Startup, |mut ran: ResMut<Ran>| ran.0.push("b start"))
-                .add_systems(Update, |mut ran: ResMut<Ran>, mut commands: Commands, mut once: Local<bool>| {
+            app.add_systems(Startup, |mut ran: ResMut<Ran>| ran.0.push("b start")).add_systems(
+                Update,
+                (|mut ran: ResMut<Ran>, mut commands: Commands, mut once: Local<bool>| {
                     ran.0.push("b");
                     if !std::mem::replace(&mut *once, true) {
                         commands.spawn((Thing, Visibility::Inherited, Name::new("b")));
                     }
-                });
+                })
+                .in_set(EngineSet(Engine::Thug2)),
+            );
         });
         // And one after.
         app.add_systems(Startup, |mut ran: ResMut<Ran>| ran.0.push("shared start"));
@@ -575,16 +721,56 @@ mod tests {
         let first = frame(&mut app);
         assert!(first.contains(&"shared start") && first.contains(&"a start") && first.contains(&"a"), "{first:?}");
         assert!(!first.contains(&"b start") && !first.contains(&"b"), "{first:?}");
-        assert_eq!(sorted(frame(&mut app)), vec!["a", "shared"]);
+        assert_eq!(sorted(frame(&mut app)), vec!["a", "helper", "shared"]);
 
         app.world_mut().resource_mut::<Engines>().request(Engine::Thug2);
         let switched = frame(&mut app);
         assert!(switched.contains(&"b start") && switched.contains(&"b") && !switched.contains(&"a"), "{switched:?}");
+        assert!(switched.contains(&"helper"), "what an engine added outside its set runs whatever the engine");
         assert_eq!(app.world().resource::<Engines>().current(), Some(Engine::Thug2));
 
         app.world_mut().resource_mut::<Engines>().request(Engine::Sk8);
         let back = sorted(frame(&mut app));
-        assert_eq!(back, vec!["a", "shared"], "no second start");
+        assert_eq!(back, vec!["a", "helper", "shared"], "no second start");
+    }
+
+    /// A system put in an engine's set after the engine was added (a plugin's `finish`, a later `add_systems`) is
+    /// its own too once the plugins are all built.
+    #[test]
+    fn what_joins_an_engines_set_later_is_its_own() {
+        let mut app = app();
+        app.add_systems(
+            Update,
+            (|mut ran: ResMut<Ran>, mut commands: Commands, mut once: Local<bool>| {
+                ran.0.push("b later");
+                if !std::mem::replace(&mut *once, true) {
+                    commands.spawn((Visibility::Visible, Name::new("b later")));
+                }
+            })
+            .in_set(EngineSet(Engine::Thug2)),
+        );
+        app.finish();
+        app.cleanup();
+        assert!(!frame(&mut app).contains(&"b later"), "not while SK8 runs");
+        app.world_mut().resource_mut::<Engines>().request(Engine::Thug2);
+        assert!(frame(&mut app).contains(&"b later"));
+        app.world_mut().resource_mut::<Engines>().request(Engine::Sk8);
+        frame(&mut app);
+        assert_eq!(visibility(&mut app, "b later"), Visibility::Hidden, "what it spawned is THUG2's");
+    }
+
+    /// The old way (Skate 3's): everything added while it registers is its own.
+    #[test]
+    fn an_inferred_engine_owns_all_it_adds() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Ran>();
+        add_engine(&mut app, Engine::Sk8, |_| Ok(()), |_| {});
+        add_engine_inferred(&mut app, Engine::Skate3, |_| Ok(()), |app| {
+            app.add_systems(Update, |mut ran: ResMut<Ran>| ran.0.push("s3"));
+        });
+        assert!(!frame(&mut app).contains(&"s3"));
+        app.world_mut().resource_mut::<Engines>().request(Engine::Skate3);
+        assert!(frame(&mut app).contains(&"s3"));
     }
 
     #[test]

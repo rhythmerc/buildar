@@ -131,7 +131,6 @@ impl Plugin for XrPlugin {
                 ],
                 ..default()
             })
-            .insert_resource(crate::input::ExternalPad::default())
             .add_plugins((
                 actions::TouchActionsPlugin,
                 planes::PlanesPlugin,
@@ -243,7 +242,7 @@ fn no_eye_occlusion_culling(
 fn headset_only_rendering(
     mut cameras: Query<
         &mut Camera,
-        (Without<bevy_mod_xr::camera::XrCamera>, Without<panel::XrPanelCamera>),
+        (Without<bevy_mod_xr::camera::XrCamera>, Without<panel::XrPanelCamera>, Without<hand_hud::EngineHudCamera>),
     >,
     mut lights: Query<&mut DirectionalLight>,
 ) {

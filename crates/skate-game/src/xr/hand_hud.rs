@@ -19,6 +19,11 @@ pub(crate) const ABOVE_HAND_M: f32 = 0.16;
 /// Toward the eyes from the grip, real metres (so the controller doesn't cover it).
 const TOWARD_EYES_M: f32 = 0.02;
 
+/// The camera drawing an engine's HUD into its image: kept on in the headset (where other flat cameras are turned
+/// off), run only while its panel shows ([`HandHud::camera`]).
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub(crate) struct EngineHudCamera;
+
 /// A HUD panel: a quad one unit wide and `aspect` high, shown `width_m` real metres wide. Its `anchor` (a point of
 /// it: -0.5..0.5 across and up from its middle) is put `offset` from the grip (real metres: right and up, as the
 /// player sees it).

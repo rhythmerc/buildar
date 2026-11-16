@@ -14,7 +14,7 @@
 //! - Frames: the game steps at its 60 Hz from the headset's frames (several a frame at most), and waits while a menu
 //!   or build mode has the controllers.
 //! - Pad: the Touch controllers as a PlayStation 2 pad ([`CONTROLS`]).
-use crate::engines::{self, Engine};
+use crate::engines::{self, Engine, EngineSet};
 use crate::xr::link::{ArWorld, PieceSurfaces, SkaterLink, TeleportSkater};
 use crate::xr::touch::TouchState;
 use bevy::prelude::*;
@@ -119,11 +119,14 @@ pub(crate) fn install(app: &mut App, files: &Path) {
                 Update,
                 (finish_boot, read_pad, teleport, apply_world, hud::want, step, publish, play_sounds, hud::draw)
                     .chain()
-                    .after(crate::xr::ui::UiSet),
+                    .after(crate::xr::ui::UiSet)
+                    .in_set(EngineSet(Engine::Thug2)),
             )
             .add_systems(
                 PostUpdate,
-                (place_stand_in, pose_skater, hud::place_meter).before(bevy::transform::TransformSystems::Propagate),
+                (place_stand_in, pose_skater, hud::place_meter)
+                    .before(bevy::transform::TransformSystems::Propagate)
+                    .in_set(EngineSet(Engine::Thug2)),
             );
     });
     // (outside THUG2's systems: it shoots whichever engine's skater - another's skinned skater, to compare)

@@ -13,9 +13,37 @@ pub(crate) struct RetailLinkPlugin;
 impl Plugin for RetailLinkPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<crate::physics::OffboardView>()
+            .init_resource::<crate::input::ExternalPad>()
             .add_systems(Update, (apply_world, teleport, publish_pose, publish_hud).chain())
-            .add_systems(PreUpdate, publish_view);
+            .add_systems(PreUpdate, publish_view)
+            .add_systems(
+                PreUpdate,
+                pad_from_touch
+                    .after(crate::xr::actions::HostInput)
+                    .before(crate::input::poll_controllers)
+                    .run_if(bevy_mod_openxr::openxr_session_running),
+            );
     }
+}
+
+/// The game's pad from the Touch controllers (Skate 3's gestures: `TouchMapper`), neutral while the shared layer has
+/// them.
+fn pad_from_touch(
+    touch: Res<crate::xr::actions::LatestTouch>,
+    held: Res<crate::xr::actions::PadHeld>,
+    time: Res<Time<Real>>,
+    mut mapper: Local<crate::xr::touch::TouchMapper>,
+    mut pad: ResMut<crate::input::ExternalPad>,
+) {
+    use crate::xr::touch::{START, XboxState};
+    let mut state = mapper.map(&touch.0, time.delta_secs());
+    // A menu tap is Start, which opens the flat pause menu; its camera is off
+    // in XR, so the game would freeze behind a menu nobody can see.
+    state.buttons &= !START;
+    if held.0 {
+        state = XboxState { buttons: 0, triggers: [0, 0], left: [0, 0], right: [0, 0] };
+    }
+    pad.set(state);
 }
 
 /// Off the board the stick is relative to what the player sees: their eyes,

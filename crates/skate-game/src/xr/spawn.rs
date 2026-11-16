@@ -9,10 +9,8 @@
 use super::actions::{Hand, LatestTouch};
 use super::rig::Rig;
 use super::link::{ArWorld, TeleportSkater};
-use crate::input::ExternalPad;
 use bevy::prelude::*;
 use bevy_mod_openxr::openxr_session_running;
-use super::touch::XboxState;
 
 const SQUEEZE: f32 = 0.7;
 /// Game-world units (metres at skater scale).
@@ -50,7 +48,7 @@ impl Plugin for SpawnPlugin {
                 PreUpdate,
                 aim_and_spawn
                     .after(super::actions::TouchRead)
-                    .before(crate::input::poll_controllers)
+                    .in_set(super::actions::HostInput)
                     .run_if(openxr_session_running),
             )
             .add_systems(Update, show_aim);
@@ -94,7 +92,7 @@ fn aim_and_spawn(
     hands: Query<(&Hand, &Transform)>,
     world: Res<ArWorld>,
     mut teleport: MessageWriter<TeleportSkater>,
-    mut pad: ResMut<ExternalPad>,
+    mut pad_held: ResMut<super::actions::PadHeld>,
     mut aim: ResMut<Aim>,
     mut place: ResMut<PlaceSkater>,
     panel: Res<super::panel::XrPanel>,
@@ -110,7 +108,7 @@ fn aim_and_spawn(
         let confirm = touch.a || touch.right_trigger >= SQUEEZE;
         let (confirmed, cancelled) = (confirm && !was.0, touch.b && !was.1);
         *was = (confirm, touch.b);
-        pad.set(XboxState { buttons: 0, triggers: [0, 0], left: [0, 0], right: [0, 0] });
+        pad_held.0 = true;
         let aimed = rig.root_transform().zip(hands.iter().find(|(hand, _)| matches!(hand, Hand::Right))).map(|(root, (_, controller))| {
             let origin = root.transform_point(controller.translation);
             let direction = (root.rotation * (controller.rotation * Vec3::NEG_Z)).normalize();
@@ -142,12 +140,7 @@ fn aim_and_spawn(
         }
         return;
     }
-    pad.set(XboxState {
-        buttons: 0,
-        triggers: [0, 0],
-        left: [0, 0],
-        right: [0, 0],
-    });
+    pad_held.0 = true;
     let Some(root) = rig.root_transform() else {
         return;
     };

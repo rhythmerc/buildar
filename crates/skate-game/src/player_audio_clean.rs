@@ -287,7 +287,10 @@ pub(crate) fn install_sk8(app: &mut App) {
         .init_resource::<SurfaceHints>()
         .init_resource::<Sk8Sounds>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (observe_sk8, lab, mix, follow_skater).chain());
+        .add_systems(
+            Update,
+            (observe_sk8, lab, mix, follow_skater).chain().in_set(crate::engines::EngineSet(crate::engines::Engine::Sk8)),
+        );
 }
 
 fn observe_sk8(

@@ -127,7 +127,7 @@ pub(crate) fn build(
     if let Some(options) = xr {
         app.add_plugins(crate::xr::XrPlugin { options, files: xr_files.clone() });
         // In the headset the faithful port is one engine of three: switched to and from while the app runs.
-        crate::engines::add_engine(&mut app, crate::engines::Engine::Skate3, |_| Ok(()), |app| {
+        crate::engines::add_engine_inferred(&mut app, crate::engines::Engine::Skate3, |_| Ok(()), |app| {
             add_retail(app);
             crate::xr::add_retail_link(app);
         });
