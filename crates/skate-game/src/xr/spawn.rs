@@ -108,7 +108,7 @@ fn aim_and_spawn(
         let confirm = touch.a || touch.right_trigger >= SQUEEZE;
         let (confirmed, cancelled) = (confirm && !was.0, touch.b && !was.1);
         *was = (confirm, touch.b);
-        pad_held.0 = true;
+        pad_held.held = true;
         let aimed = rig.root_transform().zip(hands.iter().find(|(hand, _)| matches!(hand, Hand::Right))).map(|(root, (_, controller))| {
             let origin = root.transform_point(controller.translation);
             let direction = (root.rotation * (controller.rotation * Vec3::NEG_Z)).normalize();
@@ -140,7 +140,7 @@ fn aim_and_spawn(
         }
         return;
     }
-    pad_held.0 = true;
+    pad_held.held = true;
     let Some(root) = rig.root_transform() else {
         return;
     };

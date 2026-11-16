@@ -57,23 +57,17 @@ pub(crate) fn from_touch(touch: &crate::xr::touch::TouchState) -> Input {
     }
 }
 
-/// Both left grip and trigger squeezed: the spawn aim owns the controls.
-#[cfg(feature = "xr")]
-fn spawn_aiming(touch: &crate::xr::touch::TouchState) -> bool {
-    touch.left_grip >= 0.7 && touch.left_trigger >= 0.7
-}
-
 #[cfg(feature = "xr")]
 pub(crate) fn read_touch(
-    touch: Res<crate::xr::actions::LatestTouch>,
-    build: Res<crate::xr::build::BuildMode>,
+    touch: Res<skate_engine_api::LatestTouch>,
+    held: Res<skate_engine_api::PadHeld>,
     ui: Res<UiCapture>,
     rig: Option<Res<crate::xr::rig::Rig>>,
     eyes: Query<&Transform, With<bevy_mod_xr::camera::XrCamera>>,
     mut sim: ResMut<CleanSkate>,
 ) {
     let t = &touch.0;
-    sim.input = if build.active || ui.0 || t.menu || spawn_aiming(t) {
+    sim.input = if held.held || ui.0 || t.menu {
         Input::default()
     } else {
         from_touch(t)

@@ -40,7 +40,7 @@ fn pad_from_touch(
     // A menu tap is Start, which opens the flat pause menu; its camera is off
     // in XR, so the game would freeze behind a menu nobody can see.
     state.buttons &= !START;
-    if held.0 {
+    if held.held {
         state = XboxState { buttons: 0, triggers: [0, 0], left: [0, 0], right: [0, 0] };
     }
     pad.set(state);

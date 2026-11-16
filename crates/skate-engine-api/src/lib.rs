@@ -203,10 +203,14 @@ pub struct LatestTouch(pub TouchState);
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HostInput;
 
-/// The controllers are the shared layer's this frame (a menu open, build mode, aiming a spawn, placing the skater
-/// or a park): engines give their skater a neutral pad.
+/// Whether the controllers are the shared layer's this frame.
 #[derive(Resource, Default, Clone, Copy, Debug)]
-pub struct PadHeld(pub bool);
+pub struct PadHeld {
+    /// A menu open, build mode, aiming a spawn, placing the skater or a park: the skater gets a neutral pad.
+    pub held: bool,
+    /// A menu open or build mode (the player is busy elsewhere): an engine may pause its game.
+    pub pause: bool,
+}
 
 // ---- HUDs ----
 

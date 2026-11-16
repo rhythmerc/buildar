@@ -226,5 +226,6 @@ fn read(
     latest.0 = touch;
     // A headset menu owns the controllers: the skater gets a neutral pad (aiming a spawn, build mode and placing a
     // park say so too, after this).
-    held.0 = ui.is_some_and(|ui| ui.0);
+    let ui = ui.is_some_and(|ui| ui.0);
+    *held = PadHeld { held: ui, pause: ui };
 }

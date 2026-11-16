@@ -732,7 +732,8 @@ fn build_controls(
         }
         return;
     }
-    held.0 = true;
+    held.held = true;
+    held.pause = true;
     let touch = &touch.0;
     let dt = time.delta_secs();
     state.pending = None;
@@ -1924,7 +1925,7 @@ fn place_park(world: &mut World, mut previous: Local<Option<(bool, bool)>>) {
     let touch = world.resource::<LatestTouch>().0;
     let dt = world.resource::<Time<Real>>().delta_secs();
     world.resource_mut::<BuildMode>().active = false;
-    world.resource_mut::<super::actions::PadHeld>().0 = true;
+    world.resource_mut::<super::actions::PadHeld>().held = true;
     let put = touch.a || touch.right_trigger > PRESS;
     // (the press that chose the park is not the one that puts it)
     let Some((was_put, was_b)) = previous.replace((put, touch.b)) else { return };

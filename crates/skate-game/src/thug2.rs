@@ -40,7 +40,6 @@ const VERT_UP: f32 = 0.707;
 /// Where the deck is above the skater's feet, metres.
 const DECK_HEIGHT: f32 = 0.08;
 const PRESSED: f32 = 0.5;
-const SQUEEZE: f32 = 0.7;
 
 /// The Touch controllers as THUG2's pad.
 const CONTROLS: [(&str, &str); 8] = [
@@ -287,17 +286,10 @@ fn finish_boot(world: &mut World) {
     }
 }
 
-fn read_pad(
-    touch: Res<crate::xr::actions::LatestTouch>,
-    build: Res<crate::xr::build::BuildMode>,
-    owns: Res<crate::xr::ui::UiOwnsControllers>,
-    place: Res<crate::xr::spawn::PlaceSkater>,
-    mut thug2: ResMut<Thug2>,
-) {
+fn read_pad(touch: Res<skate_engine_api::LatestTouch>, held: Res<skate_engine_api::PadHeld>, mut thug2: ResMut<Thug2>) {
     let t = &touch.0;
-    thug2.hold = build.active || owns.0;
-    let aiming = t.left_grip > SQUEEZE && t.left_trigger > SQUEEZE;
-    thug2.pad = if thug2.hold || place.0 || t.menu || aiming { t2::PAD_AT_REST } else { pad(t) };
+    thug2.hold = held.pause;
+    thug2.pad = if held.held || t.menu { t2::PAD_AT_REST } else { pad(t) };
 }
 
 /// The controllers as the game's pad: sticks 0-255 (0x80 at rest, up and left 0).
@@ -1136,6 +1128,7 @@ mod tests {
             .init_resource::<crate::xr::ui::ControlsSheet>()
             .init_resource::<crate::xr::ui::UiProviders>()
             .init_resource::<crate::xr::actions::LatestTouch>()
+            .init_resource::<skate_engine_api::PadHeld>()
             .init_resource::<crate::xr::build::BuildMode>()
             .init_resource::<crate::xr::ui::UiOwnsControllers>()
             .init_resource::<crate::xr::spawn::PlaceSkater>()
