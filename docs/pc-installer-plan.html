@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PC Installer Plan</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Montserrat:ital,wght@1,600;1,700;1,800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#081012; --panel:#0e1517; --card:#172226; --card2:#1d2b30; --line:#2b3b40;
+  --text:#e6efef; --dim:#9fb2b4; --faint:#6d8285;
+  --teal:#73e6d9; --teal-d:#2f8f86; --teal-bg:rgba(115,230,217,.10);
+  --amber:#f2c66d; --amber-bg:rgba(242,198,109,.12);
+  --red:#ff7a7a; --red-bg:rgba(255,122,122,.12);
+  --blue:#8fb8ff; --blue-bg:rgba(143,184,255,.12);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html{color-scheme:dark}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.6 Inter,system-ui,sans-serif;-webkit-text-size-adjust:100%}
+a{color:var(--teal)}
+h1,h2,h3,h4{font-family:Montserrat,Inter,sans-serif;font-style:italic;font-weight:700;line-height:1.2;margin:0}
+h1{font-size:clamp(28px,5vw,44px);font-weight:800;letter-spacing:-.01em}
+h2{font-size:clamp(22px,3.4vw,30px);margin:0 0 14px}
+h3{font-size:18px;margin:22px 0 8px;color:var(--teal)}
+h4{font-size:15px;margin:0 0 6px}
+p{margin:0 0 12px}
+code{font-family:var(--mono);font-size:.86em;background:var(--card);border:1px solid var(--line);border-radius:5px;padding:1px 5px;word-break:break-word}
+pre{font-family:var(--mono);font-size:12.5px;line-height:1.5;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow-x:auto;margin:0 0 14px}
+ul,ol{margin:0 0 14px;padding-left:22px}
+li{margin:3px 0}
+.wrap{max-width:1180px;margin:0 auto;padding:0 16px}
+header.top{padding:48px 0 28px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#0c1a1c,var(--bg))}
+.kicker{font:600 12px/1 Inter;letter-spacing:.14em;text-transform:uppercase;color:var(--teal);margin-bottom:12px}
+.lede{color:var(--dim);max-width:780px;font-size:16.5px;margin-top:14px}
+nav.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+nav.toc a{font-size:13px;text-decoration:none;color:var(--text);background:var(--card);border:1px solid var(--line);padding:6px 11px;border-radius:999px}
+nav.toc a:hover{border-color:var(--teal)}
+section{padding:40px 0;border-bottom:1px solid var(--line)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.box{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
+.box.hl{border-color:var(--teal-d);background:linear-gradient(180deg,rgba(115,230,217,.06),var(--panel))}
+.tag{display:inline-block;font:600 11px/1 Inter;letter-spacing:.04em;text-transform:uppercase;padding:5px 8px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
+.t-ok{color:var(--teal);background:var(--teal-bg)}
+.t-warn{color:var(--amber);background:var(--amber-bg)}
+.t-bad{color:var(--red);background:var(--red-bg)}
+.t-info{color:var(--blue);background:var(--blue-bg)}
+.t-dim{color:var(--dim);background:transparent}
+table{width:100%;border-collapse:collapse;font-size:14px;margin:0 0 14px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--dim);font-weight:600;font-size:12.5px;text-transform:uppercase;letter-spacing:.05em}
+.tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel);margin-bottom:14px}
+.tablewrap table{margin:0}
+.tablewrap tr:last-child td{border-bottom:0}
+.pick td:first-child{color:var(--teal);font-weight:600}
+.note{border-left:3px solid var(--teal);background:var(--teal-bg);padding:10px 14px;border-radius:0 10px 10px 0;margin:0 0 14px;color:var(--text)}
+.note.warn{border-color:var(--amber);background:var(--amber-bg)}
+.note.bad{border-color:var(--red);background:var(--red-bg)}
+.src{font-size:12.5px;color:var(--faint)}
+.src code{font-size:11.5px}
+
+/* flow diagram */
+.flow{display:flex;align-items:stretch;gap:0;flex-wrap:nowrap;overflow-x:auto;padding:4px 0 10px}
+.flow .step{flex:1 1 0;min-width:130px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;font-size:13px}
+.flow .step b{display:block;font-family:Montserrat;font-style:italic;font-size:14px;color:var(--teal);margin-bottom:4px}
+.flow .arr{flex:0 0 26px;display:flex;align-items:center;justify-content:center;color:var(--teal);font-size:18px}
+.lane{font:600 12px Inter;text-transform:uppercase;letter-spacing:.1em;color:var(--dim);margin:14px 0 6px}
+
+/* ---------- wireframes ---------- */
+.wf-title{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:34px 0 10px}
+.wf-title h3{margin:0}
+.wf-title span{color:var(--dim);font-size:13.5px}
+.win{max-width:1100px;min-height:600px;border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden;box-shadow:0 20px 50px rgba(0,0,0,.45);display:flex;flex-direction:column;font-size:13.5px}
+.tb{display:flex;align-items:center;gap:10px;padding:9px 14px;background:#0a1012;border-bottom:1px solid var(--line)}
+.dots{display:flex;gap:6px}.dots i{width:10px;height:10px;border-radius:50%;background:#2b3b40;display:block}
+.tb .ttl{font-family:Montserrat;font-style:italic;font-weight:700;color:var(--text);font-size:13px}
+.tb .sp{flex:1}
+.hs{display:flex;align-items:center;gap:8px;font-size:12px;background:var(--card);border:1px solid var(--line);border-radius:999px;padding:4px 10px;color:var(--dim)}
+.hs .led{width:8px;height:8px;border-radius:50%;background:var(--teal);box-shadow:0 0 8px var(--teal)}
+.hs .led.off{background:var(--red);box-shadow:0 0 8px var(--red)}
+.hs .led.mid{background:var(--amber);box-shadow:0 0 8px var(--amber)}
+.wb{flex:1;display:flex;min-height:0}
+.side{width:200px;flex:0 0 200px;border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column;gap:4px;background:#0b1214}
+.side .it{padding:8px 10px;border-radius:8px;color:var(--dim);font-size:13px}
+.side .it.on{background:var(--card);color:var(--text);border:1px solid var(--line)}
+.side .grow{flex:1}
+.side .ver{font-size:11.5px;color:var(--faint);padding:0 10px}
+.main{flex:1;padding:22px 24px;min-width:0;display:flex;flex-direction:column;gap:16px}
+.main h4{font-size:20px}
+.sub{color:var(--dim);margin-top:-8px}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;font:600 13px Inter;padding:8px 14px;border-radius:9px;border:1px solid var(--line);background:var(--card2);color:var(--text);white-space:nowrap}
+.btn.pri{background:var(--teal);color:#06302c;border-color:var(--teal)}
+.btn.ghost{background:transparent}
+.btn.dis{opacity:.4}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.row .sp{flex:1}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.ecards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.ecard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:10px;min-height:250px}
+.ecard.sel{border-color:var(--teal);box-shadow:0 0 0 1px var(--teal) inset}
+.ecard .nm{font-family:Montserrat;font-style:italic;font-weight:800;font-size:22px}
+.ecard .ds{color:var(--dim);font-size:12.5px}
+.ecard .ft{margin-top:auto;display:flex;gap:8px;flex-wrap:wrap}
+.ecard ul{margin:0;padding-left:16px;font-size:12.5px;color:var(--dim)}
+.art{height:64px;border-radius:9px;border:1px dashed var(--line);background:repeating-linear-gradient(135deg,#132024 0 8px,#152428 8px 16px);display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:11px}
+.approw{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+.approw .ic{width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,var(--teal),#2f8f86);flex:0 0 44px}
+.stepper{display:flex;gap:6px;flex-wrap:wrap}
+.stepper .s{flex:1;min-width:110px;padding:8px 10px;border-radius:8px;border:1px solid var(--line);font-size:12px;color:var(--faint)}
+.stepper .s b{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase}
+.stepper .s.done{color:var(--teal);border-color:var(--teal-d)}
+.stepper .s.cur{color:var(--text);border-color:var(--teal);background:var(--teal-bg)}
+.opts{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.opt{border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--card);display:flex;gap:10px}
+.opt .rd{width:16px;height:16px;border-radius:50%;border:2px solid var(--line);flex:0 0 16px;margin-top:2px}
+.opt.on{border-color:var(--teal)}
+.opt.on .rd{border-color:var(--teal);background:radial-gradient(var(--teal) 0 40%,transparent 45%)}
+.opt b{display:block;font-size:13.5px}
+.opt span{color:var(--dim);font-size:12px}
+.field{display:flex;gap:8px;align-items:center}
+.field .in{flex:1;min-width:0;font-family:var(--mono);font-size:12px;background:#0a1113;border:1px solid var(--line);border-radius:8px;padding:8px 10px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12.5px}
+.kv dt{color:var(--dim)}.kv dd{margin:0}
+.ok{color:var(--teal)}.wn{color:var(--amber)}.er{color:var(--red)}
+.bar{height:8px;border-radius:99px;background:#0a1113;border:1px solid var(--line);overflow:hidden}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--teal-d),var(--teal))}
+.tasks{display:flex;flex-direction:column;gap:8px}
+.task{display:grid;grid-template-columns:22px 1fr auto;gap:10px;align-items:center;font-size:13px}
+.task .ck{width:18px;height:18px;border-radius:50%;border:2px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:11px}
+.task.d .ck{border-color:var(--teal);background:var(--teal);color:#06302c}
+.task.c .ck{border-color:var(--teal);border-top-color:transparent}
+.task.d span:nth-child(2){color:var(--dim)}
+.task em{color:var(--faint);font-style:normal;font-size:12px}
+.discs{display:flex;flex-direction:column;gap:6px}
+.disc{display:grid;grid-template-columns:70px 1fr auto;gap:10px;align-items:center;background:#0a1113;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12.5px}
+.disc .p{font-family:var(--mono);color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.space{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.errs{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.err{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;display:flex;flex-direction:column;gap:10px}
+.err.r{border-color:rgba(255,122,122,.45)}
+.err.a{border-color:rgba(242,198,109,.45)}
+.err .hd{display:flex;gap:10px;align-items:center}
+.err .ico{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;flex:0 0 30px}
+.err.r .ico{background:var(--red-bg);color:var(--red)}
+.err.a .ico{background:var(--amber-bg);color:var(--amber)}
+.err p{color:var(--dim);font-size:12.5px;margin:0}
+.err ol{font-size:12.5px;color:var(--dim);margin:0;padding-left:18px}
+.center{flex:1;display:flex;align-items:center;justify-content:center}
+.connect{display:grid;grid-template-columns:1.1fr .9fr;gap:22px;align-items:start}
+.quest{height:200px;border-radius:16px;border:1px dashed var(--line);background:radial-gradient(circle at 50% 45%,rgba(115,230,217,.14),transparent 60%),#0b1416;display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:12px;position:relative}
+.quest:after{content:"";position:absolute;width:120px;height:62px;border-radius:30px;border:2px solid var(--teal-d)}
+.done-hero{display:flex;gap:16px;align-items:center}
+.done-hero .big{width:56px;height:56px;border-radius:50%;background:var(--teal);color:#06302c;display:flex;align-items:center;justify-content:center;font-size:28px;font-weight:800;flex:0 0 56px}
+.legend{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 0}
+
+.phase{display:grid;grid-template-columns:120px 1fr 120px;gap:14px;padding:14px 0;border-bottom:1px solid var(--line)}
+.phase:last-child{border-bottom:0}
+.phase .ph{font-family:Montserrat;font-style:italic;font-weight:800;color:var(--teal);font-size:20px}
+.phase .ef{color:var(--dim);font-size:13px;text-align:right}
+.phase ul{margin:6px 0 0}
+.q{counter-increment:q;padding:12px 0 12px 44px;position:relative;border-bottom:1px solid var(--line)}
+.q:before{content:counter(q);position:absolute;left:0;top:12px;width:30px;height:30px;border-radius:8px;background:var(--card);border:1px solid var(--line);color:var(--teal);font-weight:700;display:flex;align-items:center;justify-content:center;font-size:13px}
+.qs{counter-reset:q}
+.q b{display:block}
+.q span{color:var(--dim);font-size:14px}
+footer{padding:30px 0 50px;color:var(--faint);font-size:13px}
+
+@media (max-width:900px){
+  .grid3,.ecards{grid-template-columns:1fr 1fr}
+  .connect{grid-template-columns:1fr}
+}
+@media (max-width:720px){
+  body{font-size:14.5px}
+  .grid2,.grid3,.ecards,.opts,.errs,.space{grid-template-columns:1fr}
+  .side{display:none}
+  .main{padding:16px}
+  .win{min-height:0}
+  .flow{flex-direction:column;overflow:visible}
+  .flow .arr{transform:rotate(90deg);flex-basis:22px}
+  .phase{grid-template-columns:1fr}
+  .phase .ef{text-align:left}
+  .tb .ttl{display:none}
+  .ecard{min-height:0}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <div class="kicker">Rough plan · v0.1 · 2026-11-15</div>
+    <h1>PC Installer for Skate 3 AR</h1>
+    <p class="lede">One desktop app, Windows and Linux, that puts the Quest app on the headset, shows the three engines
+    (sk8, Skate 3, THUG2), and turns the user's own game copy into a ready bundle on the PC and pushes it over USB.
+    It replaces today's four manual steps (run skate3rust.exe, skate a minute, run MAKE-QUEST-ZIP.bat, copy the zip, import in the headset).</p>
+    <nav class="toc">
+      <a href="#tldr">Summary</a><a href="#arch">Architecture</a><a href="#pipelines">Import pipelines</a>
+      <a href="#wireframes">Wireframes</a><a href="#plan">Phased plan</a><a href="#risks">Risks</a><a href="#questions">Open questions</a><a href="#sources">Files read</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+
+<!-- ================= SUMMARY ================= -->
+<section id="tldr">
+  <h2>Summary</h2>
+  <div class="grid3">
+    <div class="box hl"><h4>Build it in Rust with egui/eframe</h4><p class="src" style="color:var(--dim)">One native binary per OS, no webview (sidesteps WebKitGTK + NVIDIA problems on Bazzite), and it can link <code>skate-data</code> directly for audio pre-decoding and bundle checks. Tauri is the runner-up if a richer UI matters more.</p></div>
+    <div class="box hl"><h4>Convert on the PC, push a finished bundle</h4><p class="src" style="color:var(--dim)">The headset never unzips anything. The installer writes the final folder tree straight into the app's files directory with adb, file by file, so it can resume and needs no 2x space on the Quest.</p></div>
+    <div class="box hl"><h4>All three engines in one app</h4><p class="src" style="color:var(--dim)">One installer, one APK with sk8, Skate 3 and THUG2 compiled in (no Meta store target, so no store-build split). Skate 3 and THUG2 show "Needs your game files" until the user imports their own copy. No game files ever ship.</p></div>
+  </div>
+  <p style="margin-top:16px">"Install the base app" is read as <b>sideload the Quest APK over USB</b> (that is what the README tells users to do by hand with <code>adb install -r skate3ar.apk</code>). A desktop build of the game is possible later but is not in v1; see <a href="#questions">open question 1</a>.</p>
+</section>
+
+<!-- ================= ARCHITECTURE ================= -->
+<section id="arch">
+  <h2>1. Recommended architecture</h2>
+
+  <h3>How the parts fit</h3>
+  <div class="lane">PC (installer)</div>
+  <div class="flow">
+    <div class="step"><b>Source</b>ISO, game folder, BIN/CUE discs, an existing skate3rust install, or an old Skate3-Quest.zip</div>
+    <div class="arr">→</div>
+    <div class="step"><b>Check</b>title ID / known file list / hashes, region, free space</div>
+    <div class="arr">→</div>
+    <div class="step"><b>Convert</b>Skate 3: existing setup pipeline + audio pre-decode. THUG2: rebuild Data/ from the MSI</div>
+    <div class="arr">→</div>
+    <div class="step"><b>Bundle</b>folder + <code>bundle.json</code> (version, per-file size + sha256), kept in the PC cache</div>
+    <div class="arr">→</div>
+    <div class="step"><b>Push</b>adb, file by file, skip files already there and matching</div>
+  </div>
+  <div class="lane">Quest</div>
+  <div class="flow">
+    <div class="step"><b>Files dir</b><code>/sdcard/Android/data/&lt;pkg&gt;/files/</code></div>
+    <div class="arr">→</div>
+    <div class="step"><b>Marker</b>today <code>use-retail-data</code>; later <code>engine</code> file naming sk8 / skate3 / thug2</div>
+    <div class="arr">→</div>
+    <div class="step"><b>App start</b><code>clean::wanted()</code> picks the tier: marker <i>and</i> data present, else sk8</div>
+  </div>
+
+  <h3>Toolkit</h3>
+  <div class="tablewrap"><table>
+    <tr><th>Option</th><th>Good</th><th>Bad</th></tr>
+    <tr class="pick"><td>egui / eframe (pick)</td><td>Pure Rust, same workspace as the game; can call <code>skate-data</code> (audio catalog, sha256, manifest) directly; one static binary; renders with OpenGL/wgpu so no WebKit; we already embed Montserrat Italic + Inter (<code>clean/mod.rs</code> <code>embed_font</code>) and can reuse them.</td><td>Looks "tool-like" unless we put effort into styling; no built-in bundler or updater (use <code>cargo-packager</code> or cargo-wix + appimagetool, and a small self-update).</td></tr>
+    <tr><td>Tauri 2</td><td>HTML UI (these wireframes translate 1:1), bundler makes NSIS/MSI/AppImage/deb/rpm, signed updater plugin.</td><td>Linux uses WebKitGTK, which has known blank-window / DMA-BUF problems on NVIDIA (the user's own box); two languages; bigger surface.</td></tr>
+    <tr><td>Slint</td><td>Native, declarative UI, Rust; GPL-3 option fits our licence.</td><td>Smaller ecosystem; nothing we already use.</td></tr>
+    <tr><td>Bevy app</td><td>Same engine as the game.</td><td>Heavy, needs a working GPU stack, no native file dialogs or text input worth having. Overkill for a form-style app.</td></tr>
+  </table></div>
+  <p>Proposed crate layout (in the fork, not upstream yet): <code>crates/sk8-installer</code> (eframe UI) on top of <code>crates/sk8-installer-core</code> (device, jobs, bundles; no UI, testable, also exposes a CLI: <code>sk8-installer push --engine skate3 ...</code>). The installer has no engine code of its own; the engines live in the APK. It only converts and pushes data.</p>
+
+  <h3>Talking to the Quest</h3>
+  <ul>
+    <li><b>adb.</b> Use an adb server that is already running (SideQuest / Meta Quest Developer Hub start one on port 5037; starting a second one breaks theirs). If none, start our own copy of Google platform-tools, downloaded on first run from Google's URL and hash-pinned, the same way the desktop setup already downloads extract-xiso (<code>docs/installation.md</code>). Alternative to evaluate: the <code>adb_client</code> crate (pure Rust, talks USB directly), which would avoid shipping Google's binary.</li>
+    <li><b>Headset state machine:</b> not seen → seen but <code>unauthorized</code> (put on headset, tick "Always allow", Allow) → <code>device</code> → app installed? (<code>pm list packages</code>, <code>dumpsys package</code> for versionName) → free space (<code>df /sdcard</code>).</li>
+    <li><b>Linux USB permission:</b> a udev rule for Meta's vendor ID, e.g. <code>SUBSYSTEM=="usb", ATTR{idVendor}=="2833", MODE="0660", TAG+="uaccess"</code> in <code>/etc/udev/rules.d/51-quest.rules</code>. The installer detects "USB device present but adb can't open it" and offers a one-click <code>pkexec</code> install of the rule (or a copy-paste command). <code>/etc</code> is writable on Bazzite; check first whether Bazzite already ships Android rules.</li>
+    <li><b>Windows driver:</b> Quest often needs Meta's "Oculus ADB Driver". Detect "Quest seen as MTP only" and link to / run the driver installer.</li>
+    <li><b>Wireless adb (later):</b> after a first USB connection, <code>adb tcpip 5555</code> + <code>adb connect &lt;ip&gt;</code>. Handy for re-pushing updates; too slow and flaky for a first 5 GB push, so USB stays the default.</li>
+    <li>Always <code>am force-stop</code> the app before pushing and writing markers.</li>
+  </ul>
+
+  <h3>Which APK, and where data lands</h3>
+  <p>There are two Quest builds: <code>com.andrewnakas.skate3ar</code> (<code>crates/skate-quest</code>, clean tier + <code>retail</code>) and <code>com.andrewnakas.sk8ar</code> (<code>crates/sk8-quest</code>, store build, no importer). Only <b>skate3ar</b> can run Skate 3 data, so the installer installs that one. If it finds only sk8ar, it explains that sk8 works but Skate 3 needs the other app (both can be installed side by side; different package names).</p>
+  <div class="tablewrap"><table>
+    <tr><th>Phase</th><th>Layout under <code>/sdcard/Android/data/com.andrewnakas.skate3ar/files/</code></th><th>App change</th></tr>
+    <tr><td>v1 (Skate 3)</td><td><code>assets/</code> (with <code>private/game.json</code>), <code>Skate3RustEngine/audio-pcm-cache/</code>, <code>use-retail-data</code>, plus a new <code>assets/bundle.json</code></td><td>None. This is exactly what <code>push-assets.sh</code> and the in-app importer already produce.</td></tr>
+    <tr><td>v2 (multi-engine)</td><td><code>engines/skate3/…</code>, <code>engines/thug2/Data/…</code>, each with <code>bundle.json</code>; <code>engine</code> text file = <code>sk8|skate3|thug2</code></td><td><code>clean::wanted()</code> generalised to an engine pick; still requires "marker <i>and</i> data present" so a bad marker can't strand the player. Keep reading <code>use-retail-data</code> for old installs.</td></tr>
+  </table></div>
+  <p>Note: <code>push-assets.sh</code> has to <code>mkdir</code> every folder from <code>adb shell</code> first because adb push can't create folders inside another app's files dir. The installer does the same (one generated script, as the script does).</p>
+
+  <h3>Bundle format and versioning</h3>
+<pre>{
+  "engine": "skate3",                 // skate3 | thug2
+  "format": 1,                        // layout version the APK understands
+  "converter": "skate3-setup 2026.11.2 + prewarm 1",
+  "source": { "kind": "xbox360-iso", "title_id": "…", "region": "NTSC-U",
+              "fingerprint": "sha256 of the source file list" },
+  "created": "2026-11-15T12:00:00Z",
+  "files": [ { "path": "private/game.json", "size": 18234, "sha256": "…" }, … ],
+  "total_bytes": 4710000000
+}</pre>
+  <ul>
+    <li>The installer keeps the finished bundle in a PC cache (<code>%LOCALAPPDATA%\SK8Installer\bundles</code>, <code>~/.local/share/sk8-installer/bundles</code>) so re-pushing after a reinstall or a factory reset takes minutes, not a reconversion. User can delete it from Settings.</li>
+    <li>The APK states which bundle <code>format</code> values it reads (an asset file or the installer's release index maps APK version → format). Mismatch = "Update available" on the engine card.</li>
+    <li>A new converter version (same signal the desktop updater already uses: "changed extractor fingerprints" in <code>docs/updates.md</code>) also shows "Update available"; the installer remembers the source path and rebuilds only when the user agrees.</li>
+    <li>"Save bundle as zip" stays as an export for people without adb; the in-app Import (<code>xr/ui/import.rs</code>) still reads it.</li>
+  </ul>
+
+  <h3>How the installer and the app detect engines</h3>
+  <ul>
+    <li><b>sk8</b>: always ready once the APK is installed (compiled in; <code>--check-assets</code> just prints <code>SKATE_ASSETS_READY</code>).</li>
+    <li><b>Skate 3</b>: installer reads <code>files/assets/bundle.json</code> over adb (falls back to "is <code>private/game.json</code> there" for bundles from the old zip path). Same test as <code>Import::installed()</code>.</li>
+    <li><b>THUG2</b>: compiled into the APK; ready when <code>engines/thug2/bundle.json</code> is there and its file list checks out.</li>
+    <li>The in-app "Skate 3 data" menu grows into an "Engine" menu listing what is installed, so switching does not need the PC.</li>
+  </ul>
+
+  <h3>One build with every engine</h3>
+  <p>Scope: the user is not targeting the Meta store, so the THUG2 and Skate 3 engine code ship in the normal installer and APK. The only gate is data: an engine turns on when the user's own game files are imported. Concretely:</p>
+  <ul>
+    <li>The APK the installer pushes is <code>skate-quest</code> built with <code>retail</code> plus a new <code>thug2</code> feature (the THUG2 core from the decomp, cross-compiled for <code>aarch64-linux-android</code> and linked in). Keeping <code>thug2</code> a cargo feature costs nothing and keeps the build tidy, but releases always turn it on.</li>
+    <li>No engine downloads, no feeds, no plugin ABI. The engine code is small next to the data (a few to a few tens of MB vs 1.4–5 GB of imported data), so splitting it out for size doesn't pay off. The only case for it would be a store build again, which is out of scope.</li>
+    <li>The store build (<code>crates/sk8-quest</code>, <code>com.andrewnakas.sk8ar</code>) stays as it is in the repo but the installer doesn't use it.</li>
+  </ul>
+
+  <h3>Updates</h3>
+  <ul>
+    <li><b>Installer:</b> checks a JSON release index (GitHub Releases), sha256 + minisign signature, Stable/Latest channels like the desktop updater (<code>docs/updates.md</code>). On Linux AppImage, replace the file in place; on Windows, run the new NSIS installer.</li>
+    <li><b>APK:</b> compare headset versionName with the index; <code>adb install -r</code>. Handle <code>INSTALL_FAILED_UPDATE_INCOMPATIBLE</code> (different signing key): uninstalling deletes the files dir, so warn and offer to re-push the cached bundle afterwards.</li>
+    <li><b>Bundles:</b> per-file diff via <code>bundle.json</code>; only changed files are pushed.</li>
+  </ul>
+
+  <h3>Packaging</h3>
+  <div class="tablewrap"><table>
+    <tr><th>OS</th><th>Primary</th><th>Also</th><th>Notes</th></tr>
+    <tr><td>Windows 10/11 x64</td><td>NSIS per-user installer (no admin)</td><td>Portable zip; MSI only if someone asks for managed deploys</td><td>Unsigned = SmartScreen warning. Code-signing cert is an open question.</td></tr>
+    <tr><td>Linux x64</td><td>AppImage</td><td>tar.gz; Flatpak later</td><td>AppImage runs on Bazzite without layering packages. Flatpak needs <code>--device=all</code> for USB adb, which Flathub reviewers push back on, and still can't install the udev rule. Building inside a distrobox (older glibc base, e.g. Ubuntu 22.04) keeps the AppImage portable.</td></tr>
+  </table></div>
+</section>
+
+<!-- ================= PIPELINES ================= -->
+<section id="pipelines">
+  <h2>2. Engine import pipelines</h2>
+
+  <h3>Skate 3 (Xbox 360)</h3>
+  <p><b>What exists:</b> the desktop setup (<code>tools/setup.py</code> → <code>tools/prepare_assets.py</code> + <code>tools/asset_pipeline/*</code>, shipped frozen with Python/NumPy/Pillow as the setup helper) extracts the ISO with a hash-pinned extract-xiso, reads <code>miscload.big</code>, <code>miscboot.big</code>, <code>db.big</code>, the CAC archive and each <code>worldDIST_*.big</code>, and writes <code>assets/</code> with <code>private/game.json</code>. Sound banks are XMA2 and decoded by the <code>ffmpeg</code> binary (<code>skate-data/src/audio/ffmpeg.rs</code>) into <code>%LOCALAPPDATA%\Skate3RustEngine\audio-pcm-cache\*.v3.pcm</code>, but only <b>lazily while playing</b> (<code>audio/catalog.rs</code>) — that is why users are told to "skate for a minute". <code>make-bundle.ps1</code> then copies both into <code>quest-data/</code> and zips it.</p>
+
+  <div class="tablewrap"><table>
+    <tr><th>Step</th><th>How</th><th>Reuse</th></tr>
+    <tr><td>1. Pick source</td><td>ISO; extracted folder (<code>default.xex</code>); existing skate3rust install (search like <code>Find-Installation</code> in make-bundle.ps1: <code>assets/private/game.json</code>, newest wins); or an old <code>Skate3-Quest.zip</code>.</td><td>make-bundle.ps1 logic, ported to Rust</td></tr>
+    <tr><td>2. Check</td><td>ISO: XDVDFS header + read <code>default.xex</code> title ID and region; compare to an allow-list of known Skate 3 releases (collect hashes as users succeed; unknown hash with right title ID = warn, not block). Folder: required files present (<code>default.xex</code>, <code>data/…/miscload.big</code>, <code>db.big</code>, <code>worldDIST_*.big</code>).</td><td>new, small</td></tr>
+    <tr><td>3. Convert</td><td>Run the setup helper headless: <code>--task tools/prepare_assets.py --game-root … --output … --game-exe …</code> (documented in <code>docs/installation.md</code>). Stream its log lines into the progress view.</td><td>setup helper as-is on Windows; Linux build of the same helper (PyInstaller on Linux + Linux extract-xiso). Needs a portability pass: <code>install.py</code> has <code>os.name=='nt'</code> branches.</td></tr>
+    <tr><td>4. Pre-decode audio</td><td>New tiny Rust step: load <code>PlayerAudioCatalog::from_assets</code> + <code>load_splice_banks</code> with an explicit cache dir (today <code>cache_directory()</code> is hardwired to LOCALAPPDATA) so every bank is decoded up front. Removes "skate for a minute".</td><td><code>skate-data</code> audio catalog; same idea as <code>examples/render_player_audio.rs</code>. Needs ffmpeg with XMA2 (download hash-pinned, like extract-xiso).</td></tr>
+    <tr><td>5. Bundle + push</td><td>Write <code>bundle.json</code>, push <code>assets/</code> and <code>audio-pcm-cache/</code>, touch <code>use-retail-data</code>.</td><td><code>push-assets.sh</code> logic</td></tr>
+  </table></div>
+  <p><b>Space (estimates to measure):</b> PC ~7–8 GB ISO + ~8 GB extracted workspace (deleted after) + ~5 GB bundle cache; Quest ~5 GB (the doc's number). Pushing the folder directly avoids today's zip-plus-unzip, which needs ~2x on the headset.</p>
+  <p><b>Resume:</b> each step writes into a temp dir and renames on success, with a <code>job.json</code> checkpoint; the setup pipeline already keeps failed workspaces and logs. Push compares remote size (and sha256 for small files) per file, so a pulled cable resumes where it stopped.</p>
+  <div class="note warn">Fast path for v1: users who already ran skate3rust on Windows skip steps 1–3; the installer finds their data, pre-decodes audio, and pushes. That alone removes MAKE-QUEST-ZIP and the manual copy, and works on Linux if they copy the converted folder over.</div>
+
+  <h3>THUG2 (PC)</h3>
+  <p><b>What we need:</b> the PC game's <code>Game/Data</code> tree (~1.4 GB: <code>pre/*.prx</code> incl. <code>qb_scripts.prx</code> and per-level <code>*_scripts.prx</code>/<code>col</code>/<code>scn</code>, <code>anims</code>, <code>skeletons</code>, <code>models</code>, <code>levels</code>, <code>sounds</code>, <code>streams</code>, <code>textures</code>…), as found in <code>~/Games/THUG2-extract/Game/Data</code>. The headless core runs from that folder (<code>thug2-headless/app/headless_main.cpp</code>).</p>
+  <div class="tablewrap"><table>
+    <tr><th>Source</th><th>Steps</th><th>Implementation</th></tr>
+    <tr><td>Installed copy</td><td>User picks the game folder (or the exe); accept <code>Data/</code>, <code>Game/Data/</code>, or a parent containing one. Copy (or use in place) as the bundle source.</td><td>trivial</td></tr>
+    <tr><td>BIN/CUE (MODE1/2352)</td><td>Parse CUE → for each 2352-byte sector skip 16 header bytes, keep 2048 → ISO9660 image (streamed, no temp ISO needed).</td><td>~100 lines of Rust; reader works on a virtual 2048-byte-sector view</td></tr>
+    <tr><td>ISO / mounted disc</td><td>Read the ISO9660 tree, find the <code>.msi</code> on CD1 and the <code>.cab</code>s on every disc (Sounds, Models, Pre, levels, Images…).</td><td>ISO9660 crate (<code>cdfs</code>/<code>iso9660</code>) or own reader</td></tr>
+    <tr><td>MSI → folder</td><td>Read the MSI's <code>Media</code>, <code>File</code>, <code>Component</code>, <code>Directory</code> tables; extract each cab; place files at their real paths (what <code>msiextract</code> did for us).</td><td><code>msi</code> + <code>cab</code> crates (pure Rust). Verify LZX support on these cabs. Fallbacks: Windows <code>msiexec /a … TARGETDIR=…</code> (administrative extract); Linux bundled 7z + msitools.</td></tr>
+  </table></div>
+  <ul>
+    <li><b>Multi-disc:</b> the disc list shows which cabs each disc holds and which are still missing; extraction starts only when all cabs named in <code>Media</code> are found.</li>
+    <li><b>Check:</b> known file list + sizes/sha256 for the key files (<code>qb_scripts.prx</code>, <code>anims.prx</code>, skeletons). Detect patch level (1.0 vs 1.01, by exe/prx hashes) and modded installs (THUG Pro style changes to <code>qb_scripts.prx</code> = warn). Reject console data.</li>
+    <li><b>Space:</b> disc images ~2 GB; temp extract ~1.5 GB; bundle ~1.4 GB on PC and Quest (likely much less once trimmed).</li>
+    <li><b>Trim:</b> log every file the headless core opens during a session (<code>thug2-headless</code> runs) to build the list the Quest engine really needs; ship that list with the installer so the bundle only carries those files.</li>
+    <li><b>Lands at:</b> <code>files/engines/thug2/Data/…</code> + <code>bundle.json</code>.</li>
+    <li>The data importer can be built and tested before the engine runs on the Quest; until then the card says "Data ready · engine coming in a later app version".</li>
+  </ul>
+</section>
+
+<!-- ================= WIREFRAMES ================= -->
+<section id="wireframes">
+  <h2>3. UI wireframes</h2>
+  <p>Drawn for a ~1100×720 desktop window. Left rail: Home, Engines, Headset, Settings. The headset chip (top right) is on every screen.</p>
+  <div class="legend"><span class="tag t-ok">Ready</span><span class="tag t-warn">Needs files</span><span class="tag t-dim">Not installed</span><span class="tag t-info">Update available</span><span class="tag t-bad">Error</span></div>
+
+  <!-- WF1 connect -->
+  <div class="wf-title"><h3>A · First run: connect the headset</h3><span>shown until adb sees a device in "device" state</span></div>
+  <div class="win">
+    <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">SK8 AR Installer</div><div class="sp"></div><div class="hs"><span class="led mid"></span>Looking for a Quest…</div></div>
+    <div class="wb">
+      <div class="side"><div class="it on">Connect</div><div class="it">Home</div><div class="it">Engines</div><div class="it">Settings</div><div class="grow"></div><div class="ver">Installer 0.1.0 · Linux</div></div>
+      <div class="main">
+        <h4>Connect your Quest 3</h4>
+        <div class="sub">Four things, once. After this the installer finds the headset by itself.</div>
+        <div class="connect">
+          <div class="tasks">
+            <div class="task d"><span class="ck">✓</span><span>Developer mode on (Meta Horizon app on your phone → Headset settings → Developer mode)</span><em>done</em></div>
+            <div class="task d"><span class="ck">✓</span><span>USB-C cable plugged into this PC</span><em>Quest seen</em></div>
+            <div class="task c"><span class="ck"></span><span><b>Put on the headset</b> and press <b>Allow</b> on "Allow USB debugging?" (tick "Always allow")</span><em>waiting…</em></div>
+            <div class="task"><span class="ck"></span><span>Linux only: USB permission rule installed</span><em><span class="btn ghost" style="padding:4px 9px">Install rule…</span></em></div>
+            <div class="card" style="margin-top:6px"><div class="row"><span class="tag t-dim">No cable?</span><span style="color:var(--dim);font-size:12.5px">Wireless works after the first USB connection.</span><span class="sp"></span><span class="btn ghost">Help</span></div></div>
+          </div>
+          <div><div class="quest">headset illustration</div>
+            <div class="row" style="margin-top:12px"><span class="btn ghost">Skip, just make bundles</span><span class="sp"></span><span class="btn pri dis">Continue</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WF2 home -->
+  <div class="wf-title"><h3>B · Home: app + three engines</h3><span>status per card; sk8 needs nothing</span></div>
+  <div class="win">
+    <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">SK8 AR Installer</div><div class="sp"></div><div class="hs"><span class="led"></span>Quest 3 · USB · 61 GB free</div></div>
+    <div class="wb">
+      <div class="side"><div class="it on">Home</div><div class="it">Engines</div><div class="it">Headset</div><div class="it">Settings</div><div class="grow"></div><div class="ver">Installer 0.1.0 · Windows</div></div>
+      <div class="main">
+        <div class="card approw"><div class="ic"></div><div><h4 style="font-size:16px">Skate 3 AR for Quest</h4><div style="color:var(--dim);font-size:12.5px">com.andrewnakas.skate3ar · installed 0.4.1 · latest 0.4.2</div></div><span class="tag t-info">Update available</span><div class="sp" style="flex:1"></div><span class="btn ghost">What's new</span><span class="btn pri">Update app</span></div>
+        <div class="row"><h4>Engines</h4><span class="sp"></span><span style="color:var(--dim);font-size:12.5px">Next launch on the headset: <b style="color:var(--teal)">Skate 3</b></span></div>
+        <div class="ecards">
+          <div class="ecard"><div class="art">sk8 art</div><div class="row"><span class="nm">sk8</span><span class="sp"></span><span class="tag t-ok">Ready</span></div>
+            <div class="ds">Our own clean-room engine. Built into the app.</div>
+            <ul><li><b style="color:var(--teal)">Nothing to import</b></li><li>Own physics, model, animations, CC0 sounds</li></ul>
+            <div class="ft"><span class="btn">Play this next</span></div></div>
+          <div class="ecard sel"><div class="art">Skate 3 art</div><div class="row"><span class="nm">Skate 3</span><span class="sp"></span><span class="tag t-ok">Ready</span></div>
+            <div class="ds">Faithful port of Skate 3's skater, from your Xbox 360 disc.</div>
+            <ul><li>Bundle 2026.11 · NTSC-U · 4.7 GB on headset</li><li>Sound banks: all decoded</li></ul>
+            <div class="ft"><span class="btn pri">Selected</span><span class="btn ghost">Rebuild</span><span class="btn ghost">Remove</span></div></div>
+          <div class="ecard"><div class="art">THUG2 art</div><div class="row"><span class="nm">THUG2</span><span class="sp"></span><span class="tag t-warn">Needs files</span></div>
+            <div class="ds">THUG2's skater, built into the app. Turns on with your own THUG2 PC game.</div>
+            <ul><li>Installed game folder, or your CD images (.cue/.bin/.iso)</li><li>About 1.4 GB on the headset</li></ul>
+            <div class="ft"><span class="btn pri">Import THUG2…</span></div></div>
+        </div>
+        <div class="row" style="color:var(--dim);font-size:12.5px"><span>Other card states:</span><span class="tag t-warn">Needs files</span><span>Skate 3 before import: "Import your Xbox 360 ISO" + <b>Import</b></span><span class="tag t-info">Update available</span><span>"New converter: rebuild from saved source (D:\Games\Skate3.iso)"</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WF3 skate3 import -->
+  <div class="wf-title"><h3>C · Import Skate 3</h3><span>source → check → convert → install</span></div>
+  <div class="win">
+    <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">SK8 AR Installer — Skate 3</div><div class="sp"></div><div class="hs"><span class="led"></span>Quest 3 · USB · 61 GB free</div></div>
+    <div class="wb">
+      <div class="side"><div class="it">Home</div><div class="it on">Engines › Skate 3</div><div class="it">Headset</div><div class="it">Settings</div><div class="grow"></div><div class="ver">Installer 0.1.0</div></div>
+      <div class="main">
+        <div class="stepper"><div class="s cur"><b>1 Source</b>Pick your copy</div><div class="s"><b>2 Check</b>Version, space</div><div class="s"><b>3 Convert</b>~20–40 min</div><div class="s"><b>4 Install</b>Push to Quest</div></div>
+        <h4>Where is your Skate 3?</h4>
+        <div class="opts">
+          <div class="opt on"><span class="rd"></span><div><b>Xbox 360 disc image (.iso)</b><span>Made from your own disc.</span></div></div>
+          <div class="opt"><span class="rd"></span><div><b>Extracted game folder</b><span>Pick default.xex in it.</span></div></div>
+          <div class="opt"><span class="rd"></span><div><b>Already converted with Skate 3 Rust Engine</b><span>Found 1 install: C:\s3\installations\a91f… (fastest)</span></div></div>
+          <div class="opt"><span class="rd"></span><div><b>Skate3-Quest.zip</b><span>From the old MAKE-QUEST-ZIP.bat.</span></div></div>
+        </div>
+        <div class="field"><div class="in">D:\Games\Skate 3 (USA).iso</div><span class="btn">Browse…</span></div>
+        <div class="space">
+          <div class="card"><dl class="kv"><dt>Game</dt><dd class="ok">Skate 3 ✓ (title ID match)</dd><dt>Region</dt><dd>NTSC-U</dd><dt>Image</dt><dd>7.3 GB · known good hash ✓</dd></dl></div>
+          <div class="card"><dl class="kv"><dt>This PC</dt><dd class="ok">needs ~21 GB · 140 GB free</dd><dt>Quest</dt><dd class="ok">needs ~5 GB · 61 GB free</dd><dt>Tools</dt><dd>extract-xiso, ffmpeg (12 MB download, verified)</dd></dl></div>
+        </div>
+        <div class="row"><span style="color:var(--faint);font-size:12px">Nothing is uploaded anywhere. Converted files stay on this PC and your headset.</span><span class="sp"></span><span class="btn ghost">Cancel</span><span class="btn pri">Convert &amp; install</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WF4 thug2 import -->
+  <div class="wf-title"><h3>D · Import THUG2: source picker</h3><span>installed folder or disc images</span></div>
+  <div class="win">
+    <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">SK8 AR Installer — THUG2</div><div class="sp"></div><div class="hs"><span class="led"></span>Quest 3 · USB · 61 GB free</div></div>
+    <div class="wb">
+      <div class="side"><div class="it">Home</div><div class="it on">Engines › THUG2</div><div class="it">Headset</div><div class="it">Settings</div><div class="grow"></div><div class="ver">Installer 0.1.0</div></div>
+      <div class="main">
+        <div class="stepper"><div class="s cur"><b>1 Source</b>Folder or discs</div><div class="s"><b>2 Check</b>Files, version</div><div class="s"><b>3 Extract</b>~5 min</div><div class="s"><b>4 Install</b>Push to Quest</div></div>
+        <h4>Where is your THUG2 (PC)?</h4>
+        <div class="opts">
+          <div class="opt"><span class="rd"></span><div><b>Installed game folder</b><span>The folder with Data\ (or Game\Data).</span></div></div>
+          <div class="opt on"><span class="rd"></span><div><b>Disc images</b><span>.cue/.bin or .iso, one per CD.</span></div></div>
+        </div>
+        <div class="discs">
+          <div class="disc"><b>CD 1</b><span class="p">~/Games/THUG2/THUG2_CD1.cue (MODE1/2352)</span><span class="ok">✓ setup MSI + Pre.cab, Models.cab</span></div>
+          <div class="disc"><b>CD 2</b><span class="p">~/Games/THUG2/THUG2_CD2.cue</span><span class="ok">✓ Sounds.cab, levels.cab</span></div>
+          <div class="disc"><b>CD 3</b><span class="p">— add disc —</span><span class="wn">missing Images.cab</span></div>
+        </div>
+        <div class="row"><span class="btn">Add disc images…</span><span style="color:var(--dim);font-size:12.5px">Tip: pick any one .cue; the others in the folder are found automatically.</span></div>
+        <div class="card"><dl class="kv"><dt>Version</dt><dd>THUG2 PC 1.01 (from MSI ProductVersion)</dd><dt>Space</dt><dd class="ok">PC ~3 GB temp · Quest ~1.4 GB</dd></dl></div>
+        <div class="row"><span class="sp"></span><span class="btn ghost">Cancel</span><span class="btn pri dis">Extract &amp; install</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WF5 thug2 progress + done -->
+  <div class="wf-title"><h3>E · THUG2: extracting, then done</h3><span>two states of the same screen</span></div>
+  <div class="grid2" style="max-width:1100px">
+    <div class="win" style="min-height:420px">
+      <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="sp"></div><div class="hs"><span class="led"></span>Quest 3</div></div>
+      <div class="main">
+        <div class="stepper"><div class="s done"><b>Source</b></div><div class="s done"><b>Check</b></div><div class="s cur"><b>Extract</b></div><div class="s"><b>Install</b></div></div>
+        <h4>Rebuilding the game folder</h4>
+        <div class="tasks">
+          <div class="task d"><span class="ck">✓</span><span>Read CD 1–3 (BIN → 2048-byte sectors)</span><em>3/3</em></div>
+          <div class="task d"><span class="ck">✓</span><span>Read installer tables (THUG2.msi)</span><em>4,812 files</em></div>
+          <div class="task c"><span class="ck"></span><span>Unpack levels.cab</span><em>CD 2 · 61%</em></div>
+          <div class="task"><span class="ck"></span><span>Check files against the known list</span><em></em></div>
+        </div>
+        <div class="bar"><i style="width:58%"></i></div>
+        <div class="row" style="font-size:12px;color:var(--dim)"><span>812 MB of 1.4 GB · about 2 min left</span><span class="sp"></span><span class="btn ghost">Pause</span></div>
+      </div>
+    </div>
+    <div class="win" style="min-height:420px">
+      <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="sp"></div><div class="hs"><span class="led"></span>Quest 3</div></div>
+      <div class="main">
+        <div class="stepper"><div class="s done"><b>Source</b></div><div class="s done"><b>Check</b></div><div class="s done"><b>Extract</b></div><div class="s done"><b>Install</b></div></div>
+        <div class="done-hero"><div class="big">✓</div><div><h4>THUG2 is on your Quest</h4><div style="color:var(--dim)">1.4 GB · 4,812 files checked</div></div></div>
+        <div class="card"><dl class="kv"><dt>Next launch</dt><dd>THUG2 <span class="btn ghost" style="padding:2px 8px;margin-left:6px">Change</span></dd><dt>On this PC</dt><dd>Bundle kept for re-installs (1.4 GB) · <a href="#">Delete</a></dd><dt>Disc images</dt><dd>Not needed any more</dd></dl></div>
+        <div class="row"><span class="sp"></span><span class="btn">Back to Home</span><span class="btn pri">Launch on headset</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WF6 push -->
+  <div class="wf-title"><h3>F · Installing to the headset</h3><span>shared by every engine and by APK installs</span></div>
+  <div class="win">
+    <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">SK8 AR Installer</div><div class="sp"></div><div class="hs"><span class="led"></span>Quest 3 · USB 3 · 61 GB free</div></div>
+    <div class="wb">
+      <div class="side"><div class="it">Home</div><div class="it on">Engines › Skate 3</div><div class="it">Headset</div><div class="it">Settings</div><div class="grow"></div><div class="ver">Installer 0.1.0</div></div>
+      <div class="main">
+        <div class="stepper"><div class="s done"><b>1 Source</b></div><div class="s done"><b>2 Check</b></div><div class="s done"><b>3 Convert</b></div><div class="s cur"><b>4 Install</b>Pushing</div></div>
+        <h4>Copying Skate 3 to your Quest</h4>
+        <div class="sub">Keep the cable in. If it comes out, plug it back in: it carries on from where it stopped.</div>
+        <div class="tasks">
+          <div class="task d"><span class="ck">✓</span><span>Close Skate 3 AR on the headset</span><em>am force-stop</em></div>
+          <div class="task d"><span class="ck">✓</span><span>Make folders (1,204)</span><em></em></div>
+          <div class="task c"><span class="ck"></span><span>Copy game data</span><em>3.1 / 4.4 GB · 38 MB/s</em></div>
+          <div class="task"><span class="ck"></span><span>Copy sound banks</span><em>310 MB</em></div>
+          <div class="task"><span class="ck"></span><span>Verify on headset (sizes + sha256 of key files)</span><em></em></div>
+          <div class="task"><span class="ck"></span><span>Set Skate 3 as next engine</span><em></em></div>
+        </div>
+        <div class="bar"><i style="width:66%"></i></div>
+        <div class="row" style="font-size:12px;color:var(--dim)"><span>assets/private/stock/data/audio/audiofiles.big</span><span class="sp"></span><span>about 1 min left</span><span class="btn ghost">Pause</span><span class="btn ghost">Show log</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WF7 errors -->
+  <div class="wf-title"><h3>G · Error states</h3><span>inline panels; each has one clear action</span></div>
+  <div class="win" style="min-height:0">
+    <div class="tb"><div class="dots"><i></i><i></i><i></i></div><div class="ttl">SK8 AR Installer</div><div class="sp"></div><div class="hs"><span class="led off"></span>No headset</div></div>
+    <div class="main">
+      <div class="errs">
+        <div class="err r"><div class="hd"><div class="ico">!</div><h4>No headset found</h4></div>
+          <ol><li>Is the cable a data cable? (Charge-only cables are common.)</li><li>Is Developer mode on?</li><li>Windows: Quest shows only as a file drive → install the Oculus ADB driver.</li><li>Linux: USB device seen but no access → install the USB rule.</li></ol>
+          <div class="row"><span class="btn">Install driver / rule</span><span class="sp"></span><span class="btn pri">Try again</span></div></div>
+        <div class="err a"><div class="hd"><div class="ico">?</div><h4>Headset hasn't allowed this PC</h4></div>
+          <p>adb sees the Quest as <code>unauthorized</code>. Put on the headset and press <b>Allow</b> on "Allow USB debugging?". Tick "Always allow from this computer". No prompt? Unplug and plug the cable back in.</p>
+          <div class="row"><span class="sp"></span><span class="btn pri">I pressed Allow</span></div></div>
+        <div class="err r"><div class="hd"><div class="ico">GB</div><h4>Not enough space on the Quest</h4></div>
+          <p>Skate 3 needs 4.9 GB, the Quest has 2.1 GB free. Remove apps or videos on the headset, or remove the THUG2 data (1.4 GB) from this installer.</p>
+          <div class="row"><span class="btn ghost">Remove THUG2 data</span><span class="sp"></span><span class="btn pri">Check again</span></div></div>
+        <div class="err a"><div class="hd"><div class="ico">ID</div><h4>This isn't a supported Skate 3 disc</h4></div>
+          <p>Title ID <code>4D5307E6</code> is not Skate 3 for Xbox 360 (looks like a different game). PS3 images aren't supported. If this <i>is</i> Skate 3 and the region is just new to us, you can try anyway.</p>
+          <div class="row"><span class="btn ghost">Try anyway</span><span class="sp"></span><span class="btn pri">Pick another file</span></div></div>
+        <div class="err a"><div class="hd"><div class="ico">⚠</div><h4>App was signed with a different key</h4></div>
+          <p>Updating needs an uninstall first, and that deletes the imported data on the headset. Your bundles are kept on this PC and are pushed again right after.</p>
+          <div class="row"><span class="btn ghost">Cancel</span><span class="sp"></span><span class="btn pri">Uninstall, reinstall, re-push</span></div></div>
+        <div class="err r"><div class="hd"><div class="ico">↯</div><h4>Copy interrupted</h4></div>
+          <p>The cable came out at 3.1 / 4.4 GB. Nothing is broken: the app still starts in sk8 until the copy finishes and verifies.</p>
+          <div class="row"><span class="sp"></span><span class="btn pri">Resume</span></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PLAN ================= -->
+<section id="plan">
+  <h2>4. Phased plan</h2>
+  <p class="src" style="color:var(--dim)">One developer, rough. All of it lives in the fork, which will publish its own GitHub releases; no upstream PRs.</p>
+  <div class="box">
+    <div class="phase"><div class="ph">M0</div><div><b>Spike + decisions</b><ul><li>eframe shell with the app palette and fonts; adb detection and the headset state machine; udev rule flow on Bazzite; Oculus driver check on Windows.</li><li>Answer open questions 1–3.</li></ul></div><div class="ef">2–3 days</div></div>
+    <div class="phase"><div class="ph">M1</div><div><b>Base app install</b><ul><li>Download APK from the release index, verify sha256, <code>adb install -r</code>, version check, key-mismatch handling.</li><li>Screens A, B (sk8 card ready), F, G. AppImage + NSIS builds in CI.</li></ul></div><div class="ef">1 week</div></div>
+    <div class="phase"><div class="ph">M2</div><div><b>Skate 3 from an existing conversion</b><ul><li>Find skate3rust installs / accept a folder or Skate3-Quest.zip; audio pre-decode step in Rust; <code>bundle.json</code>; resumable push; marker. Retires MAKE-QUEST-ZIP.bat for most users.</li></ul></div><div class="ef">1–1.5 weeks</div></div>
+    <div class="phase"><div class="ph">M3</div><div><b>Skate 3 straight from the ISO</b><ul><li>Drive the setup helper headless on Windows; port + freeze the helper and extract-xiso for Linux; title-ID / region checks; known-hash list.</li></ul></div><div class="ef">2–3 weeks (Linux port is most of it)</div></div>
+    <div class="phase"><div class="ph">M4</div><div><b>THUG2 data import</b><ul><li>Folder source; CUE/BIN → ISO9660 → MSI tables → cabs → Data tree in Rust; multi-disc UI; file list + version checks; push to <code>engines/thug2/</code>. Independent of the engine.</li></ul></div><div class="ef">1.5–2 weeks</div></div>
+    <div class="phase"><div class="ph">M5</div><div><b>Multi-engine on the headset</b><ul><li>App: <code>engine</code> file, <code>engines/*/bundle.json</code>, in-app Engine menu, keep <code>use-retail-data</code> compatibility.</li><li>Link the THUG2 core into the release APK (<code>thug2</code> feature on); trimmed file list from headless traces.</li></ul></div><div class="ef">1 week + whatever the engine port needs</div></div>
+    <div class="phase"><div class="ph">M6</div><div><b>Polish</b><ul><li>Self-update, wireless adb, code signing, Flatpak (maybe), translations of error text, telemetry-free crash log export.</li></ul></div><div class="ef">1–2 weeks</div></div>
+  </div>
+  <p style="margin-top:14px"><b>Smallest useful slice:</b> M1 + M2 (~2.5 weeks) already collapses today's flow to "point at your skate3rust folder, click Install".</p>
+</section>
+
+<!-- ================= RISKS ================= -->
+<section id="risks">
+  <h2>Risks</h2>
+  <div class="tablewrap"><table>
+    <tr><th>Risk</th><th>Why it matters</th><th>Mitigation</th></tr>
+    <tr><td>Skate 3 converter is Python + Windows-shaped</td><td>Linux ISO conversion needs a frozen Linux helper, extract-xiso for Linux, and fixes to <code>os.name=='nt'</code> paths.</td><td>Ship M2 first (no conversion on PC needed if already converted); treat Linux ISO conversion as M3.</td></tr>
+    <tr><td>THUG2 decomp code has no licence</td><td>The user has chosen to ship it in the normal app (no store target). Worth knowing it is the part most likely to draw a takedown of releases.</td><td>Keep it behind the <code>thug2</code> feature so a build without it is one flag away if ever needed; never ship game data.</td></tr>
+    <tr><td>Game data leaking into releases</td><td>Hard constraint: never ship game files.</td><td>Bundles only built locally; CI check that no release artifact contains <code>.big</code>/<code>.prx</code>/<code>game.json</code>; caches outside the repo.</td></tr>
+    <tr><td>Redistributing adb / ffmpeg / extract-xiso</td><td>Licence and size questions.</td><td>Download on first use from upstream URLs, hash-pinned (precedent: extract-xiso in setup). Prefer existing adb server.</td></tr>
+    <tr><td>Quest OS changes to <code>Android/data</code> access</td><td>Pushing into another app's files dir works today (<code>push-assets.sh</code>) but could be locked down.</td><td>Keep the zip + in-app Import path as fallback.</td></tr>
+    <tr><td>Signing key mismatch</td><td>APKs use the repo's debug keystore; a build signed differently can't update in place, and uninstall wipes data.</td><td>Detect, warn, re-push from PC cache.</td></tr>
+    <tr><td>WebKitGTK on NVIDIA (if Tauri)</td><td>Blank windows on the user's own machine.</td><td>Choose eframe; or set <code>WEBKIT_DISABLE_DMABUF_RENDERER=1</code> if Tauri is chosen.</td></tr>
+    <tr><td>THUG2 cab compression / disc variants</td><td>Pure-Rust cab may lack a codec; other releases (1.0 vs 1.01, regional) differ.</td><td>Test on the 3-disc set we have; fallbacks <code>msiexec /a</code> (Win) and 7z+msitools (Linux).</td></tr>
+    <tr><td>Unsigned Windows binary</td><td>SmartScreen scares users.</td><td>Code-signing cert (cost) or clear docs.</td></tr>
+  </table></div>
+</section>
+
+<!-- ================= QUESTIONS ================= -->
+<section id="questions">
+  <h2>Open questions</h2>
+  <div class="qs">
+    <div class="q"><b>What does "install the base app" mean?</b><span>Plan assumes: sideload the Quest APK over USB. Should it also install the desktop game (skate3rust-style Windows build; there is no Linux desktop build today)?</span></div>
+    <div class="q"><b>Which package name?</b><span>Assumed the all-engines APK keeps <code>com.andrewnakas.skate3ar</code> so existing installs and imported Skate 3 data carry over. Should the old store-style <code>sk8ar</code> build be retired?</span></div>
+    <div class="q"><b>Build the THUG2 core for Android: in the main workspace or prebuilt?</b><span>It's C++ with a CMake build (thug2-headless). Linking it via a build script in a new crate is simplest for CI; a prebuilt <code>.a</code> per release is the alternative.</span></div>
+    <div class="q"><b>Is Linux Skate 3 ISO conversion needed in v1?</b><span>Or is "Linux can push an already-converted folder; ISO conversion on Windows" OK until M3?</span></div>
+    <div class="q"><b>Which THUG2 files does the Quest engine really need?</b><span>Whole Data (1.4 GB) or a traced subset; which THUG2 PC versions must be supported (1.0, 1.01, others)?</span></div>
+    <div class="q"><b>Keep bundles on the PC?</b><span>~5–7 GB cache for fast re-installs vs. disk use. Default on, with a Delete button?</span></div>
+    <div class="q"><b>Distribution and signing</b><span>The fork is moving to its own GitHub releases. Should installer builds go there too, and is a Windows code-signing cert in budget? AppImage-only on Linux OK, or Flatpak wanted?</span></div>
+    <div class="q"><b>Wireless adb in v1?</b><span>Plan puts it in M6.</span></div>
+  </div>
+</section>
+
+<!-- ================= SOURCES ================= -->
+<section id="sources">
+  <h2>Files read</h2>
+  <ul class="src" style="font-size:13px;color:var(--dim)">
+    <li><code>skate3-quest-ar/README.md</code>, <code>docs/IMPORT-SKATE3.md</code>, <code>docs/installation.md</code>, <code>docs/updates.md</code></li>
+    <li><code>crates/skate-game/src/xr/ui/import.rs</code> (scan of <code>Download/Skate3</code>, move/unzip, marker), <code>crates/skate-game/src/clean/mod.rs</code> (<code>wanted()</code>: marker + <code>assets/private/game.json</code>)</li>
+    <li><code>crates/skate-quest/Cargo.toml</code> (pkg <code>com.andrewnakas.skate3ar</code>, <code>retail</code>), <code>crates/sk8-quest/Cargo.toml</code> (pkg <code>com.andrewnakas.sk8ar</code>, no retail), <code>crates/skate-game/Cargo.toml</code> features</li>
+    <li><code>scripts/quest/make-bundle.ps1</code>, <code>scripts/quest/push-assets.sh</code></li>
+    <li><code>crates/skate-game/src/player_audio.rs</code> (<code>cache_directory</code>), <code>crates/skate-data/src/audio/catalog.rs</code> (lazy PCM cache), <code>crates/skate-data/src/audio/ffmpeg.rs</code> (XMA2 via ffmpeg)</li>
+    <li><code>tools/setup.py</code>, <code>tools/asset_pipeline/install.py</code> (platform branches)</li>
+    <li><code>thug2-headless/README.md</code>, <code>thug2-headless/app/headless_main.cpp</code>; layout of <code>~/Games/THUG2-extract/Game/Data</code> and <code>msiextract.log</code></li>
+  </ul>
+</section>
+</main>
+<footer><div class="wrap">Rough plan, not a spec. Sizes and durations are estimates to be measured in M0–M2. No repository was changed.</div></footer>
+</body>
+</html>
