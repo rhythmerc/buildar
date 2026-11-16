@@ -20,8 +20,9 @@ pub const AREA: [f32; 4] = [40.0, 360.0, 640.0, 360.0];
 pub const PIXELS_PER_UNIT: f32 = 1.5;
 /// The panel's width, real metres.
 pub const WIDTH_M: f32 = 0.2;
-/// Where the panel's bottom left is from the grip, real metres (right, up).
-pub const OFFSET: Vec2 = Vec2::new(-0.055, 0.02);
+/// Where the panel's bottom left is from the grip, real metres (right, up): clear of the controller's head (the trick
+/// display is at the bottom of its picture).
+pub const OFFSET: Vec2 = Vec2::new(-0.055, 0.08);
 
 /// Where the player's prepared HUD is: `SKATE_SCORING_HUD_ROOT`, or `private/hud` in the game's assets.
 pub fn root(asset_root: &Path) -> PathBuf {

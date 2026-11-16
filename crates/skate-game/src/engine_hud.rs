@@ -47,8 +47,32 @@ impl Plugin for EngineHudPlugin {
         // (not without a renderer: tests)
         if app.is_plugin_added::<bevy::render::RenderPlugin>() {
             embedded_asset!(app, "engine_hud.wgsl");
-            app.add_plugins(Material2dPlugin::<HudPaint>::default()).init_resource::<EngineHuds>();
+            app.add_plugins((Material2dPlugin::<HudPaint>::default(), bevy::pbr::MaterialPlugin::<PanelMaterial>::default()))
+                .init_resource::<EngineHuds>();
         }
+    }
+}
+
+/// What a part's panel is drawn with in the room: its picture, unlit, over everything (a HUD isn't hidden by what's in
+/// front of it, virtual or real: no depth test, nothing written to depth).
+pub(crate) type PanelMaterial = bevy::pbr::ExtendedMaterial<StandardMaterial, OnTop>;
+
+/// [`PanelMaterial`]'s part: drawn without a depth test.
+#[derive(Asset, TypePath, AsBindGroup, Clone, Debug, Default)]
+pub(crate) struct OnTop {}
+
+impl bevy::pbr::MaterialExtension for OnTop {
+    fn specialize(
+        _: &bevy::pbr::MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _: &MeshVertexBufferLayoutRef,
+        _: bevy::pbr::MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        if let Some(depth) = &mut descriptor.depth_stencil {
+            depth.depth_compare = bevy::render::render_resource::CompareFunction::Always;
+            depth.depth_write_enabled = false;
+        }
+        Ok(())
     }
 }
 
@@ -230,7 +254,7 @@ struct PartSlot {
     size: Vec2,
     resolution: f32,
     panel_mesh: Handle<Mesh>,
-    panel_material: Handle<StandardMaterial>,
+    panel_material: Handle<PanelMaterial>,
     placement: Placement,
 }
 
@@ -242,7 +266,7 @@ pub(crate) struct HudRenderer<'w, 's> {
     images: Option<ResMut<'w, Assets<Image>>>,
     meshes: Option<ResMut<'w, Assets<Mesh>>>,
     paints: Option<ResMut<'w, Assets<HudPaint>>>,
-    materials: Option<ResMut<'w, Assets<StandardMaterial>>>,
+    materials: Option<ResMut<'w, Assets<PanelMaterial>>>,
 }
 
 impl HudRenderer<'_, '_> {
@@ -347,7 +371,7 @@ impl PartSlot {
         commands: &mut Commands,
         images: &mut Assets<Image>,
         meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<StandardMaterial>,
+        materials: &mut Assets<PanelMaterial>,
         engine: Engine,
         layer: usize,
         part: &HudPart,
@@ -374,14 +398,17 @@ impl PartSlot {
             ))
             .id();
         let panel_mesh = meshes.add(Rectangle::new(1.0, size.y / size.x));
-        let panel_material = materials.add(StandardMaterial {
-            base_color_texture: Some(target.clone()),
-            unlit: true,
-            // (drawn over a clear picture: its colour is already its coverage's)
-            alpha_mode: AlphaMode::Premultiplied,
-            double_sided: true,
-            cull_mode: None,
-            ..default()
+        let panel_material = materials.add(PanelMaterial {
+            base: StandardMaterial {
+                base_color_texture: Some(target.clone()),
+                unlit: true,
+                // (drawn over a clear picture: its colour is already its coverage's)
+                alpha_mode: AlphaMode::Premultiplied,
+                double_sided: true,
+                cull_mode: None,
+                ..default()
+            },
+            extension: OnTop {},
         });
         let panel = commands
             .spawn((
@@ -404,7 +431,7 @@ impl PartSlot {
         commands: &mut Commands,
         images: &mut Assets<Image>,
         meshes: &mut Assets<Mesh>,
-        materials: &mut Assets<StandardMaterial>,
+        materials: &mut Assets<PanelMaterial>,
         canvas: Vec2,
         part: &HudPart,
     ) {
@@ -413,7 +440,7 @@ impl PartSlot {
             self.target = images.add(target_of(part.size, part.resolution));
             commands.entity(self.camera).insert((projection_of(part.size), RenderTarget::Image(self.target.clone().into())));
             if let Some(material) = materials.get_mut(&self.panel_material) {
-                material.base_color_texture = Some(self.target.clone());
+                material.base.base_color_texture = Some(self.target.clone());
             }
             if let Some(mesh) = meshes.get_mut(&self.panel_mesh) {
                 *mesh = Rectangle::new(1.0, part.size.y / part.size.x).into();
