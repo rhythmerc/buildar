@@ -153,12 +153,12 @@ back. Values are saved to `files/sk8-tuning.json`.
 | Grips | LB / RB |
 | A B X Y | A B X Y |
 | Stick clicks | LS / RS |
-| Left menu held + left stick | D-pad |
-| Left menu held + X | Back |
 | Left menu held 1 s (alone) | Build mode (see below) |
 
-A menu tap no longer sends Start in XR: it opened the flat pause menu, whose
-camera is off in the headset, so the game froze behind an invisible menu.
+The menu button is the headset layer's (tap: menu, hold: build mode), never
+the game's Start, and Touch sends no D-pad or Back: nothing in the headset
+reads them (the flat pause menu, instant replay and the session marker are
+gone).
 
 ### Build mode
 

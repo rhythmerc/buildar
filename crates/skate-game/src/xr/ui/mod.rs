@@ -416,7 +416,7 @@ fn touch_nav(
     let dt = time.delta_secs();
     let mut n = Nav::default();
     // Menu tap (nothing chorded with it: holds are build mode, menu + grips
-    // the SK8 sheet, menu + stick the pad's D-pad).
+    // the SK8 sheet; a stick or X moved meanwhile is not a tap either).
     let chorded = |t: &super::touch::TouchState| {
         t.x || t.left_grip > 0.5 || t.right_grip > 0.5 || t.left_stick[0].abs() > 0.3 || t.left_stick[1].abs() > 0.3
     };
