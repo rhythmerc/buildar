@@ -22,8 +22,6 @@ use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 use thug2_sys as t2;
 
-mod hud;
-
 /// The game's frame.
 const STEP: f32 = 1.0 / 60.0;
 const MAX_STEPS_PER_FRAME: u32 = 4;
@@ -106,24 +104,21 @@ pub(crate) fn install(app: &mut App, files: &Path) {
     app.world_mut()
         .resource_mut::<crate::xr::ui::ControlsSheet>()
         .set(Engine::Thug2, CONTROLS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect());
-    hud::install(app);
+    crate::engine_hud::install(app);
     engines::add_engine(app, Engine::Thug2, available, |app| {
-        if hud::drawn(app) {
-            app.add_systems(Startup, hud::spawn);
-        }
         app.init_resource::<Thug2>()
             .init_resource::<Thug2Sounds>()
-            .add_systems(Startup, (boot, spawn_stand_in))
+            .add_systems(Startup, (boot, spawn_stand_in, hud_parts))
             .add_systems(
                 Update,
-                (finish_boot, read_pad, teleport, apply_world, hud::want, step, publish, play_sounds, hud::draw)
+                (finish_boot, read_pad, teleport, apply_world, want_hud, step, publish, play_sounds, draw_hud)
                     .chain()
                     .after(crate::xr::ui::UiSet)
                     .in_set(EngineSet(Engine::Thug2)),
             )
             .add_systems(
                 PostUpdate,
-                (place_stand_in, pose_skater, hud::place_meter)
+                (place_stand_in, pose_skater)
                     .before(bevy::transform::TransformSystems::Propagate)
                     .in_set(EngineSet(Engine::Thug2)),
             );
@@ -176,7 +171,7 @@ struct Thug2 {
     pose: t2::Pose,
     /// What the game played in the steps since the app last played it (`play_sounds`).
     heard: Heard,
-    /// The game takes its 2D down (`hud::want`), and the last step's (`hud::draw`).
+    /// The game takes its 2D down (`want_hud`), and the last step's (`draw_hud`).
     hud_on: bool,
     hud: t2::Hud,
 }
@@ -318,6 +313,54 @@ fn pad(t: &TouchState) -> t2::Pad {
     let length = |v: [f32; 2]| v[0] * v[0] + v[1] * v[1];
     let stick = if length(t.right_stick) > length(t.left_stick) { t.right_stick } else { t.left_stick };
     t2::Pad { left_x: axis(stick[0]), left_y: axis(-stick[1]), right_x: 0x80, right_y: 0x80, buttons }
+}
+
+/// THUG2's HUD (`thug2_engine::hud`: its parts and where they go) drawn by the app's HUD renderer. Its parts are
+/// there from the start, empty (the corner readout gives way to them).
+fn hud_parts(mut renderer: crate::engine_hud::HudRenderer) {
+    let mut frame = engine_core::hud::HudFrame::default();
+    thug2_engine::hud::frame(&t2::Hud::default(), false, &mut frame);
+    renderer.show(Engine::Thug2, &frame, |_| None);
+}
+
+/// The game takes its 2D down only while it's seen: the HUD on and no menu over it.
+fn want_hud(
+    settings: Option<Res<crate::xr::ar_settings::ArSettings>>,
+    panel: Option<Res<crate::xr::panel::XrPanel>>,
+    huds: Option<Res<crate::engine_hud::EngineHuds>>,
+    mut thug2: ResMut<Thug2>,
+) {
+    let wanted = huds.is_some() && settings.is_some_and(|s| s.hud) && !panel.is_some_and(|p| p.visible);
+    let thug2 = &mut *thug2;
+    let Phase::Running(engine) = &mut thug2.phase else { return };
+    if thug2.hud_on != wanted {
+        engine.hud_enable(wanted);
+        thug2.hud_on = wanted;
+        thug2.hud = t2::Hud::default();
+    }
+}
+
+/// The last step's 2D drawn, and where the skater is for the balance meter at it.
+fn draw_hud(
+    mut thug2: ResMut<Thug2>,
+    mut renderer: crate::engine_hud::HudRenderer,
+    mut focus: ResMut<crate::engine_hud::HudFocus>,
+    mut frame: Local<engine_core::hud::HudFrame>,
+) {
+    let thug2 = &mut *thug2;
+    let scale = thug2.scale_given.max(1e-3);
+    focus.set(
+        Engine::Thug2,
+        thug2.current.filter(|_| thug2.placed).map(|s| engine_core::Focus {
+            feet: from_game(s.position, scale),
+            up: Vec3::from_array(s.up).normalize_or(Vec3::Y),
+            height: thug2_engine::hud::SKATER_HEIGHT / scale,
+        }),
+    );
+    let Phase::Running(engine) = &mut thug2.phase else { return };
+    let balancing = thug2.current.is_some_and(|s| s.balance.is_some());
+    thug2_engine::hud::frame(&thug2.hud, balancing, &mut frame);
+    renderer.show(Engine::Thug2, &frame, |id| engine.hud_texture(thug2_engine::hud::game_texture(id)).map(thug2_engine::hud::texture));
 }
 
 /// Our metres as the game's units: `scale` is the world size ([`Tuning::scale`]: how much bigger the room is to the
@@ -1261,5 +1304,63 @@ mod tests {
         // Both pushed: the further one.
         t.left_stick = [-0.3, 0.0];
         assert_eq!(pad(&t).left_x, 255);
+    }
+
+    /// The HUD mid-grind as the app draws it (the app's HUD renderer), saved as pictures to look at, a part each:
+    /// `THUG2_GAME_DIR=<folder holding Data> SK8_THUG2_HUD_SHOT=/path/hud.png cargo test ... thug2::tests::a_picture
+    /// -- --ignored` (alone: the game boots once a process): `hud-score.png`, `hud-meter.png`, `hud-trick.png`.
+    #[test]
+    #[ignore = "needs a GPU and the player's THUG2 files; writes pictures"]
+    fn a_picture_of_the_hud() {
+        let (Some(path), Some(dir)) = (std::env::var_os("SK8_THUG2_HUD_SHOT"), std::env::var_os("THUG2_GAME_DIR")) else {
+            return;
+        };
+        let cache = std::env::temp_dir().join("thug2-hud-shot-cache");
+        let mut engine = t2::boot(Path::new(&dir), Some(&cache), &["-level", "Default"]).expect("boot");
+        for _ in 0..120 {
+            engine.step(&t2::PAD_AT_REST).expect("step");
+        }
+        // (thug2-drive's test run: a floor and a rail, pushed along, an ollie onto the rail and a nosegrind)
+        let (cx, cz) = (50_000.0, 50_000.0);
+        let quad = |a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]| {
+            [
+                t2::Triangle { v: [a, b, c], flags: t2::face::SKATABLE, terrain: 0 },
+                t2::Triangle { v: [a, c, d], flags: t2::face::SKATABLE, terrain: 0 },
+            ]
+        };
+        let floor = quad([cx - 400.0, 0.0, cz - 400.0], [cx - 400.0, 0.0, cz + 400.0], [cx + 400.0, 0.0, cz + 400.0], [cx + 400.0, 0.0, cz - 400.0]);
+        engine.set_world(&floor, Some(t2::Spawn { point: [cx, 20.0, cz - 300.0], heading_degrees: 0.0 }));
+        engine.set_rails(&[vec![[cx, 30.0, cz - 100.0], [cx, 30.0, cz + 80.0]]]);
+        engine.hud_enable(true);
+        let mut skater = None;
+        for frame in 120..195 {
+            let mut pad = t2::PAD_AT_REST;
+            if frame >= 140 {
+                pad.left_y = 0;
+            }
+            if (160..=164).contains(&frame) {
+                pad.buttons |= t2::buttons::CROSS;
+            }
+            if frame >= 166 {
+                pad.buttons |= t2::buttons::TRIANGLE;
+            }
+            skater = engine.step(&pad).expect("step");
+        }
+        let mut hud = t2::Hud::default();
+        engine.hud(&mut hud);
+        assert!(!hud.draws.is_empty());
+        let mut frame = engine_core::hud::HudFrame::default();
+        thug2_engine::hud::frame(&hud, skater.is_some_and(|s| s.balance.is_some()), &mut frame);
+        let mut textures = std::collections::HashMap::new();
+        for id in frame.draws.iter().filter_map(|d| d.texture) {
+            if let Some(texture) = engine.hud_texture(thug2_engine::hud::game_texture(id)) {
+                textures.insert(id, thug2_engine::hud::texture(texture));
+            }
+        }
+        let path = std::path::PathBuf::from(path);
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("hud").to_string();
+        let pictures = crate::engine_hud::tests::pictures(Engine::Thug2, &[(stem, frame)], textures);
+        assert_eq!(pictures.len(), 3, "a picture a part");
+        crate::engine_hud::tests::save(path.parent().unwrap_or(Path::new(".")), &pictures);
     }
 }

@@ -4569,6 +4569,7 @@ dependencies = [
  "bevy_mod_openxr",
  "bevy_mod_xr",
  "engine-api",
+ "engine-core",
  "gltf",
  "libloading 0.8.9",
  "ndk-sys 0.6.0+11769913",
@@ -4579,7 +4580,9 @@ dependencies = [
  "skate-core",
  "skate-data",
  "skate-lite-sys",
+ "skate3-engine",
  "skate3-sim",
+ "thug2-engine",
  "thug2-sys",
  "tracing-log",
  "wgpu",
@@ -4605,6 +4608,15 @@ dependencies = [
  "ndk-context",
  "skate-game",
  "winit",
+]
+
+[[package]]
+name = "skate3-engine"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+ "serde_json",
+ "skate3-sim",
 ]
 
 [[package]]
@@ -4872,6 +4884,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
 dependencies = [
  "cfg-if",
+]
+
+[[package]]
+name = "thug2-engine"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+ "thug2-sys",
 ]
 
 [[package]]

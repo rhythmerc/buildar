@@ -19,19 +19,20 @@ dev-dynamic = ["bevy/dynamic_linking"]
 # Skate 3 data, and its importer. The headset app (crates/skate-quest) has it; without it the crate is
 # the app layer and the clean-room engine alone (what CI type-checks).
 retail = [
-    "dep:tracing-log", "dep:skate3-sim", "dep:skate-core", "dep:skate-data", "dep:zip",
+    "dep:tracing-log", "dep:skate3-sim", "dep:skate3-engine", "dep:skate-core", "dep:skate-data", "dep:zip",
     "zip/deflate-flate2-zlib-rs",
 ]
 # OpenXR passthrough mode (`--xr`); the Quest build always enables it.
 xr = ["dep:gltf", "dep:bevy_mod_openxr", "dep:bevy_mod_xr", "dep:openxr", "dep:roomtone-sys", "dep:wgpu", "dep:wgpu-hal", "dep:ash"]
 # THUG2's own engine (thug2-sys: thug2-decomp run headless) as a third engine in the headset, on the player's own
 # game files. Builds the engine with CMake from the thug2-headless and thug2-decomp checkouts (crates/thug2-sys).
-thug2 = ["xr", "dep:thug2-sys"]
+thug2 = ["xr", "dep:thug2-sys", "dep:thug2-engine"]
 # Desktop XR keeps a mirror window beside the headset view.
 xr-window = ["xr", "bevy_mod_openxr/window_support"]
 
 [dependencies]
 engine-api = { path = "../engine-api" }
+engine-core.workspace = true
 bevy = { workspace = true, features = ["jpeg", "trace", "debug"] }
 tracing-log = { version = "0.2", optional = true }
 # (the controllers' shapes come from the headset as glTF: xr::controller_shapes)
@@ -40,12 +41,16 @@ gltf = { version = "1.4", default-features = false, optional = true }
 skate3-sim = { workspace = true, optional = true }
 skate-core = { workspace = true, optional = true }
 skate-data = { workspace = true, optional = true }
+# Skate 3's side of the engine contract (its HUD), Bevy-free; to move into skate3-headless.
+skate3-engine = { path = "../skate3-engine", optional = true }
 serde_json.workspace = true
 # Steam Audio (libphonon.so) is loaded at run time, if it is there (src/binaural.rs).
 libloading = "0.8"
 serde.workspace = true
 skate-lite-sys = { path = "../skate-lite-sys" }
 thug2-sys = { path = "../thug2-sys", optional = true }
+# THUG2's side of the engine contract (its HUD's parts), Bevy-free; moves to thug2-headless with thug2-sys.
+thug2-engine = { path = "../thug2-engine", optional = true }
 # Room light estimation for the passthrough mode (xr::room_light).
 roomtone-sys = { path = "../roomtone-sys", optional = true }
 

@@ -212,7 +212,7 @@ fn add_retail(app: &mut App) {
         camera::CameraPlugin,
     ));
     app.add_plugins(crate::skate_audio::SkateAudioPlugin);
-    app.add_plugins(crate::scoring_hud::ScoringHudPlugin);
+    app.add_plugins(crate::skate3_hud::Skate3HudPlugin);
 }
 
 #[cfg(test)]

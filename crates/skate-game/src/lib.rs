@@ -7,10 +7,6 @@ mod clean_pack;
 #[cfg(feature = "retail")]
 mod app;
 #[cfg(feature = "retail")]
-use skate3_sim::apt_scene;
-#[cfg(all(feature = "retail", test))]
-use skate3_sim::apt_vm;
-#[cfg(feature = "retail")]
 mod assets;
 mod binaural;
 mod clean_mix;
@@ -27,8 +23,6 @@ mod graph_runtime;
 #[cfg(feature = "retail")]
 mod grind_world;
 #[cfg(feature = "retail")]
-use skate3_sim::hud_runtime;
-#[cfg(feature = "retail")]
 mod input;
 #[cfg(feature = "retail")]
 mod logging;
@@ -39,7 +33,7 @@ mod presentation;
 #[cfg(feature = "retail")]
 mod replay;
 #[cfg(feature = "retail")]
-mod scoring_hud;
+mod skate3_hud;
 #[cfg(feature = "retail")]
 mod setup;
 #[cfg(feature = "retail")]
@@ -57,6 +51,8 @@ mod xr;
 mod clean;
 #[cfg_attr(not(feature = "xr"), allow(dead_code))]
 mod engines;
+#[cfg(any(feature = "retail", feature = "thug2"))]
+mod engine_hud;
 #[cfg(feature = "thug2")]
 mod thug2;
 

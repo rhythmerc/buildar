@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/skate-game", "crates/skate-quest", "crates/skate-lite-sys", "crates/roomtone-sys", "crates/thug2-sys", "crates/engine-api"]
+members = ["crates/skate-game", "crates/skate-quest", "crates/skate-lite-sys", "crates/roomtone-sys", "crates/thug2-sys", "crates/thug2-engine", "crates/skate3-engine", "crates/engine-api"]
 resolver = "3"
 
 [workspace.package]
