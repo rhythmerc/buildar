@@ -20,7 +20,7 @@ bevy = { version = "=0.18.1", default-features = false, features = [
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # The engine contract: https://github.com/rhythmerc/buildar-engine-core (Bevy-free; engine-api wraps it for Bevy).
-engine-core = { git = "https://github.com/rhythmerc/buildar-engine-core", rev = "14be98da65e5b305b247f553c6e7db79babc0153" }
+engine-core = { git = "https://github.com/rhythmerc/buildar-engine-core", rev = "01c973650c2496a80eb6fd8b339edf3f42aeb7ab" }
 # The Skate 3 engine's simulation: https://github.com/rhythmerc/skate3-headless (Bevy-free; the app renders).
 # Bump all three revs together. To build against a local checkout instead, uncomment the [patch] block below.
 skate3-sim = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
