@@ -13,52 +13,10 @@ use crate::xr::panel::XrPanel;
 use crate::xr::rig::Rig;
 use bevy::prelude::*;
 use bevy_mod_xr::camera::XrCamera;
+pub(crate) use skate_engine_api::{ABOVE_HAND_M, EngineHudCamera, HandHud};
 
-/// How far above the controller's grip a panel's middle is by default, real metres.
-pub(crate) const ABOVE_HAND_M: f32 = 0.16;
 /// Toward the eyes from the grip, real metres (so the controller doesn't cover it).
 const TOWARD_EYES_M: f32 = 0.02;
-
-/// The camera drawing an engine's HUD into its image: kept on in the headset (where other flat cameras are turned
-/// off), run only while its panel shows ([`HandHud::camera`]).
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub(crate) struct EngineHudCamera;
-
-/// A HUD panel: a quad one unit wide and `aspect` high, shown `width_m` real metres wide. Its `anchor` (a point of
-/// it: -0.5..0.5 across and up from its middle) is put `offset` from the grip (real metres: right and up, as the
-/// player sees it).
-#[derive(Component, Clone, Copy, Debug)]
-pub(crate) struct HandHud {
-    pub width_m: f32,
-    pub aspect: f32,
-    pub offset: Vec2,
-    pub anchor: Vec2,
-    /// The camera drawing its image (on only while it is shown).
-    pub camera: Option<Entity>,
-    /// Nothing to show now (hidden).
-    pub empty: bool,
-    /// Always by this controller (none: the settings' one).
-    pub hand: Option<HudHand>,
-    /// By the settings' controller when that is `HudHand::Left` - shared with what keeps to the left one - its offset
-    /// and anchor are these instead.
-    pub on_left: Option<(Vec2, Vec2)>,
-}
-
-impl HandHud {
-    /// A panel `width_m` wide with its middle `ABOVE_HAND_M` over the grip.
-    pub(crate) fn above(width_m: f32, aspect: f32, camera: Option<Entity>) -> Self {
-        Self {
-            width_m,
-            aspect,
-            offset: Vec2::new(0.0, ABOVE_HAND_M),
-            anchor: Vec2::ZERO,
-            camera,
-            empty: false,
-            hand: None,
-            on_left: None,
-        }
-    }
-}
 
 pub(crate) struct HandHudPlugin;
 

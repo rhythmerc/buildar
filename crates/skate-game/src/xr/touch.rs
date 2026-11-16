@@ -10,6 +10,7 @@
 //! Back (neither leaks through as stick/X input during the chord).
 #[cfg(feature = "retail")]
 pub(crate) use skate_core::input::xbox::XboxState;
+pub(crate) use skate_engine_api::TouchState;
 
 /// The pad the imported-disc tier's input reads (its own struct in the store build, which has
 /// no imported-disc tier).
@@ -45,25 +46,6 @@ const DPAD_THRESHOLD: f32 = 0.6;
 const START_TAP_SECONDS: f32 = 0.35;
 /// How long Start is held after a tap, so polling at any frame rate sees it.
 const START_PULSE_SECONDS: f32 = 0.1;
-
-/// One frame of raw Touch state, OpenXR ranges: sticks -1..1 (+y forward),
-/// triggers and grips 0..1.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(crate) struct TouchState {
-    pub left_stick: [f32; 2],
-    pub right_stick: [f32; 2],
-    pub left_trigger: f32,
-    pub right_trigger: f32,
-    pub left_grip: f32,
-    pub right_grip: f32,
-    pub a: bool,
-    pub b: bool,
-    pub x: bool,
-    pub y: bool,
-    pub left_stick_click: bool,
-    pub right_stick_click: bool,
-    pub menu: bool,
-}
 
 /// The only state is the menu-button chord timing.
 #[derive(Default, Debug)]

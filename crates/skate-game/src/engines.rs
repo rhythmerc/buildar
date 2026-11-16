@@ -32,45 +32,7 @@ use bevy::utils::prelude::DebugName;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-
-/// A skate engine.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Engine {
-    /// The clean-room engine (no game data).
-    Sk8,
-    /// The faithful port of Skate 3, on the player's imported data.
-    Skate3,
-    /// THUG2's own engine (the decomp), on the player's game files.
-    Thug2,
-}
-
-impl Engine {
-    pub(crate) const ALL: [Engine; 3] = [Engine::Sk8, Engine::Skate3, Engine::Thug2];
-
-    pub(crate) fn name(self) -> &'static str {
-        match self {
-            Engine::Sk8 => "SK8",
-            Engine::Skate3 => "Skate 3",
-            Engine::Thug2 => "THUG2",
-        }
-    }
-
-    /// Its name in files (`engine.txt`, a park's engine tag).
-    pub(crate) fn key(self) -> &'static str {
-        match self {
-            Engine::Sk8 => "sk8",
-            Engine::Skate3 => "skate3",
-            Engine::Thug2 => "thug2",
-        }
-    }
-
-    pub(crate) fn from_key(key: &str) -> Option<Engine> {
-        Engine::ALL.into_iter().find(|e| e.key() == key.trim())
-    }
-}
-
-/// Whether an engine can run now; `Err` says why not (for the menu).
-pub(crate) type Availability = fn(&World) -> Result<(), String>;
+pub(crate) use skate_engine_api::{Availability, BeforeSwitch, Engine, EngineOwned, EngineSet, EngineSwitched, ParkSettings};
 
 /// The engines the app carries and which one runs.
 #[derive(Resource)]
@@ -166,40 +128,6 @@ fn as_engine<T>(engine: Engine, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// Spawned by an engine: hidden and silenced while another runs.
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct EngineOwned(pub Engine);
-
-/// Sent after a switch (also the first engine's start, with `from` none), once the new engine is running.
-#[derive(Message, Clone, Copy, Debug)]
-pub(crate) struct EngineSwitched {
-    pub from: Option<Engine>,
-    pub to: Engine,
-}
-
-/// What of an engine's settings a park keeps (THUG2's world size and game speed: what the park was built to), and
-/// how to put them back: each engine that has any registers them. Saved with the park, applied when it's opened.
-#[derive(Resource, Default)]
-pub(crate) struct ParkSettings(pub HashMap<Engine, (fn(&World) -> serde_json::Value, fn(&mut World, &serde_json::Value))>);
-
-impl ParkSettings {
-    /// `engine`'s settings now (none: it keeps none).
-    pub(crate) fn of(world: &World, engine: Engine) -> Option<serde_json::Value> {
-        let (get, _) = *world.get_resource::<ParkSettings>()?.0.get(&engine)?;
-        Some(get(world))
-    }
-
-    /// `engine`'s settings put back as `settings` say.
-    pub(crate) fn apply(world: &mut World, engine: Engine, settings: &serde_json::Value) {
-        let Some(&(_, set)) = world.get_resource::<ParkSettings>().and_then(|p| p.0.get(&engine)) else { return };
-        set(world, settings);
-    }
-}
-
-/// Run before a switch with the engine being left (the XR layer notes where the skater is).
-#[derive(Resource, Default)]
-pub(crate) struct BeforeSwitch(pub Vec<fn(&mut World, Engine)>);
-
 /// The run condition of an engine's systems.
 pub(crate) fn running(engine: Engine) -> impl Fn(Option<Res<Engines>>) -> bool + Clone {
     move |engines: Option<Res<Engines>>| engines.is_some_and(|e| e.current == Some(engine))
@@ -211,12 +139,6 @@ const STARTUP: [fn() -> InternedScheduleLabel; 3] =
 fn is_startup(label: InternedScheduleLabel) -> bool {
     STARTUP.iter().any(|startup| startup() == label)
 }
-
-/// The set an engine's per-frame systems go in, in any schedule: what is in it (directly or through sets of its
-/// own) is that engine's - run only while it runs, and what it spawns is its own. Nothing else is: a plugin of
-/// Bevy's or of the shared layer's added while an engine registers stays shared.
-#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct EngineSet(pub Engine);
 
 /// Adds `engine` to the app: `plugins` adds its plugins and systems. Its per-frame systems are the ones it puts in
 /// [`EngineSet`]`(engine)`; the start-up systems added here are its own too, run on its first turn (see the module

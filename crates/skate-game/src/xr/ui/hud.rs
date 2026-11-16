@@ -14,6 +14,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy_mod_xr::camera::XrCamera;
+pub(crate) use skate_engine_api::TrickHud;
 
 const WIDTH_PX: u32 = 640;
 const HEIGHT_PX: u32 = 200;
@@ -22,17 +23,6 @@ const WIDTH_M: f32 = 0.18;
 const OFFSET: Vec3 = Vec3::new(0.27, -0.25, -0.6);
 /// How quickly it catches up with the head, per second.
 const FOLLOW: f32 = 5.0;
-
-/// What the readout shows; each tier writes it every frame.
-#[derive(Resource, Default, Clone, PartialEq)]
-pub(crate) struct TrickHud {
-    /// The trick in progress or just landed.
-    pub name: String,
-    /// Points it scored, if any.
-    pub points: String,
-    /// Score, combo, a new best.
-    pub line: String,
-}
 
 #[derive(Component)]
 struct HudQuad;

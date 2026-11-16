@@ -8,6 +8,7 @@
 use super::XrFiles;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+pub(crate) use skate_engine_api::HudHand;
 
 const FILE: &str = "ar-settings.json";
 
@@ -42,16 +43,6 @@ fn yes() -> bool {
 
 fn one() -> f32 {
     1.0
-}
-
-/// The controller a game's own HUD floats by.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum HudHand {
-    Left,
-    /// (the left one has THUG2's balance meter)
-    #[default]
-    Right,
 }
 
 #[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]

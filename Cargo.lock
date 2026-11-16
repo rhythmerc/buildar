@@ -4872,6 +4872,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "skate-engine-api"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "skate-game"
 version = "0.1.0"
 dependencies = [
@@ -4895,6 +4904,7 @@ dependencies = [
  "skate-audio-formats",
  "skate-core",
  "skate-data",
+ "skate-engine-api",
  "skate-lite-sys",
  "skate-mods",
  "skate-net",

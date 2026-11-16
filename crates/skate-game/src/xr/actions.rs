@@ -11,6 +11,7 @@ use bevy_mod_openxr::{
     session::OxrSession,
 };
 use bevy_mod_xr::session::{XrSessionCreated, session_available};
+pub(crate) use skate_engine_api::{HostInput, LatestTouch, PadHeld};
 
 const TOUCH: &str = "/interaction_profiles/oculus/touch_controller";
 
@@ -36,11 +37,6 @@ pub(crate) struct TouchActions {
     right_hold: openxr::Action<openxr::Posef>,
 }
 
-/// The latest raw controller frame, for systems other than the pad (the rig
-/// uses it for placement mode).
-#[derive(Resource, Default)]
-pub(crate) struct LatestTouch(pub TouchState);
-
 /// Marks the controller aim-pose space entities.
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Hand {
@@ -56,16 +52,6 @@ pub(crate) struct Grip(pub Hand);
 /// Touch state for this frame is read in this set.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct TouchRead;
-
-/// The shared layer's input for this frame (PreUpdate): the controllers read ([`LatestTouch`]), and whether the
-/// shared layer has them ([`PadHeld`]). An engine reads its pad after this.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct HostInput;
-
-/// The controllers are the shared layer's this frame (a menu open, build mode, aiming a spawn, placing the skater
-/// or a park): engines give their skater a neutral pad.
-#[derive(Resource, Default, Clone, Copy, Debug)]
-pub(crate) struct PadHeld(pub bool);
 
 pub(crate) struct TouchActionsPlugin;
 

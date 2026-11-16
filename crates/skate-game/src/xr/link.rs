@@ -9,83 +9,13 @@
 //! `crate::clean::sim`.
 use crate::engines::{BeforeSwitch, Engine, EngineSwitched};
 use bevy::prelude::*;
+pub(crate) use skate_engine_api::{ArWorld, PieceSurfaces, SkaterLink, TeleportSkater};
 
 #[cfg(feature = "retail")]
 #[path = "link_retail.rs"]
 mod retail;
 #[cfg(feature = "retail")]
 pub(crate) use retail::RetailLinkPlugin;
-
-/// One placed piece's collision, world space.
-#[derive(Clone, Default)]
-pub(crate) struct PieceSurfaces {
-    pub quads: Vec<[Vec3; 4]>,
-    pub rail_quads: Vec<[Vec3; 4]>,
-    pub edges: Vec<(Vec3, Vec3)>,
-}
-
-/// The rideable AR world in game metres. `revision` changes on every rebuild.
-#[derive(Resource, Default)]
-pub(crate) struct ArWorld {
-    pub revision: u64,
-    /// Scene planes and box faces.
-    pub room_quads: Vec<[Vec3; 4]>,
-    /// Room-mesh triangles not covered by a plane or box.
-    pub room_triangles: Vec<[Vec3; 3]>,
-    /// Where the room's level faces are opened over a sunk piece (a bowl):
-    /// the piece, and the rectangle at its rim.
-    pub holes: Vec<(u64, [Vec3; 4])>,
-    /// Grindable furniture edges.
-    pub room_edges: Vec<(Vec3, Vec3)>,
-    pub pieces: Vec<PieceSurfaces>,
-    /// Every grind rail: furniture edges and the pieces' rails and copings.
-    pub rails: Vec<Vec<Vec3>>,
-}
-
-impl ArWorld {
-    /// The real room as triangles (no pieces).
-    pub(crate) fn room(&self) -> impl Iterator<Item = [Vec3; 3]> + '_ {
-        self.room_quads
-            .iter()
-            .flat_map(|&[a, b, c, d]| [[a, b, c], [a, c, d]])
-            .chain(self.room_triangles.iter().copied())
-    }
-
-    /// Room and pieces as triangles.
-    pub(crate) fn all_triangles(&self) -> impl Iterator<Item = [Vec3; 3]> + '_ {
-        self.room().chain(self.pieces.iter().flat_map(|p| {
-            p.quads
-                .iter()
-                .chain(&p.rail_quads)
-                .flat_map(|&[a, b, c, d]| [[a, b, c], [a, c, d]])
-        }))
-    }
-}
-
-/// Where the skater is, filled each frame by the running engine's adapter.
-#[derive(Resource, Default)]
-pub(crate) struct SkaterLink {
-    /// Deck position and nose direction, game metres.
-    pub deck: Option<(Vec3, Vec3)>,
-    /// A grind refers to the current rails: collision waits until it ends.
-    pub grinding: bool,
-    /// How big the skater is drawn against life size (THUG2's world size draws it smaller); 0: life size.
-    pub size: f32,
-}
-
-impl SkaterLink {
-    /// The skater's size against life size (1 unless an engine says otherwise).
-    pub(crate) fn size(&self) -> f32 {
-        if self.size > 0.0 { self.size } else { 1.0 }
-    }
-}
-
-/// Put the skater down at `point` (a ground point), facing along `forward`.
-#[derive(Message, Clone, Copy, Debug)]
-pub(crate) struct TeleportSkater {
-    pub point: Vec3,
-    pub forward: Vec3,
-}
 
 pub(crate) struct LinkPlugin;
 
