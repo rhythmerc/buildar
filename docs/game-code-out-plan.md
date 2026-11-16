@@ -291,6 +291,20 @@ them: `ArWorld`, `SkaterLink`, `TeleportSkater` and `TrickHud` (step 5, as the s
 `PadHeld` (step 4, with input); the `EngineCore` trait itself (added piece by piece as its callers arrive,
 complete by step 8).
 
+**Step 2, as done (2026-11-16):** one HUD renderer in the app, `skate-game`'s `engine_hud.rs` and
+`engine_hud.wgsl`. It takes a `HudFrame` and a texture fetcher. Each part gets its own camera and image, on a layer
+from a pool (22-30), at the part's `resolution` (image pixels per canvas pixel). A `Hand` part becomes a `HandHud`
+panel; an `AtPlayer` part is a billboard at the player's `Focus`. `Focus` and `HudPart::resolution` are new in
+engine-core. Mesh and material slots are reused, and an unchanged frame is skipped. Everything it spawns is
+`EngineOwned`. One material and shader cover both shadings and all three blends: `Modulate`
+with `gamma` is THUG2's maths exactly, and `Add` is a pipeline key. THUG2's side (parts, sizes, views, placements, the
+D3D draw → `HudDraw`) is the new Bevy-free crate `crates/thug2-engine` (`hud::frame`), which moves to thug2-headless
+with `thug2-sys` in step 10. `thug2/hud.rs` and `hud.wgsl` are gone. The meter's skater frame comes from `thug2.rs` as
+a `Focus` until step 5. Parity: 24 real THUG2 HUD frames (grind and manual meters, the score, trick strings) and a
+synthetic every-blend frame were recorded and drawn through the old path. Replayed through the new one, all 75 part
+pictures are identical (max difference 0). A GPU test checks each shading and blend against its maths (within
+1/255).
+
 ### Risks
 
 - **Quest performance:**

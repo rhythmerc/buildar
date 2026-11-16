@@ -1,0 +1,14 @@
+[package]
+name = "thug2-engine"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "THUG2's side of the engine contract (engine-core): its game knowledge over thug2-sys, with no Bevy. A temporary home: it moves to the thug2-headless repo with thug2-sys (docs/game-code-out-plan.md, step 10)."
+
+[lib]
+name = "thug2_engine"
+path = "src/lib.rs"
+
+[dependencies]
+engine-core.workspace = true
+thug2-sys = { path = "../thug2-sys" }

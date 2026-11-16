@@ -58,6 +58,8 @@ mod clean;
 #[cfg_attr(not(feature = "xr"), allow(dead_code))]
 mod engines;
 #[cfg(feature = "thug2")]
+mod engine_hud;
+#[cfg(feature = "thug2")]
 mod thug2;
 
 /// Platform hooks for shared storage (the headset's `Download` folder),
