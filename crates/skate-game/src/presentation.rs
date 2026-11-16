@@ -8,7 +8,12 @@ pub(crate) struct PresentationPlugin;
 impl Plugin for PresentationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Presentation>()
-            .add_systems(FixedUpdate, capture.after(SimulationSet::Physics));
+            .add_systems(
+                FixedUpdate,
+                capture
+                    .after(SimulationSet::Physics)
+                    .in_set(crate::app::SKATE3),
+            );
     }
 }
 
@@ -50,18 +55,17 @@ fn capture(
     mut history: ResMut<Presentation>,
     mut replay: ResMut<crate::replay::Replay>,
 ) {
-    if skater.pose_generation == history.generation {
+    let pose = skate3_sim::SkaterPose::of(&skater);
+    if pose.generation == history.generation {
         return;
     }
     let Some(frame) = camera.frame else {
         return;
     };
     let next = Snapshot {
-        root: Transform::from_matrix(crate::animation::native_matrix(
-            skater.animated_skeleton.roots.animation_to_world,
-        )),
-        bones: skater
-            .render_pose
+        root: Transform::from_matrix(pose.root),
+        bones: pose
+            .bones
             .iter()
             .copied()
             .map(crate::animation::native_matrix)
@@ -85,7 +89,7 @@ fn capture(
     } else {
         history.pair = Some((next.clone(), next));
     }
-    history.generation = skater.pose_generation;
+    history.generation = pose.generation;
     history.period = time.timestep();
 }
 

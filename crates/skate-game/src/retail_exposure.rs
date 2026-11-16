@@ -54,9 +54,10 @@ pub(super) fn install(app: &mut App) {
         .add_systems(
             PreUpdate,
             load.after(crate::map_transition::MapTransitionSet)
-                .run_if(super::world_changed),
+                .run_if(super::world_changed)
+                .in_set(crate::app::SKATE3),
         )
-        .add_systems(Update, advance);
+        .add_systems(Update, advance.in_set(crate::app::SKATE3));
     if let Some(render) = app.get_sub_app_mut(RenderApp) {
         render
             .add_systems(RenderStartup, initialize)

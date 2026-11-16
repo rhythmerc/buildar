@@ -228,13 +228,16 @@ impl Plugin for CustomiserPlugin {
             .add_systems(Startup, crate::customiser_parts::setup)
             .add_systems(
                 PreUpdate,
-                navigation.before(crate::graphics_menu::MenuInput),
+                navigation
+                    .before(crate::graphics_menu::MenuInput)
+                    .in_set(crate::app::SKATE3),
             )
             .add_systems(
                 PreUpdate,
                 preferences
                     .after(crate::map_transition::MapTransitionSet)
-                    .before(crate::input::poll_controllers),
+                    .before(crate::input::poll_controllers)
+                    .in_set(crate::app::SKATE3),
             )
             .add_systems(PostStartup, setup)
             .add_systems(
@@ -247,7 +250,8 @@ impl Plugin for CustomiserPlugin {
                 )
                     .chain()
                     .after(crate::graphics_menu::interact)
-                    .before(crate::app::FrameSet::Animation),
+                    .before(crate::app::FrameSet::Animation)
+                    .in_set(crate::app::SKATE3),
             );
     }
 }

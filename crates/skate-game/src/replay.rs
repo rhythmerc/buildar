@@ -136,10 +136,11 @@ impl Plugin for ReplayPlugin {
                 PreUpdate,
                 controls
                     .after(crate::input::poll_controllers)
-                    .after(bevy::input::InputSystems),
+                    .after(bevy::input::InputSystems)
+                    .in_set(crate::app::SKATE3),
             )
             .add_systems(Startup, setup_ui)
-            .add_systems(Update, update_ui);
+            .add_systems(Update, update_ui.in_set(crate::app::SKATE3));
     }
 }
 

@@ -234,13 +234,16 @@ pub(super) fn install(app: &mut App) {
     app.init_resource::<Vehicles>()
         .add_systems(
             FixedUpdate,
-            tick.after(super::fixed).run_if(network::simulation_active),
+            tick.after(super::fixed)
+                .run_if(network::simulation_active)
+                .in_set(crate::app::SKATE3),
         )
         .add_systems(
             Update,
             present
                 .after(crate::app::FrameSet::Animation)
-                .before(crate::camera::present),
+                .before(crate::camera::present)
+                .in_set(crate::app::SKATE3),
         );
 }
 pub(super) fn snapshot(world: &World) -> Value {

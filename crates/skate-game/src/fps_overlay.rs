@@ -14,7 +14,7 @@ struct FrameSample {
 
 impl Plugin for FpsOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn).add_systems(Update, update);
+        app.add_systems(Startup, spawn).add_systems(Update, update.in_set(crate::app::SKATE3));
     }
 }
 

@@ -44,7 +44,7 @@ pub(crate) struct ModSync {
 }
 pub(super) fn install(app: &mut App) {
     app.init_resource::<ModSync>()
-        .add_systems(Update, synchronize.after(vehicles::present));
+        .add_systems(Update, synchronize.after(vehicles::present).in_set(crate::app::SKATE3));
 }
 pub(super) fn snapshot(world: &World) -> Value {
     let (active, id, host) = world

@@ -37,7 +37,7 @@ pub(super) fn install(app: &mut App) {
     app.init_resource::<ShadowState>()
         .add_plugins(ExtractResourcePlugin::<ShadowState>::default())
         .add_systems(Startup, (initialize, load_pca))
-        .add_systems(Update, clock);
+        .add_systems(Update, clock.in_set(crate::app::SKATE3));
     if let Some(render) = app.get_sub_app_mut(RenderApp) {
         render.add_systems(Render, upload.in_set(RenderSystems::PrepareResources));
     }

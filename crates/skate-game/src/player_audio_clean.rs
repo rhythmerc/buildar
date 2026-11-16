@@ -240,14 +240,15 @@ struct Edges {
 
 #[cfg(feature = "retail")]
 pub(super) fn install(app: &mut App) {
-    use bevy::audio::AddAudioSource;
     // (as `install_sk8`: `setup` makes its sounds as this source, in either tier)
-    app.add_audio_source::<CleanPcm>()
-        .add_audio_source::<ReverbPcm>()
-        .init_resource::<RoomFromWorld>()
+    add_sources(app);
+    app.init_resource::<RoomFromWorld>()
         .init_resource::<SurfaceHints>()
         .add_systems(Startup, setup)
-        .add_systems(Update, (observe, frontend, lab, mix, follow_skater).chain());
+        .add_systems(
+            Update,
+            (observe, frontend, lab, mix, follow_skater).chain().in_set(crate::app::SKATE3),
+        );
 }
 
 /// A one-shot from the clean-room engine.
@@ -280,10 +281,8 @@ pub(crate) struct Sk8Sounds {
 /// The driver for the clean-room engine: same sounds, loops and mixing, fed
 /// by [`Sk8Sounds`] instead of the retail physics observation.
 pub(crate) fn install_sk8(app: &mut App) {
-    use bevy::audio::AddAudioSource;
-    app.add_audio_source::<CleanPcm>()
-        .add_audio_source::<ReverbPcm>()
-        .init_resource::<RoomFromWorld>()
+    add_sources(app);
+    app.init_resource::<RoomFromWorld>()
         .init_resource::<SurfaceHints>()
         .init_resource::<Sk8Sounds>()
         .add_systems(Startup, setup)
@@ -291,6 +290,15 @@ pub(crate) fn install_sk8(app: &mut App) {
             Update,
             (observe_sk8, lab, mix, follow_skater).chain().in_set(crate::engines::EngineSet(crate::engines::Engine::Sk8)),
         );
+}
+
+/// The sounds' sources, once: both engines' drivers (Skate 3's clean fallback and SK8's) make their sounds as these,
+/// and Bevy's playback systems for them are shared - a second copy would start each sound twice.
+fn add_sources(app: &mut App) {
+    use bevy::audio::AddAudioSource;
+    if !app.world().contains_resource::<Assets<CleanPcm>>() {
+        app.add_audio_source::<CleanPcm>().add_audio_source::<ReverbPcm>();
+    }
 }
 
 fn observe_sk8(
@@ -614,10 +622,12 @@ fn observe(
     mut observations: MessageReader<PlayerAudioObservation>,
     virtual_time: Res<Time<bevy::time::Virtual>>,
     real_time: Res<Time<bevy::time::Real>>,
+    hold: Option<Res<crate::app::Hold>>,
 ) {
     let Some(mut audio) = audio else { return };
     let now = real_time.elapsed_secs();
-    audio.paused = virtual_time.is_paused();
+    // (the desktop's menu pauses virtual time; the headset's menus and build mode hold Skate 3)
+    audio.paused = virtual_time.is_paused() || hold.is_some_and(|h| h.paused());
     if let Some(at) = audio.pending_catch {
         if now >= at {
             audio.pending_catch = None;

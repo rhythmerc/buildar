@@ -133,7 +133,9 @@ impl Plugin for PerformancePlugin {
         if std::env::var_os("SKATE_PERF_CAMERA_SWEEP").is_some() {
             app.add_systems(
                 Update,
-                sweep_camera.after(crate::app::FrameSet::Verification),
+                sweep_camera
+                    .after(crate::app::FrameSet::Verification)
+                    .in_set(crate::app::SKATE3),
             );
         }
         app.insert_resource(Performance {
@@ -147,8 +149,8 @@ impl Plugin for PerformancePlugin {
             sample_times: Vec::with_capacity(16384),
             render,
         })
-        .add_systems(First, begin)
-        .add_systems(Last, finish);
+        .add_systems(First, begin.in_set(crate::app::SKATE3))
+        .add_systems(Last, finish.in_set(crate::app::SKATE3));
     }
 }
 

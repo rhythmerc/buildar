@@ -37,7 +37,7 @@ struct Vertex {
 struct MarkerHudRoot;
 
 pub(super) fn install(app: &mut App) {
-    app.add_systems(Startup, load).add_systems(Update, present);
+    app.add_systems(Startup, load).add_systems(Update, present.in_set(crate::app::SKATE3));
 }
 
 pub(super) fn overlay_path(root: &Path) -> PathBuf {

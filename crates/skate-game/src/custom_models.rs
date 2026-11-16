@@ -285,15 +285,21 @@ impl Plugin for CustomModelsPlugin {
             filter: 0,
             dirty: true,
         })
-        .add_systems(PreUpdate, interact.after(crate::graphics_menu::MenuInput))
+        .add_systems(
+            PreUpdate,
+            interact
+                .after(crate::graphics_menu::MenuInput)
+                .in_set(crate::app::SKATE3),
+        )
         .add_systems(
             Update,
             (poll_import, publish, draw)
                 .chain()
                 .before(crate::customiser_parts::update)
-                .before(crate::app::FrameSet::Animation),
+                .before(crate::app::FrameSet::Animation)
+                .in_set(crate::app::SKATE3),
         )
-        .add_systems(Last, stop_import);
+        .add_systems(Last, stop_import.in_set(crate::app::SKATE3));
     }
 }
 fn interact(

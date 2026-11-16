@@ -93,7 +93,8 @@ pub(crate) fn install(app: &mut App) {
         PreUpdate,
         interact
             .after(crate::customiser::navigation)
-            .before(crate::graphics_menu::MenuInput),
+            .before(crate::graphics_menu::MenuInput)
+            .in_set(crate::app::SKATE3),
     );
 }
 fn interact(

@@ -107,7 +107,12 @@ impl Plugin for PhysicsPlugin {
             .add_systems(FixedUpdate, sample.in_set(SimulationSet::Controls))
             .add_systems(FixedUpdate, advance.in_set(SimulationSet::Physics))
             .init_resource::<AudioObservationCursor>()
-            .add_systems(FixedUpdate, publish_audio.after(SimulationSet::Physics))
+            .add_systems(
+                FixedUpdate,
+                publish_audio
+                    .after(SimulationSet::Physics)
+                    .in_set(crate::app::SKATE3),
+            )
             .add_systems(Update, present.in_set(FrameSet::Physics));
     }
 }
@@ -187,12 +192,13 @@ fn present(
     history: Res<crate::presentation::Presentation>,
     replay: Res<crate::replay::Replay>,
     time: Res<Time<Fixed>>,
+    hold: Res<crate::app::Hold>,
     mut roots: Query<&mut Transform, With<PlayerRoot>>,
 ) {
     if physics.failed {
         return;
     }
-    let Some((previous, current, alpha)) = history.view(&replay, time.overstep_fraction()) else {
+    let Some((previous, current, alpha)) = history.view(&replay, hold.alpha(&time)) else {
         return;
     };
     for mut root in &mut roots {

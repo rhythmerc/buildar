@@ -100,18 +100,25 @@ impl Plugin for ScoringHudPlugin {
         // In the headset: read on a worker (it took the first frame ~4.5 s on the main thread) and shown on a panel
         // by a controller (`xr::hand_hud`).
         .add_systems(PostStartup, xr::start.run_if(|config: Res<Config>| config.xr.is_some()))
-        .add_systems(Update, xr::finish.run_if(resource_exists::<xr::Loading>))
+        .add_systems(
+            Update,
+            xr::finish
+                .run_if(resource_exists::<xr::Loading>)
+                .in_set(crate::app::SKATE3),
+        )
         .add_systems(
             FixedUpdate,
             (advance, multiplier_sounds)
                 .after(crate::app::SimulationSet::Physics)
-                .run_if(crate::graphics_menu::gameplay_active),
+                .run_if(crate::graphics_menu::gameplay_active)
+                .in_set(crate::app::SKATE3),
         )
         .add_systems(
             Update,
             (resize_target, reset, render)
                 .chain()
-                .after(crate::app::FrameSet::Physics),
+                .after(crate::app::FrameSet::Physics)
+                .in_set(crate::app::SKATE3),
         );
     }
 }

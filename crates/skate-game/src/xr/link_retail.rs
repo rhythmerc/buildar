@@ -5,25 +5,36 @@ use crate::physics::ground::PlacedSurfaces;
 use crate::physics::{GamePhysics, SkaterRuntime};
 use bevy::prelude::*;
 use skate_core::math::Vector3;
-use skate_core::physics::board::BodyId;
 
 /// Adapter for the faithful port (imported-disc tier).
 pub(crate) struct RetailLinkPlugin;
 
 impl Plugin for RetailLinkPlugin {
     fn build(&self, app: &mut App) {
+        use crate::app::SKATE3;
         app.init_resource::<crate::physics::OffboardView>()
             .init_resource::<crate::input::ExternalPad>()
-            .add_systems(Update, (apply_world, teleport, publish_pose, publish_hud).chain())
-            .add_systems(PreUpdate, publish_view)
+            .add_systems(Update, (apply_world, teleport, publish_pose, publish_hud).chain().in_set(SKATE3))
+            .add_systems(PreUpdate, publish_view.in_set(SKATE3))
+            .add_systems(PreUpdate, hold.after(crate::xr::actions::HostInput).in_set(SKATE3))
             .add_systems(
                 PreUpdate,
                 pad_from_touch
                     .after(crate::xr::actions::HostInput)
                     .before(crate::input::poll_controllers)
-                    .run_if(bevy_mod_openxr::openxr_session_running),
+                    .run_if(bevy_mod_openxr::openxr_session_running)
+                    .in_set(SKATE3),
             );
     }
+}
+
+/// Skate 3 paused while the shared layer has the player busy (a menu or build mode): [`crate::app::Hold`]. (While
+/// only `held` is set - aiming a spawn, placing - it keeps running on a neutral pad: `pad_from_touch`.)
+fn hold(held: Res<crate::xr::actions::PadHeld>, fixed: Res<Time<Fixed>>, mut hold: ResMut<crate::app::Hold>) {
+    if hold.paused() != held.pause {
+        info!("Skate 3 {}", if held.pause { "paused" } else { "resumed" });
+    }
+    hold.set(held.pause, &fixed);
 }
 
 /// The game's pad from the Touch controllers (Skate 3's gestures: `TouchMapper`), neutral while the shared layer has
@@ -120,11 +131,9 @@ fn publish_pose(
     let (Some(physics), Some(skater)) = (physics, skater) else {
         return;
     };
-    let deck = physics.board.part_transforms()[BodyId::Deck.index()];
-    let t = deck.translation;
-    let f = deck.basis.columns[2];
-    link.deck = Some((Vec3::new(t.x, t.y, t.z), Vec3::new(f[0], f[1], f[2])));
-    link.grinding = skater.is_grinding();
+    let at = skate3_sim::Link::of(&physics, &skater);
+    link.deck = Some((at.deck, at.deck_forward));
+    link.grinding = at.grinding;
 }
 
 /// The port's scoring for the corner readout: the trick being composed, the

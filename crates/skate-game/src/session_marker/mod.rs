@@ -52,14 +52,17 @@ impl Plugin for SessionMarkerPlugin {
             .add_message::<crate::skate_audio::FrontEndSoundRequest>()
             .add_systems(
                 PreUpdate,
-                suspend.after(crate::map_transition::MapTransitionSet),
+                suspend
+                    .after(crate::map_transition::MapTransitionSet)
+                    .in_set(crate::app::SKATE3),
             )
             .add_systems(
                 FixedUpdate,
                 update
                     .after(SimulationSet::Input)
                     .before(SimulationSet::Controls)
-                    .run_if(crate::graphics_menu::gameplay_active),
+                    .run_if(crate::graphics_menu::gameplay_active)
+                    .in_set(crate::app::SKATE3),
             );
         hud::install(app);
         effect::install(app);

@@ -438,7 +438,8 @@ impl Plugin for SkateAudioPlugin {
                     start_bank_decoding,
                     finish_decoding,
                     finish_bank_decoding,
-                ),
+                )
+                    .in_set(crate::app::SKATE3),
             );
     }
 }
