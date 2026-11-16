@@ -57,25 +57,13 @@ fn spawn(
     }
 }
 
-#[derive(Default)]
-pub(crate) struct VehicleCameraBlend {
-    active: bool,
-    previous: Option<Transform>,
-    from: Option<Transform>,
-    elapsed: f32,
-}
-
 pub(crate) fn present(
-    vehicles: Res<crate::modding::vehicles::Vehicles>,
     mut runtime: ResMut<CameraRuntime>,
     windows: Query<&Window>,
     history: Res<crate::presentation::Presentation>,
     time: Res<Time<Fixed>>,
     hold: Res<crate::app::Hold>,
     replay: Res<crate::replay::Replay>,
-    virtual_time: Res<Time<Virtual>>,
-    mut vehicle_blend: Local<VehicleCameraBlend>,
-    customiser: Option<Res<crate::customiser::Customiser>>,
     config: Res<Config>,
     mut cameras: Query<(&mut Camera, &mut Transform, &mut Projection), With<GameplayCamera>>,
 ) {
@@ -104,42 +92,6 @@ pub(crate) fn present(
         if let Projection::Perspective(p) = &mut *projection {
             p.fov = previous.fov + (current.fov - previous.fov) * alpha;
         }
-        if let Some(customiser) = customiser.as_ref().filter(|c| c.open) {
-            let (height, distance, yaw) = customiser.preview_camera();
-            let center = current.root.translation + Vec3::Y * height;
-            let offset =
-                current.root.rotation * Quat::from_rotation_y(yaw) * Vec3::new(0.0, 0.25, distance);
-            let eye = center + offset;
-            let right = offset.normalize().cross(Vec3::Y).normalize();
-            *transform = Transform::from_translation(eye)
-                .looking_at(center + right * (distance * 0.265625), Vec3::Y);
-            if let Projection::Perspective(p) = &mut *projection {
-                p.fov = 50_f32.to_radians();
-            }
-        }
-        let vehicle = vehicles.camera();
-        let active = vehicle.is_some();
-        if active != vehicle_blend.active {
-            vehicle_blend.from = vehicle_blend.previous;
-            vehicle_blend.elapsed = 0.;
-            vehicle_blend.active = active;
-        }
-        if let Some(pose) = vehicle {
-            *transform = pose;
-        }
-        vehicle_blend.elapsed += virtual_time.delta_secs();
-        if let Some(from) = vehicle_blend.from {
-            if vehicle_blend.elapsed < 0.5 && from.translation.distance(transform.translation) < 50.
-            {
-                let t = (vehicle_blend.elapsed / 0.5).clamp(0., 1.);
-                *transform = crate::presentation::blend(from, *transform, t * t * (3. - 2. * t));
-            } else {
-                vehicle_blend.from = None;
-            }
-        }
-        // Vehicle motion is already interpolated with the rider/chassis. A separate
-        // follow filter introduces relative motion and makes fixed ticks visible.
-        vehicle_blend.previous = Some(*transform);
         // In XR the eye cameras are the only views (see `xr::headset_only_rendering`).
         camera.is_active = config.xr.is_none();
     }

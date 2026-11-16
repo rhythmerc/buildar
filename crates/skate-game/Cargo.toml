@@ -12,24 +12,6 @@ path = "src/lib.rs"
 name = "skate3rust"
 path = "src/main.rs"
 
-[[bin]]
-name = "skate3-audio-check"
-path = "src/audio_check_main.rs"
-test = false
-required-features = ["retail"]
-
-[[bin]]
-name = "skate3-multiplayer"
-path = "src/multiplayer_main.rs"
-test = false
-required-features = ["retail"]
-
-[[bin]]
-name = "skate3-custom-models"
-path = "src/custom_models_main.rs"
-test = false
-required-features = ["retail"]
-
 [features]
 default = ["dev-dynamic", "retail"]
 dev-dynamic = ["bevy/dynamic_linking"]
@@ -38,8 +20,7 @@ dev-dynamic = ["bevy/dynamic_linking"]
 # built without it, so none of that code (nor the crates it needs) is in that app.
 retail = [
     "dep:tracing-log", "dep:skate3-sim", "dep:skate-core", "dep:skate-data", "dep:skate-audio-formats",
-    "dep:skate-audio-core", "dep:half", "dep:skate-mods", "dep:skate-vehicles", "dep:skate-net",
-    "dep:blake3", "dep:image", "dep:zip", "zip/deflate-flate2-zlib-rs",
+    "dep:half", "dep:zip", "zip/deflate-flate2-zlib-rs",
 ]
 # OpenXR passthrough mode (`--xr`); the Quest build always enables it.
 xr = ["dep:gltf", "dep:bevy_mod_openxr", "dep:bevy_mod_xr", "dep:openxr", "dep:roomtone-sys", "dep:wgpu", "dep:wgpu-hal", "dep:ash"]
@@ -60,21 +41,16 @@ skate3-sim = { workspace = true, optional = true }
 skate-core = { workspace = true, optional = true }
 skate-data = { workspace = true, optional = true }
 skate-audio-formats = { workspace = true, optional = true }
-skate-audio-core = { workspace = true, optional = true }
 half = { version = "=2.7.1", optional = true }
 serde_json.workspace = true
 # Steam Audio (libphonon.so) is loaded at run time, if it is there (src/binaural.rs).
 libloading = "0.8"
 serde.workspace = true
-skate-mods = { path = "../skate-mods", optional = true }
 skate-lite-sys = { path = "../skate-lite-sys" }
 thug2-sys = { path = "../thug2-sys", optional = true }
 # Room light estimation for the passthrough mode (xr::room_light).
 roomtone-sys = { path = "../roomtone-sys", optional = true }
 
-skate-vehicles = { path = "../skate-vehicles", optional = true }
-skate-net = { path = "../skate-net", optional = true }
-blake3 = { version = "=1.8.7", optional = true }
 bevy_mod_openxr = { version = "=0.5.0", optional = true, features = ["fb_passthrough"] }
 bevy_mod_xr = { version = "=0.5.0", optional = true }
 openxr = { version = "0.21.1", optional = true }
@@ -84,7 +60,6 @@ wgpu-hal = { version = "=27.0.4", default-features = false, features = ["vulkan"
 ash = { version = "0.38", optional = true }
 # Unzips an imported Skate 3 bundle in the headset (xr::ui::import; retail only).
 zip = { version = "6", optional = true, default-features = false }
-image = { version = "=0.25.10", optional = true, default-features = false, features = ["png", "jpeg"] }
 
 # Game pads on Quest come through the (vendored, patched) winit Android backend: xr::actions.
 [target.'cfg(target_os = "android")'.dependencies]

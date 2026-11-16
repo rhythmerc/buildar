@@ -122,7 +122,7 @@ impl Plugin for ScoringHudPlugin {
         );
     }
 }
-/// Where the player's prepared HUD is (`docs/hud-installation.md`).
+/// Where the player's prepared HUD is.
 fn hud_root(config: &Config) -> PathBuf {
     std::env::var_os("SKATE_SCORING_HUD_ROOT")
         .map(PathBuf::from)
@@ -264,7 +264,7 @@ fn setup(
             info!("Original scoring HUD loaded from {}", root.display());
         }
         Err(error) => error!(
-            "Original scoring HUD could not load from {}: {error}. See docs/hud-installation.md",
+            "Original scoring HUD could not load from {}: {error}",
             root.display()
         ),
     }
@@ -684,7 +684,7 @@ mod xr {
         let loaded = match result {
             Ok(loaded) => loaded,
             Err(error) => {
-                error!("Original scoring HUD could not load from {error}. See docs/hud-installation.md");
+                error!("Original scoring HUD could not load from {error}");
                 return;
             }
         };

@@ -11,7 +11,7 @@
 //!
 //! ## Verified by recording the sound card
 //!
-//! `skate3-audio-check` (`src/audio_check_main.rs`) runs this plugin with no window, renderer or
+//! A headless harness (the former `skate3-audio-check` bin, now in git history) ran this plugin with no window, renderer or
 //! assets, so the audio path can be exercised on a checkout the game itself will not boot on.
 //! Playing 60 blocks of the five-channel ambience bed through it, while recording the output
 //! device's monitor:
@@ -57,9 +57,7 @@ pub(crate) mod clean;
 
 /// A front-end one-shot to play, by the 64-bit AttribSys id retail passes to `GlobalFEPlaySound`
 /// (`sub_825DFAF0`).
-///
-/// This lives here rather than beside its producer because `player_audio` is shared by every
-/// binary in this crate while `session_marker` is declared only by the game binary.
+/// (Written by the scoring HUD.)
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrontEndSoundRequest(pub u64);
 

@@ -98,13 +98,6 @@ pub(crate) fn build(
         .is_some_and(|map| crate::retail_render::RetailScene::for_map(map));
     let mut app = App::new();
     crate::custom_models::register_source(&mut app);
-    app.register_asset_source(
-        "mods",
-        bevy::asset::io::AssetSourceBuilder::platform_default(
-            &crate::modding::package_root().to_string_lossy(),
-            None,
-        ),
-    );
     // Bevy's Android default `AssetReader` only ever reads from inside the
     // APK's bundled `assets/` (via `AssetManager`); it ignores
     // `AssetPlugin::file_path` entirely. The Quest build instead pushes a
@@ -130,11 +123,7 @@ pub(crate) fn build(
             })
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: config
-                        .multiplayer
-                        .title
-                        .clone()
-                        .unwrap_or_else(|| "Skate 3 Rust Engine".into()),
+                    title: "Skate 3 Rust Engine".into(),
                     resolution: (1280, 800).into(),
                     ..default()
                 }),
@@ -152,7 +141,7 @@ pub(crate) fn build(
             })
             .build()
             .disable::<bevy::log::LogPlugin>()
-            // Gameplay and menu navigation both use raw XInput. No game system
+            // The pad comes from the headset (input::ExternalPad). No game system
             // consumes Bevy gamepad events/rumble; its second device backend can
             // stall PreUpdate (70.68 ms in the University capture).
             .disable::<bevy::gilrs::GilrsPlugin>();
@@ -243,17 +232,10 @@ fn add_retail(app: &mut App) {
         verification::VerificationPlugin,
         crate::performance::PerformancePlugin,
     ));
-    app.add_plugins((crate::session_marker::SessionMarkerPlugin, crate::customiser::CustomiserPlugin));
+    app.add_plugins(crate::customiser_parts::CharacterPlugin);
     app.add_plugins(crate::custom_models::CustomModelsPlugin);
-    app.add_plugins(crate::modding::ModdingPlugin);
     app.add_plugins(crate::skate_audio::SkateAudioPlugin);
-    crate::teleport_menu::install(app);
-    app.add_plugins(crate::updater::UpdaterPlugin);
-    app.add_plugins(crate::multiplayer::MultiplayerPlugin);
     app.add_plugins(crate::scoring_hud::ScoringHudPlugin);
-    app.add_systems(Last, crate::crash_context::sample.in_set(SKATE3));
-    // (the profiler's frame markers stay shared: they time every frame, whichever engine runs)
-    crate::profiling::install(app);
 }
 
 #[cfg(test)]

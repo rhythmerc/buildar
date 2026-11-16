@@ -43,9 +43,7 @@ fn installed_worlds_prepare_commit_and_retire_without_simulation() {
         difficulty,
         check_assets: false,
         start_paused: false,
-        teleport: None,
         xr: None,
-        multiplayer: Default::default(),
         map_fingerprint: crate::config::map_fingerprint(None).unwrap(),
     });
     world.insert_resource(CurrentMap::from_package(None, None));

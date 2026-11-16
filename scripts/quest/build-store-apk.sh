@@ -20,7 +20,7 @@ if [ ! -f crates/skate-quest/runtime_libs/arm64-v8a/libphonon.so ]; then
 fi
 export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
 cargo apk build -p sk8-quest --release --lib
-APK="$(ls -t target/release/apk/sk8ar*.apk | grep -v unaligned | head -1)"
+APK="$(ls -t "${CARGO_TARGET_DIR:-target}"/release/apk/sk8ar*.apk | grep -v unaligned | head -1)"
 # The store build must carry nothing from the retail game: no import code, no Skate 3 name.
 if unzip -p "$APK" 'lib/arm64-v8a/libsk8_quest.so' | LC_ALL=C grep -a -q -e 'use-retail-data' -e 'Skate 3 data'; then
   echo "ERROR: $APK still contains the imported-disc tier" >&2

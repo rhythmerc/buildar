@@ -105,27 +105,6 @@ pub(crate) struct CustomModels {
     dirty: bool,
 }
 impl CustomModels {
-    pub(crate) fn online_selection(&self) -> Option<(Option<String>, PathBuf)> {
-        let e = self
-            .entries
-            .iter()
-            .find(|e| Some(&e.id) == self.active.as_ref())?;
-        let directory = if e.asset_prefix.is_empty() {
-            &self.directory
-        } else {
-            &self.native_directory
-        };
-        Some((
-            e.native.as_ref().map(|n| n.key.clone()),
-            directory.join("entries").join(&e.id).join("character.glb"),
-        ))
-    }
-    pub(crate) fn online_native_path(&self, key: &str) -> Option<String> {
-        self.entries
-            .iter()
-            .find(|e| e.native.as_ref().is_some_and(|n| n.key == key))
-            .map(|e| e.asset_path("character.glb"))
-    }
     pub(crate) fn native_style(&self) -> Option<&'static str> {
         self.active
             .as_ref()
@@ -160,11 +139,6 @@ pub(crate) fn library_path() -> PathBuf {
         .join("Skate3RustEngine/custom-characters")
 }
 pub(crate) fn register_source(app: &mut App) {
-    let cache = crate::multiplayer::appearance::cache_directory().to_owned();
-    app.register_asset_source(
-        "online-characters",
-        AssetSourceBuilder::new(move || Box::new(FileAssetReader::new(cache.clone()))),
-    );
     let directory = library_path();
     app.register_asset_source(
         "characters",
@@ -305,7 +279,7 @@ impl Plugin for CustomModelsPlugin {
 fn interact(
     mut state: ResMut<CustomModels>,
     keys: Res<ButtonInput<KeyCode>>,
-    nav: Res<crate::customiser::Navigation>,
+    nav: Res<crate::input::Navigation>,
     buttons: Query<(&Interaction, &Action), Changed<Interaction>>,
     mut wheel: MessageReader<MouseWheel>,
     mut scroll_nodes: Query<(&mut ScrollPosition, &ComputedNode), With<ModelScroll>>,

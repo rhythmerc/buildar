@@ -254,7 +254,7 @@ footer{padding:30px 0 50px;color:var(--faint);font-size:13px}
 
   <h3>Talking to the Quest</h3>
   <ul>
-    <li><b>adb.</b> Use an adb server that is already running (SideQuest / Meta Quest Developer Hub start one on port 5037; starting a second one breaks theirs). If none, start our own copy of Google platform-tools, downloaded on first run from Google's URL and hash-pinned, the same way the desktop setup already downloads extract-xiso (<code>docs/installation.md</code>). Alternative to evaluate: the <code>adb_client</code> crate (pure Rust, talks USB directly), which would avoid shipping Google's binary.</li>
+    <li><b>adb.</b> Use an adb server that is already running (SideQuest / Meta Quest Developer Hub start one on port 5037; starting a second one breaks theirs). If none, start our own copy of Google platform-tools, downloaded on first run from Google's URL and hash-pinned, the same way the desktop setup already downloads extract-xiso (<code>tools/setup.py</code>; its docs were removed from the tree, see git history). Alternative to evaluate: the <code>adb_client</code> crate (pure Rust, talks USB directly), which would avoid shipping Google's binary.</li>
     <li><b>Headset state machine:</b> not seen → seen but <code>unauthorized</code> (put on headset, tick "Always allow", Allow) → <code>device</code> → app installed? (<code>pm list packages</code>, <code>dumpsys package</code> for versionName) → free space (<code>df /sdcard</code>).</li>
     <li><b>Linux USB permission:</b> a udev rule for Meta's vendor ID, e.g. <code>SUBSYSTEM=="usb", ATTR{idVendor}=="2833", MODE="0660", TAG+="uaccess"</code> in <code>/etc/udev/rules.d/51-quest.rules</code>. The installer detects "USB device present but adb can't open it" and offers a one-click <code>pkexec</code> install of the rule (or a copy-paste command). <code>/etc</code> is writable on Bazzite; check first whether Bazzite already ships Android rules.</li>
     <li><b>Windows driver:</b> Quest often needs Meta's "Oculus ADB Driver". Detect "Quest seen as MTP only" and link to / run the driver installer.</li>
@@ -285,7 +285,7 @@ footer{padding:30px 0 50px;color:var(--faint);font-size:13px}
   <ul>
     <li>The installer keeps the finished bundle in a PC cache (<code>%LOCALAPPDATA%\SK8Installer\bundles</code>, <code>~/.local/share/sk8-installer/bundles</code>) so re-pushing after a reinstall or a factory reset takes minutes, not a reconversion. User can delete it from Settings.</li>
     <li>The APK states which bundle <code>format</code> values it reads (an asset file or the installer's release index maps APK version → format). Mismatch = "Update available" on the engine card.</li>
-    <li>A new converter version (same signal the desktop updater already uses: "changed extractor fingerprints" in <code>docs/updates.md</code>) also shows "Update available"; the installer remembers the source path and rebuilds only when the user agrees.</li>
+    <li>A new converter version (same signal the desktop updater already uses: "changed extractor fingerprints", removed from the tree; see git history) also shows "Update available"; the installer remembers the source path and rebuilds only when the user agrees.</li>
     <li>"Save bundle as zip" stays as an export for people without adb; the in-app Import (<code>xr/ui/import.rs</code>) still reads it.</li>
   </ul>
 
@@ -307,7 +307,7 @@ footer{padding:30px 0 50px;color:var(--faint);font-size:13px}
 
   <h3>Updates</h3>
   <ul>
-    <li><b>Installer:</b> checks a JSON release index (GitHub Releases), sha256 + minisign signature, Stable/Latest channels like the desktop updater (<code>docs/updates.md</code>). On Linux AppImage, replace the file in place; on Windows, run the new NSIS installer.</li>
+    <li><b>Installer:</b> checks a JSON release index (GitHub Releases), sha256 + minisign signature, Stable/Latest channels like the old desktop updater (removed; see git history). On Linux AppImage, replace the file in place; on Windows, run the new NSIS installer.</li>
     <li><b>APK:</b> compare headset versionName with the index; <code>adb install -r</code>. Handle <code>INSTALL_FAILED_UPDATE_INCOMPATIBLE</code> (different signing key): uninstalling deletes the files dir, so warn and offer to re-push the cached bundle afterwards.</li>
     <li><b>Bundles:</b> per-file diff via <code>bundle.json</code>; only changed files are pushed.</li>
   </ul>
@@ -331,7 +331,7 @@ footer{padding:30px 0 50px;color:var(--faint);font-size:13px}
     <tr><th>Step</th><th>How</th><th>Reuse</th></tr>
     <tr><td>1. Pick source</td><td>ISO; extracted folder (<code>default.xex</code>); existing skate3rust install (search like <code>Find-Installation</code> in make-bundle.ps1: <code>assets/private/game.json</code>, newest wins); or an old <code>Skate3-Quest.zip</code>.</td><td>make-bundle.ps1 logic, ported to Rust</td></tr>
     <tr><td>2. Check</td><td>ISO: XDVDFS header + read <code>default.xex</code> title ID and region; compare to an allow-list of known Skate 3 releases (collect hashes as users succeed; unknown hash with right title ID = warn, not block). Folder: required files present (<code>default.xex</code>, <code>data/…/miscload.big</code>, <code>db.big</code>, <code>worldDIST_*.big</code>).</td><td>new, small</td></tr>
-    <tr><td>3. Convert</td><td>Run the setup helper headless: <code>--task tools/prepare_assets.py --game-root … --output … --game-exe …</code> (documented in <code>docs/installation.md</code>). Stream its log lines into the progress view.</td><td>setup helper as-is on Windows; Linux build of the same helper (PyInstaller on Linux + Linux extract-xiso). Needs a portability pass: <code>install.py</code> has <code>os.name=='nt'</code> branches.</td></tr>
+    <tr><td>3. Convert</td><td>Run the setup helper headless: <code>--task tools/prepare_assets.py --game-root … --output … --game-exe …</code> (<code>tools/setup.py</code>). Stream its log lines into the progress view.</td><td>setup helper as-is on Windows; Linux build of the same helper (PyInstaller on Linux + Linux extract-xiso). Needs a portability pass: <code>install.py</code> has <code>os.name=='nt'</code> branches.</td></tr>
     <tr><td>4. Pre-decode audio</td><td>New tiny Rust step: load <code>PlayerAudioCatalog::from_assets</code> + <code>load_splice_banks</code> with an explicit cache dir (today <code>cache_directory()</code> is hardwired to LOCALAPPDATA) so every bank is decoded up front. Removes "skate for a minute".</td><td><code>skate-data</code> audio catalog; same idea as <code>examples/render_player_audio.rs</code>. Needs ffmpeg with XMA2 (download hash-pinned, like extract-xiso).</td></tr>
     <tr><td>5. Bundle + push</td><td>Write <code>bundle.json</code>, push <code>assets/</code> and <code>audio-pcm-cache/</code>, touch <code>use-retail-data</code>.</td><td><code>push-assets.sh</code> logic</td></tr>
   </table></div>
@@ -600,7 +600,7 @@ footer{padding:30px 0 50px;color:var(--faint);font-size:13px}
 <section id="sources">
   <h2>Files read</h2>
   <ul class="src" style="font-size:13px;color:var(--dim)">
-    <li><code>skate3-quest-ar/README.md</code>, <code>docs/IMPORT-SKATE3.md</code>, <code>docs/installation.md</code>, <code>docs/updates.md</code></li>
+    <li><code>skate3-quest-ar/README.md</code>, <code>docs/IMPORT-SKATE3.md</code></li>
     <li><code>crates/skate-game/src/xr/ui/import.rs</code> (scan of <code>Download/Skate3</code>, move/unzip, marker), <code>crates/skate-game/src/clean/mod.rs</code> (<code>wanted()</code>: marker + <code>assets/private/game.json</code>)</li>
     <li><code>crates/skate-quest/Cargo.toml</code> (pkg <code>com.andrewnakas.skate3ar</code>, <code>retail</code>), <code>crates/sk8-quest/Cargo.toml</code> (pkg <code>com.andrewnakas.sk8ar</code>, no retail), <code>crates/skate-game/Cargo.toml</code> features</li>
     <li><code>scripts/quest/make-bundle.ps1</code>, <code>scripts/quest/push-assets.sh</code></li>

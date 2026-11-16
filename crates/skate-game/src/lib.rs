@@ -21,13 +21,7 @@ mod camera;
 mod config;
 mod fonts;
 #[cfg(feature = "retail")]
-mod crash_context;
-#[cfg(feature = "retail")]
-mod crash_report;
-#[cfg(feature = "retail")]
 mod custom_models;
-#[cfg(feature = "retail")]
-mod customiser;
 #[cfg(feature = "retail")]
 mod customiser_material;
 #[cfg(feature = "retail")]
@@ -51,21 +45,15 @@ use skate3_sim::map_library;
 #[cfg(feature = "retail")]
 mod map_render;
 #[cfg(feature = "retail")]
+mod logging;
+#[cfg(feature = "retail")]
 mod map_transition;
-#[cfg(feature = "retail")]
-mod modding;
-#[cfg(feature = "retail")]
-mod multiplayer;
-#[cfg(feature = "retail")]
-mod net_snapshot;
 #[cfg(feature = "retail")]
 mod performance;
 #[cfg(feature = "retail")]
 mod physics;
 #[cfg(feature = "retail")]
 mod presentation;
-#[cfg(feature = "retail")]
-mod profiling;
 #[cfg(feature = "retail")]
 mod render_capacity;
 #[cfg(feature = "retail")]
@@ -79,8 +67,6 @@ mod retail_render;
 #[cfg(feature = "retail")]
 mod scoring_hud;
 #[cfg(feature = "retail")]
-mod session_marker;
-#[cfg(feature = "retail")]
 mod setup;
 #[cfg(feature = "retail")]
 mod skate_audio;
@@ -91,10 +77,6 @@ mod skate_audio;
 mod stream_pcm;
 #[cfg(feature = "retail")]
 mod skate_world;
-#[cfg(feature = "retail")]
-mod teleport_menu;
-#[cfg(feature = "retail")]
-mod updater;
 #[cfg(feature = "retail")]
 mod verification;
 #[cfg(feature = "retail")]
@@ -191,13 +173,10 @@ fn load() -> Result<Loaded, bevy::app::AppExit> {
             return Err(bevy::app::AppExit::error());
         }
     };
-    profiling::map_metadata(&config);
     eprintln!(
-        "REPORT_META startup=map_fingerprint:{:016x} difficulty:{} multiplayer_requested:{} custom_appearance:{} renderer:Vulkan",
+        "REPORT_META startup=map_fingerprint:{:016x} difficulty:{} renderer:Vulkan",
         config.map_fingerprint,
         config.difficulty.key(),
-        config.multiplayer.host.is_some() || config.multiplayer.direct.is_some(),
-        config.multiplayer.appearance.is_some()
     );
     // The sim reads the bundle and builds itself; each stage is announced as before.
     let mut stage = |name: &str| eprintln!("REPORT_META stage={name}");
@@ -213,7 +192,7 @@ fn load() -> Result<Loaded, bevy::app::AppExit> {
         &skate3_sim::SimConfig {
             difficulty: config.difficulty,
             map: config.map.as_ref(),
-            spawn_offset: config.multiplayer.spawn_offset,
+            spawn_offset: 0.0,
         },
         &mut stage,
     ) {
@@ -284,28 +263,10 @@ pub fn run_with(pump: Option<&mut dyn FnMut()>) -> bevy::app::AppExit {
 /// The imported-disc tier: the faithful port on the player's own converted data.
 #[cfg(feature = "retail")]
 fn run_retail(pump: Option<&mut dyn FnMut()>) -> bevy::app::AppExit {
-    // The updater and the crash supervisor relaunch the current executable,
-    // which on Android is the system app process.
-    #[cfg(not(target_os = "android"))]
-    match updater::recover() {
-        Ok(true) => return bevy::app::AppExit::Success,
-        Err(error) => {
-            eprintln!("{error}");
-            return bevy::app::AppExit::Success;
-        }
-        Ok(false) => {}
+    if let Err(error) = logging::init() {
+        eprintln!("{error}");
+        return bevy::app::AppExit::error();
     }
-    #[cfg(not(target_os = "android"))]
-    if let Some(code) = crash_report::entry() {
-        std::process::exit(code);
-    }
-    let _trace = match profiling::init() {
-        Ok(guard) => guard,
-        Err(error) => {
-            eprintln!("{error}");
-            return bevy::app::AppExit::error();
-        }
-    };
     let _startup = bevy::log::info_span!("startup").entered();
     let loaded = match pump {
         None => load(),

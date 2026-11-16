@@ -187,7 +187,7 @@ number. Timing variation must be investigated without modifying native input/phy
 
 ## Next decision requires a user capture
 
-Use [the capture workflow](performance-tracing.md). Record 30 seconds after loading:
+Capture a performance trace (the desktop trace workflow was removed; see git history). Record 30 seconds after loading:
 stand briefly, rotate the camera, then skate through a representative University
 area. Repeat the same settings/route with `--trace-gpu`; record a separate startup
 trace if the problem is loading or first-use hitching. Include where the slowdown
