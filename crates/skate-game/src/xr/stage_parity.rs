@@ -1,6 +1,9 @@
 //! What each engine is given for a few worlds, kept exactly (`f32` bits): recorded before the AR world was split into
 //! the stage and the park (steps 4-5, docs/game-code-out-plan.md), so the split can't change what an engine gets.
-use super::*;
+//! The same worlds, built the same way, through the stage and park and each engine's own conversion now.
+use bevy::prelude::*;
+use engine_core::Stage;
+use engine_core::skate::SkatePark;
 use crate::xr::build::pieces::{Piece, PieceKind};
 
 /// The bytes written, and their FNV-1a 64 digest.
@@ -46,7 +49,7 @@ fn room(to_world: &Transform) -> (Vec<[Vec3; 4]>, Vec<[Vec3; 3]>, Vec<(Vec3, Vec
 }
 
 /// Three worlds: the room alone, the room with a piece of every kind, and the same through a turned, scaled rig.
-fn worlds() -> Vec<ArWorld> {
+fn worlds() -> Vec<(Stage, SkatePark)> {
     let mut out = Vec::new();
     for (case, root) in [
         Transform::IDENTITY,
@@ -66,17 +69,16 @@ fn worlds() -> Vec<ArWorld> {
             };
             (100 + i as u64, at, Piece::new(kind).geometry())
         });
-        let holes = if case == 0 { vec![] } else { vec![(7, quads[0].map(|p| p + Vec3::Y * 0.01))] };
-        out.push(crate::xr::real_world::assemble(case as u64 + 1, quads, triangles, holes, edges, pieces));
+        out.push(crate::xr::real_world::assemble(case as u64 + 1, quads, triangles, edges, pieces));
     }
     out
 }
 
 /// Skate 3: `set_real_surfaces`' four arguments and `set_grind_rails`'.
-fn skate3(world: &ArWorld) -> String {
+fn skate3((stage, park): &(Stage, SkatePark)) -> String {
     let mut b = Bytes::default();
     let v = |b: &mut Bytes, p: skate_core::math::Vector3| [p.x, p.y, p.z].into_iter().for_each(|x| b.f(x));
-    let (quads, triangles, edges, pieces) = retail::surfaces(world);
+    let (quads, triangles, edges, pieces) = skate3_engine::stage::surfaces(stage, park);
     b.n(quads.len());
     quads.iter().flatten().for_each(|&p| v(&mut b, p));
     b.n(triangles.len());
@@ -92,7 +94,7 @@ fn skate3(world: &ArWorld) -> String {
         b.n(piece.edges.len());
         piece.edges.iter().for_each(|&(p, q)| [p, q].into_iter().for_each(|p| v(&mut b, p)));
     }
-    let rails = retail::rails(world);
+    let rails = skate3_engine::stage::rails(park);
     b.n(rails.len());
     for rail in &rails {
         b.n(rail.len());
@@ -102,17 +104,16 @@ fn skate3(world: &ArWorld) -> String {
 }
 
 /// THUG2: its faces (`set_world`) and rails (`set_rails`), at the game's world size `scale`.
-fn thug2(world: &ArWorld, scale: f32) -> String {
+fn thug2((stage, park): &(Stage, SkatePark), scale: f32) -> String {
     let mut b = Bytes::default();
-    let faces = crate::thug2::triangles(world, scale);
+    let faces = thug2_engine::stage::triangles(stage, park, scale);
     b.n(faces.len());
     for t in &faces {
         t.v.iter().flatten().for_each(|&x| b.f(x));
         b.0.extend(t.flags.to_le_bytes());
         b.0.extend(t.terrain.to_le_bytes());
     }
-    let rails: Vec<Vec<[f32; 3]>> =
-        world.rails.iter().map(|r| r.iter().map(|&p| crate::thug2::to_game(p, scale)).collect()).collect();
+    let rails = thug2_engine::stage::rails(park, scale);
     b.n(rails.len());
     for rail in &rails {
         b.n(rail.len());
@@ -122,16 +123,16 @@ fn thug2(world: &ArWorld, scale: f32) -> String {
 }
 
 /// SK8: its collision's triangles and surfaces, in order, and its rails.
-fn sk8(world: &ArWorld) -> String {
+fn sk8((stage, park): &(Stage, SkatePark)) -> String {
     let mut b = Bytes::default();
-    let faces = crate::clean::sim::collision_faces(world);
+    let faces = crate::clean::sim::collision_faces(stage, park);
     b.n(faces.len());
     for (t, surface) in &faces {
         t.iter().for_each(|&p| b.v(p));
         b.0.extend(surface.to_le_bytes());
     }
-    b.n(world.rails.len());
-    for rail in &world.rails {
+    b.n(park.rails.len());
+    for rail in &park.rails {
         b.n(rail.len());
         rail.iter().for_each(|&p| b.v(p));
     }
@@ -146,9 +147,9 @@ fn each_engine_is_given_exactly_what_it_was() {
     }
     // (the worlds have what's worth keeping: vert faces, rail tubes, edges, metal)
     let pieces = &worlds()[1];
-    assert!(crate::thug2::triangles(pieces, 1.0).iter().any(|t| t.flags & thug2_sys::face::VERT != 0));
-    assert!(retail::surfaces(pieces).3.iter().any(|p| !p.rail_quads.is_empty()));
-    assert!(retail::surfaces(pieces).3.iter().any(|p| !p.edges.is_empty()));
+    assert!(thug2_engine::stage::triangles(&pieces.0, &pieces.1, 1.0).iter().any(|t| t.flags & thug2_sys::face::VERT != 0));
+    assert!(skate3_engine::stage::surfaces(&pieces.0, &pieces.1).3.iter().any(|p| !p.rail_quads.is_empty()));
+    assert!(skate3_engine::stage::surfaces(&pieces.0, &pieces.1).3.iter().any(|p| !p.edges.is_empty()));
     for (i, (g, w)) in got.iter().zip(RECORDED).enumerate() {
         for (engine, (g, w)) in ["Skate 3", "THUG2 x1", "THUG2 x2.5", "SK8"].iter().zip(g.iter().zip(w)) {
             assert_eq!(g, w, "world {i}, {engine}");

@@ -130,11 +130,11 @@ pub(crate) fn apply(
 
 /// The clean tier's trick readout, to the headset's corner readout.
 pub(crate) fn feed_hud(lines: Res<HudLines>, mut hud: ResMut<TrickHud>) {
-    let next = TrickHud {
+    let next = TrickHud(engine_api::skate::TrickText {
         name: lines.name.clone(),
         points: lines.points.clone(),
         line: lines.line.clone(),
-    };
+    });
     if *hud != next {
         *hud = next;
     }

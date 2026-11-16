@@ -608,7 +608,8 @@ fn locate_surfaces(
     mut was_located: Local<Vec<Option<bool>>>,
     settings: Res<super::ar_settings::ArSettings>,
     rig: Res<super::rig::Rig>,
-    link: Res<super::link::SkaterLink>,
+    focus: Res<super::link::PlayerFocus>,
+    engines: Option<Res<crate::engines::Engines>>,
     mut free_floor: Local<Option<(bool, [i32; 2], u32)>>,
 ) {
     let Some(frame_state) = frame_state else { return };
@@ -620,7 +621,8 @@ fn locate_surfaces(
     if settings.free_roam() {
         // Outside: one big floor under the skater, nothing from the room.
         let to_tracking = rig.root_transform().map(|r| r.compute_affine().inverse());
-        let at = to_tracking.zip(link.deck).map_or(Vec3::ZERO, |(t, (deck, _))| t.transform_point3(deck));
+        let feet = engines.as_ref().and_then(|e| e.current()).and_then(|e| focus.of(e)).map(|f| f.feet);
+        let at = to_tracking.zip(feet).map_or(Vec3::ZERO, |(t, feet)| t.transform_point3(feet));
         let cell = [(at.x / FREE_FLOOR_CELL_M).round() as i32, (at.z / FREE_FLOOR_CELL_M).round() as i32];
         let key = (true, cell, settings.floor_offset.to_bits());
         if *free_floor != Some(key) {

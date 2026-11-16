@@ -8,5 +8,10 @@
 //! - [`hud`]: the retail trick display (its movie, read from the player's prepared HUD files) as a
 //!   [`engine_core::hud::HudFrame`].
 //! - [`input`]: the Touch controllers as the Xbox pad the sim reads, and its controls sheet.
+//! - [`stage`]: the stage and park as the sim's collision and rails (not mid-grind), putting the skater down, and
+//!   where the rider and the board are.
+//! - [`trick`]: the sim's scoring as the plain trick readout.
 pub mod hud;
 pub mod input;
+pub mod stage;
+pub mod trick;

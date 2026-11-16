@@ -44,7 +44,8 @@ use self::pieces::{drawn, Finish, MAX_SIZE, MIN_SIZE, Piece, PieceGeometry, Piec
 use super::actions::{Hand, LatestTouch, TouchRead};
 use super::planes::{SceneCapture, SceneShapes, Shape};
 use super::rig::{Rig, heading};
-use super::link::{ArWorld, TeleportSkater};
+use super::link::{CurrentStage, PlacePlayer, SunkHoles};
+use engine_core::Stage;
 use super::spawn::ray_triangle;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -602,13 +603,13 @@ const POST_GAP: f32 = 0.2;
 
 /// A rail's posts are left out where they would stand over a gap: which
 /// ones is worked out again whenever the layout or the room changes.
-fn no_posts_over_gaps(rig: Res<Rig>, world: Res<ArWorld>, mut placed: ResMut<PlacedPieces>, mut seen: Local<Option<(u64, u64)>>) {
+fn no_posts_over_gaps(rig: Res<Rig>, world: Res<CurrentStage>, holes: Res<SunkHoles>, mut placed: ResMut<PlacedPieces>, mut seen: Local<Option<(u64, u64)>>) {
     // (before there is a room to stand on, every post stays)
     if placed.busy() || world.revision == 0 || *seen == Some((placed.revision, world.revision)) {
         return;
     }
     let Some(root) = rig.root_transform() else { return };
-    let posts = posts_over_gaps(&world, &placed, &root);
+    let posts = posts_over_gaps(&world, &holes.0, &placed, &root);
     if placed.items.iter().zip(&posts).any(|(item, (mask, down))| item.no_posts != *mask || item.ends_down != *down) {
         let placed = &mut *placed;
         for (item, (mask, down)) in placed.items.iter_mut().zip(posts) {
@@ -627,7 +628,7 @@ fn no_posts_over_gaps(rig: Res<Rig>, world: Res<ArWorld>, mut placed: ResMut<Pla
 /// all. A rail always keeps the posts at its two ends: those reach down
 /// instead to whatever is under them, by the second of the pair (its own
 /// metres).
-fn posts_over_gaps(world: &ArWorld, placed: &PlacedPieces, root: &Transform) -> Vec<(u32, [f32; 2])> {
+fn posts_over_gaps(world: &Stage, holes: &[(u64, [Vec3; 4])], placed: &PlacedPieces, root: &Transform) -> Vec<(u32, [f32; 2])> {
     let metres = placed.park_scale / root.scale.x;
     let to_tracking = root.compute_affine().inverse();
     let down = root.rotation * Vec3::NEG_Y;
@@ -644,7 +645,7 @@ fn posts_over_gaps(world: &ArWorld, placed: &PlacedPieces, root: &Transform) -> 
             let (mut mask, mut ends_down) = (0u32, [0.0; 2]);
             for (index, (foot, top)) in whole.post_spans().into_iter().enumerate().take(32) {
                 let (foot, top) = (item.from_local(metres, foot), item.from_local(metres, top));
-                let under = cast_past(world, placed, root, root.transform_point(top), down, Some(item.id)).map(|hit| to_tracking.transform_point3(hit.point).y);
+                let under = cast_past(world, holes, placed, root, root.transform_point(top), down, Some(item.id)).map(|hit| to_tracking.transform_point3(hit.point).y);
                 if ends.contains(&Some(index)) {
                     // (to the millimetre, so that it settles)
                     let reach = under.map_or(0.0, |y| ((foot.y - y) / k * 1000.0).round() / 1000.0).max(0.0);
@@ -702,8 +703,9 @@ fn build_controls(
     mode: Res<BuildMode>,
     rig: Res<Rig>,
     hands: Query<(&Hand, &Transform)>,
-    world: Res<ArWorld>,
-    mut teleport: MessageWriter<TeleportSkater>,
+    world: Res<CurrentStage>,
+    holes: Res<SunkHoles>,
+    mut teleport: MessageWriter<PlacePlayer>,
     shapes: Res<SceneShapes>,
     mut held: ResMut<super::actions::PadHeld>,
     mut state: ResMut<BuildState>,
@@ -818,7 +820,7 @@ fn build_controls(
         // Face pieces away from the player until they are turned.
         state.yaw = heading(controller.rotation);
     }
-    let hit = cast(&world, &placed, &root, origin, direction);
+    let hit = cast(&world, &holes.0, &placed, &root, origin, direction);
     let to_tracking = root.compute_affine().inverse();
     // (the ray on no piece: the piece it passes nearest, within reach, short of what it does hit)
     placed.pointed = hit.and_then(|h| h.piece).or_else(|| {
@@ -1117,7 +1119,7 @@ ends_down: [0.0; 2],
                         return Some((met, 0.0));
                     }
                     let above = root.transform_point(met.place.with_y(met.edge.at.y - 0.01));
-                    let under = cast(&world, &placed, &root, above, root.rotation * Vec3::NEG_Y)?;
+                    let under = cast(&world, &holes.0, &placed, &root, above, root.rotation * Vec3::NEG_Y)?;
                     let lift = (met.place.y - to_tracking.transform_point3(under.point).y) / k;
                     let lift = if lift.abs() < 0.02 { 0.0 } else { lift };
                     (lift >= moving.piece.least_lift()).then_some((met, lift))
@@ -1171,7 +1173,7 @@ ends_down: [0.0; 2],
             // Where the hand has taken the handle (tracking space), and the surface under it (this piece aside).
             let target = state.held.map(|held| follow(&held, controller).0);
             let floor = target
-                .and_then(|t| cast_past(&world, &placed, &root, root.transform_point(t + Vec3::Y * 0.05), root.rotation * Vec3::NEG_Y, Some(id)))
+                .and_then(|t| cast_past(&world, &holes.0, &placed, &root, root.transform_point(t + Vec3::Y * 0.05), root.rotation * Vec3::NEG_Y, Some(id)))
                 .map(|h| to_tracking.transform_point3(h.point).y);
             state.join = None;
             if let (Some(item), Some(target)) = (placed.get_mut(id), target) {
@@ -1227,7 +1229,7 @@ ends_down: [0.0; 2],
                 state.twist = 0.0;
                 let position = Vec3::from_array(item.position);
                 // Up in the air (further above what is under it than a join leaves it): held in the hand.
-                let below = cast_past(&world, &placed, &root, root.transform_point(position + Vec3::Y * 0.02), root.rotation * Vec3::NEG_Y, Some(id))
+                let below = cast_past(&world, &holes.0, &placed, &root, root.transform_point(position + Vec3::Y * 0.02), root.rotation * Vec3::NEG_Y, Some(id))
                     .map(|h| to_tracking.transform_point3(h.point).y);
                 let k = metres * item.scale;
                 let in_air = below.is_none_or(|y| position.y - y > item.piece.lift.max(0.0) * k + AIR_GAP_M);
@@ -1236,7 +1238,7 @@ ends_down: [0.0; 2],
                     state.carry = None;
                 } else {
                     // Where the pointer is on the ground with the piece out of its way.
-                    let under = Some(()).filter(|_| !state.free).and_then(|_| cast(&world, &placed, &root, origin, direction)).filter(|h| h.normal.y >= MIN_UP);
+                    let under = Some(()).filter(|_| !state.free).and_then(|_| cast(&world, &holes.0, &placed, &root, origin, direction)).filter(|h| h.normal.y >= MIN_UP);
                     state.carry = under.map(|h| ((position - to_tracking.transform_point3(h.point)).with_y(0.0), item.yaw));
                 }
                 // (this frame too: it stays where it is)
@@ -1742,7 +1744,7 @@ fn draft_path(draft: &[drawn::Node], pending: Option<drawn::Node>, origin: Vec3,
 /// to about the height of a table beside it: where it goes, level with the
 /// table and on its edge ([`snap::level_with`]), and that edge as
 /// [`BuildState::join`] marks it.
-fn level_with_room(world: &ArWorld, to_tracking: &bevy::math::Affine3A, point: Vec3, base: f32) -> Option<(Vec3, (Vec3, Vec3, f32))> {
+fn level_with_room(world: &Stage, to_tracking: &bevy::math::Affine3A, point: Vec3, base: f32) -> Option<(Vec3, (Vec3, Vec3, f32))> {
     let faces = world.room_quads.iter().map(|q| q.map(|p| to_tracking.transform_point3(p)));
     let level = snap::level_with(faces, point, base, DRAW_SNAP_M)?;
     let (a, b) = level.edge;
@@ -1770,7 +1772,7 @@ fn banked(bank: f32) -> f32 {
 /// it goes, the direction (x, z) the ramp crosses the edge in there when it
 /// is on the edge (not only over a table's top), and the edge as
 /// [`BuildState::join`] marks it.
-fn ramp_on_edge(world: &ArWorld, to_tracking: &bevy::math::Affine3A, edges: &[snap::Edge], point: Vec3, base: f32) -> Option<(Vec3, Option<Vec2>, (Vec3, Vec3, f32))> {
+fn ramp_on_edge(world: &Stage, to_tracking: &bevy::math::Affine3A, edges: &[snap::Edge], point: Vec3, base: f32) -> Option<(Vec3, Option<Vec2>, (Vec3, Vec3, f32))> {
     if let Some((on, edge)) = level_with_room(world, to_tracking, point, base) {
         let (middle, along, width) = edge;
         let (a, b) = (middle - along * width * 0.5, middle + along * width * 0.5);
@@ -1958,7 +1960,7 @@ fn place_park(world: &mut World, mut previous: Local<Option<(bool, bool)>>) {
     let direction = (root.rotation * (controller.rotation * Vec3::NEG_Z)).normalize();
     // The room only: the park's own pieces are what is being moved.
     let mut best: Option<(f32, Vec3)> = None;
-    for [a, b, c] in world.resource::<ArWorld>().room() {
+    for [a, b, c] in world.resource::<CurrentStage>().room() {
         if let Some(t) = ray_triangle(origin, direction, a, b, c).filter(|&t| t <= MAX_RANGE && best.is_none_or(|(d, _)| t < d)) {
             best = Some((t, (b - a).cross(c - a).normalize_or_zero()));
         }
@@ -1993,7 +1995,7 @@ fn place_park(world: &mut World, mut previous: Local<Option<(bool, bool)>>) {
 /// collision exists ([`drop_after_park_scale`]).
 fn finish_rescale(
     rig: &Rig,
-    teleport: &mut MessageWriter<TeleportSkater>,
+    teleport: &mut MessageWriter<PlacePlayer>,
     state: &mut BuildState,
     placed: &mut PlacedPieces,
 ) {
@@ -2012,10 +2014,7 @@ fn finish_rescale(
     let Some(root) = rig.root_transform() else {
         return;
     };
-    teleport.write(TeleportSkater {
-        point: root.transform_point(deck),
-        forward: root.rotation * forward,
-    });
+    teleport.write(PlacePlayer::new(root.transform_point(deck), root.rotation * forward));
 }
 
 /// Height above the skater's spot to search down from after a park rescale,
@@ -2024,10 +2023,10 @@ const DROP_SEARCH: f32 = 200.0;
 
 fn drop_after_park_scale(
     rig: Res<Rig>,
-    world: Res<ArWorld>,
+    world: Res<CurrentStage>,
     placed: Res<PlacedPieces>,
     mut state: ResMut<BuildState>,
-    mut teleport: MessageWriter<TeleportSkater>,
+    mut teleport: MessageWriter<PlacePlayer>,
     mut seen: Local<u64>,
 ) {
     // Wait for the rebuild that follows the rescale's revision.
@@ -2046,14 +2045,11 @@ fn drop_after_park_scale(
     let point = root.transform_point(deck);
     let from = point + Vec3::Y * DROP_SEARCH;
     let top = world
-        .all_triangles()
+        .triangles()
         .filter_map(|[a, b, c]| ray_triangle(from, Vec3::NEG_Y, a, b, c))
         .min_by(f32::total_cmp)
         .map_or(point, |t| from - Vec3::Y * t);
-    teleport.write(TeleportSkater {
-        point: top,
-        forward: root.rotation * forward,
-    });
+    teleport.write(PlacePlayer::new(top, root.rotation * forward));
 }
 
 #[derive(Clone, Copy)]
@@ -2065,13 +2061,14 @@ struct Hit {
 
 /// Nearest face along the ray: the real room (collision tag 0) or a placed
 /// piece. The piece being dragged is ignored so it can't land on itself.
-fn cast(world: &ArWorld, placed: &PlacedPieces, root: &Transform, origin: Vec3, direction: Vec3) -> Option<Hit> {
-    cast_past(world, placed, root, origin, direction, None)
+fn cast(world: &Stage, holes: &[(u64, [Vec3; 4])], placed: &PlacedPieces, root: &Transform, origin: Vec3, direction: Vec3) -> Option<Hit> {
+    cast_past(world, holes, placed, root, origin, direction, None)
 }
 
 /// [`cast`], through the piece `past` too.
 fn cast_past(
-    world: &ArWorld,
+    world: &Stage,
+    holes: &[(u64, [Vec3; 4])],
     placed: &PlacedPieces,
     root: &Transform,
     origin: Vec3,
@@ -2093,7 +2090,7 @@ fn cast_past(
     }
     // A bowl being moved (or seen past) has left the surface open where it was until the
     // collision is made again: the pointer lands on that surface still.
-    for (_, [a, b, c, d]) in world.holes.iter().filter(|(id, _)| Some(*id) == placed.dragging || Some(*id) == past) {
+    for (_, [a, b, c, d]) in holes.iter().filter(|(id, _)| Some(*id) == placed.dragging || Some(*id) == past) {
         consider(ray_triangle(origin, direction, *a, *b, *c), (*b - *a).cross(*c - *a), None);
         consider(ray_triangle(origin, direction, *a, *c, *d), (*c - *a).cross(*d - *a), None);
     }
@@ -2955,17 +2952,18 @@ mod tests {
     fn a_bowl_being_moved_can_be_put_back_where_it_was() {
         // The floor is open over the bowl (piece 7): nothing of it is left there to point at.
         let hole = [Vec3::new(-2.0, 0.0, -2.0), Vec3::new(2.0, 0.0, -2.0), Vec3::new(2.0, 0.0, 2.0), Vec3::new(-2.0, 0.0, 2.0)];
-        let world = ArWorld { holes: vec![(7, hole)], ..default() };
+        let world = Stage::default();
+        let holes = SunkHoles(vec![(7, hole)]);
         let mut placed = PlacedPieces::default();
         let (from, down) = (Vec3::new(0.5, 3.0, -0.5), Vec3::NEG_Y);
-        assert!(cast(&world, &placed, &Transform::IDENTITY, from, down).is_none(), "the hole, while the bowl is in it");
+        assert!(cast(&world, &holes.0, &placed, &Transform::IDENTITY, from, down).is_none(), "the hole, while the bowl is in it");
         // Picked up, the pointer lands on the surface it was sunk into, facing up.
         placed.dragging = Some(7);
-        let hit = cast(&world, &placed, &Transform::IDENTITY, from, down).expect("the surface where the bowl was");
+        let hit = cast(&world, &holes.0, &placed, &Transform::IDENTITY, from, down).expect("the surface where the bowl was");
         assert!(hit.point.distance(Vec3::new(0.5, 0.0, -0.5)) < 1e-4 && hit.normal.y > 0.99 && hit.piece.is_none());
         // Another bowl's hole stays a hole.
         placed.dragging = Some(8);
-        assert!(cast(&world, &placed, &Transform::IDENTITY, from, down).is_none());
+        assert!(cast(&world, &holes.0, &placed, &Transform::IDENTITY, from, down).is_none());
     }
 
     /// The wooden ramps as they are drawn, saved as a picture to look at:
@@ -3121,7 +3119,7 @@ mod tests {
         app.add_plugins(crate::xr::contact_shadow::ContactShadowPlugin)
             .init_resource::<PieceAssets>()
             .insert_resource(crate::xr::ar_settings::ArSettings::default())
-            .insert_resource(ArWorld { revision: 1, room_quads: vec![floor], ..default() })
+            .insert_resource(CurrentStage(Stage { revision: 1, room_quads: vec![floor], ..default() }))
             .insert_resource(Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: Some((Vec3::ZERO, 0.0)) })
             .init_resource::<crate::xr::link::SkaterLink>();
         let image = Image::new_target_texture(1600, 1000, TextureFormat::Rgba8UnormSrgb, None);
@@ -3179,7 +3177,8 @@ mod tests {
         fn new(kind: PieceKind) -> Self {
             let mut world = World::new();
             let floor = [Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 0.0, -20.0), Vec3::new(20.0, 0.0, 20.0), Vec3::new(-20.0, 0.0, 20.0)];
-            world.insert_resource(ArWorld { revision: 1, room_quads: vec![floor], ..default() });
+            world.insert_resource(CurrentStage(Stage { revision: 1, room_quads: vec![floor], ..default() }));
+            world.init_resource::<SunkHoles>();
             world.insert_resource(Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: Some((Vec3::ZERO, 0.0)) });
             world.insert_resource(BuildMode { active: true });
             world.insert_resource(BuildState { selected: PieceKind::ALL.iter().position(|&k| k == kind).unwrap(), ..default() });
@@ -3189,7 +3188,7 @@ mod tests {
             world.init_resource::<SceneShapes>();
             world.init_resource::<SceneCapture>();
             world.init_resource::<crate::xr::actions::PadHeld>();
-            world.init_resource::<Messages<TeleportSkater>>();
+            world.init_resource::<Messages<PlacePlayer>>();
             world.spawn((Hand::Right, Transform::from_xyz(0.0, 1.5, 0.0)));
             let mut schedule = Schedule::default();
             schedule.add_systems(build_controls);
@@ -3236,7 +3235,7 @@ mod tests {
         /// A desk in the room, as Space Setup gives it: its top 0.7 m up (x -0.6 to 0.6,
         /// z -3.6 to -3) and its front face, which looks at the controller.
         fn desk(&mut self) {
-            let mut world = self.world.resource_mut::<ArWorld>();
+            let mut world = self.world.resource_mut::<CurrentStage>();
             let (x, top, front, back) = (0.6, 0.7, -3.0, -3.6);
             world.room_quads.push([Vec3::new(-x, top, back), Vec3::new(x, top, back), Vec3::new(x, top, front), Vec3::new(-x, top, front)]);
             world.room_quads.push([Vec3::new(-x, 0.0, front), Vec3::new(x, 0.0, front), Vec3::new(x, top, front), Vec3::new(-x, top, front)]);
@@ -3545,7 +3544,7 @@ mod tests {
         let (lo, hi) = Piece::new(PieceKind::Bowl).geometry().footprint();
         let strip = |x0: f32, z0: f32, x1: f32, z1: f32| [Vec3::new(x0, 0.0, z0), Vec3::new(x1, 0.0, z0), Vec3::new(x1, 0.0, z1), Vec3::new(x0, 0.0, z1)];
         let floor = vec![strip(-20.0, -20.0, 20.0, lo.y), strip(-20.0, hi.y, 20.0, 40.0), strip(-20.0, lo.y, lo.x, hi.y), strip(hi.x, lo.y, 20.0, hi.y)];
-        let world = ArWorld { revision: 1, room_quads: floor, ..default() };
+        let world = Stage { revision: 1, room_quads: floor, ..default() };
         // A rail (its two posts 2.4 m either side of its middle) with one end over a bowl, one well
         // clear, and one put up 2 m in the air in free placement.
         let bowl = item(1, PieceKind::Bowl, [0.0, 0.0, 0.0]);
@@ -3553,7 +3552,7 @@ mod tests {
         let clear = item(3, PieceKind::Rail, [0.0, 0.0, 9.0]);
         let high = item(4, PieceKind::Rail, [0.0, 2.0, -9.0]);
         let mut placed = PlacedPieces { items: vec![bowl, over, clear, high], ..default() };
-        let posts = posts_over_gaps(&world, &placed, &Transform::IDENTITY);
+        let posts = posts_over_gaps(&world, &[], &placed, &Transform::IDENTITY);
         // Both of a straight rail's posts are at its ends: they stay, and reach down to what is under them.
         assert!(posts.iter().all(|(mask, _)| *mask == 0), "{posts:?}");
         assert_eq!(posts[2].1, [0.0; 2]);
@@ -3577,7 +3576,7 @@ mod tests {
         let mut placed = PlacedPieces { items: vec![pad(5, 0.0), pad(6, 8.0), rail], ..default() };
         let spans = placed.items[2].whole_geometry().post_spans();
         assert_eq!(spans.len(), 5, "its ends, its middle node, and the middle of each long stretch: {spans:?}");
-        let (mask, down) = posts_over_gaps(&world, &placed, &Transform::IDENTITY)[2];
+        let (mask, down) = posts_over_gaps(&world, &[], &placed, &Transform::IDENTITY)[2];
         for (index, (foot, _)) in spans.iter().enumerate() {
             let on_a_pad = foot.x < 1.5 || foot.x > 6.5;
             assert_eq!(mask & (1 << index) == 0, on_a_pad, "the post at x = {}", foot.x);
@@ -3585,7 +3584,7 @@ mod tests {
         assert_eq!(down, [0.0; 2]);
         // With the second pad gone, that end's post still stands: down to the floor, a metre below.
         placed.items.remove(1);
-        let (mask, down) = posts_over_gaps(&world, &placed, &Transform::IDENTITY)[1];
+        let (mask, down) = posts_over_gaps(&world, &[], &placed, &Transform::IDENTITY)[1];
         let ends = placed.items[1].whole_geometry().end_posts();
         assert!(ends.iter().all(|end| end.is_some_and(|post| mask & (1 << post) == 0)) && mask.count_ones() == 3, "{mask:b} {ends:?}");
         assert!(down[0] == 0.0 && (down[1] - 1.0).abs() < 1e-3, "{down:?}");

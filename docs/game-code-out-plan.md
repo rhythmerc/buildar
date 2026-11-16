@@ -123,12 +123,21 @@ pub trait EngineCore: Send {
 
 - **Booting:** `EngineFactory::boot(files)` runs on a worker.
 - **One `step()` replaces the staged sim API.** Its hooks (session markers, multiplayer) are gone.
-- **`Stage`** is what every mode stands on, in metres:
-  - the room's triangles;
-  - placed solid triangles (pieces, track geometry);
+- **One space and unit** (`engine_core::stage`'s docs): the runtime's world frame (the room as the rig lays it out,
+  y up) in metres as the game sees them (the player's world scale makes a real metre more or fewer). `Stage`,
+  `Focus`, `Frame` and `PlacePlayer` are all in it; an engine converts inside itself (THUG2's inches, `OFFSET` and
+  world size are `thug2_engine::stage`'s; Skate 3's and SK8's worlds are this space as it is).
+- **`Stage`** is what every mode stands on (as built in step 5):
+  - the room's flat faces as quads and its other faces as triangles (quads stay quads: Skate 3 treats them apart);
+  - the placed objects' solid faces, each a `Solid { id, quads }` (a skate piece's body, then its rail tubes);
   - a revision number.
-- **`Focus`** is a frame and a drawn size. The contact shadow, sound emitters, menu distance checks and room
-  captures follow it.
+  `Applied { Done, Deferred }` says whether an engine took it; the runtime offers the latest every frame.
+- **`PlacePlayer { point, forward }`**: put the player down; what "down" means is the engine's.
+- **`Focus`** is a frame (feet, up, forward) and a drawn height. What's placed at the player, the sound emitters,
+  the menus' distance checks, the room captures and carrying the player over to the next engine follow it. The app
+  keeps one per engine (`engine_api::PlayerFocus`); a skate engine's comes from its `SkaterLink` (below).
+- **Input:** `PadHeld { held, pause }` goes in with the `TouchState`; an engine's controls sheet comes back as
+  `Control { input, action }` rows (the app adds its own after them).
 - **`Pose`** has **body groups**: named sets of joints, each with its own frame (for example "rider" and
   "board"). Shadows cast per group, so separate bodies each cast their own.
 - **`Event`** carries only neutral kinds (a sound request, a fault). Each mode adds its own kinds in its
@@ -139,6 +148,7 @@ pub trait EngineCore: Send {
   Placement = Hand { metres_per_px, offset, anchor, hand: Option<HudHand>, on_left: Option<(Vec2, Vec2)> }
             | AtBody { group, offset, billboard, min_view_share }   // e.g. THUG2's balance meter at the rider
             | HeadCorner
+  // as built: AtPlayer { side, width_per_height, least_view_share, middle, clear } at the Focus (body groups: step 6)
   ```
 
 ### HUD
@@ -159,20 +169,28 @@ HudFrame {
 
 ```rust
 pub trait SkateMode {
-    fn set_park(&mut self, park: &SkatePark) -> Applied; // rails, edges, bowl holes; Deferred while grinding
+    fn set_park(&mut self, park: &SkatePark) -> Applied; // kept until set_stage brings its stage; taken together
     fn skater(&self) -> Option<SkaterLink>;
     fn trick(&self) -> Option<TrickText>;                // the generic readout when the engine has no HUD
 }
+SkatePark { revision, room_edges, pieces: Vec<ParkPiece { solid, rail_quads: Range<usize>, edges }>, rails }
 SkaterLink { rider: Option<Frame>, board: Option<Frame>, on_board: bool, grinding: bool, size: f32 }
+TrickText { name, points, line }
 SkateEvent = Pop | Land | Bail | Grind | Trick { .. } | ...
 ```
 
-- **`SkatePark`** is the skate annotations over the core stage: grind rails and edges, copings, and where the
-  room's level faces are opened over a sunk bowl. `ArWorld` today is the core stage and this together;
-  here they split.
-- **Placing the player** is core. "On the board" is what a skate engine does with `place_player`.
-- **`Focus`** for a skate engine is the rider, falling back to the board. That rule is skate's mapping onto
-  core.
+- **`SkatePark`** is the skate annotations over the core stage, of the same revision: the room's grindable edges,
+  each piece's grindable edges and which of its solid's quads are rail tubes (`rail_quads`, a range: Skate 3 gives
+  them the convex rail flags, SK8 metal), and every rail (room edges first, then the pieces' rails, ledges and
+  copings). A skate engine keeps the park (`set_park`) and applies it with the stage (`set_stage`), both or
+  neither: **`Deferred` while grinding** (the grind refers to the rails it has), and the latest is taken after. The
+  app no longer reads `grinding`.
+- **Bowl holes left the contract:** the app cuts the room's level faces over a sunk bowl before building the stage
+  (`real_world::open_over`), and only its own pointer reads the holes (`xr::link::SunkHoles`).
+- **Placing the player** is core. "On the board" is what a skate engine does with `place_player` (its own lift
+  over the point: Skate 3 5 cm, THUG2 10 cm, SK8 5 cm).
+- **`Focus`** for a skate engine is the rider, falling back to the board (`SkaterLink::focus`, as tall as
+  `skate::SKATER_HEIGHT` at its size). That rule is skate's mapping onto core.
 
 ### Rider and board are separate
 
@@ -190,6 +208,8 @@ Both engines can separate the skater from the board: off-board walking, bails, a
   - THUG2's sound emitter.
 
   Only the skate layer (the park builder's rail feeding, the trick readout) keeps reading the skate module.
+  (Step 5: they read the stage and the running engine's `PlayerFocus` now; the contact shadow reads
+  `SkaterLink.board` until step 6.)
 - **Both cast contact shadows,** from body groups. Today only the board does: three fixed soft ellipses
   (deck and trucks, `xr/contact_shadow.rs` `casters`), and the rider casts none.
   - The board's group keeps that shape.
@@ -321,8 +341,8 @@ frames (glyph sampling).
 **Left over from steps 2-3:** `engine_hud.rs`'s `at_player` still hard-codes the geometry factors of
 THUG2's meter pictures (0.55, 0.3, 0.15, 0.2). They belong to the engine: move them into
 `Placement::AtPlayer` (e.g. a picture anchor and a lift) when the next engine places a part at the player,
-or with step 5. The Skate 3 multiplier-sound choice is still in the app's Skate 3 adapter (it reads
-app-side `SkaterRuntime`/`skate_audio`); it moves with steps 5 and 7.
+or with step 5. (Done in step 5: `middle` and `clear`.) The Skate 3 multiplier-sound choice is still in the app's
+Skate 3 adapter (it reads app-side `SkaterRuntime`/`skate_audio`); it moves with step 7.
 
 **Step 4, as done (2026-11-16):** each engine maps the Touch controllers to its own pad, in its crate.
 - **Core:** `PadHeld { held, pause }` (engine-api's `PadHeld` resource wraps it, `Deref`), and `Control { input,
@@ -338,6 +358,38 @@ app-side `SkaterRuntime`/`skate_audio`); it moves with steps 5 and 7.
   its own sheet rows (`HOST_CONTROLS`: aiming the skater, the menu, build mode), listed after an engine's. SK8
   (app-resident, `clean/input.rs`) keeps its whole sheet, the shared rows in it.
 - No `EngineCore` trait yet; the functions have the shapes its methods will take (`dt` unused so far).
+
+**Step 5, as done (2026-11-16):** `ArWorld`, `SkaterLink`, `TeleportSkater` and `TrickHud` are split by the
+sorting rule.
+- **Core** (`engine_core::stage`): `Stage { revision, room_quads, room_triangles, solids }`, `Solid { id, quads }`,
+  `Applied`, `Frame`, `PlacePlayer`, the one space and unit; `Focus` gains `forward`;
+  `Placement::AtPlayer` gains `middle` and `clear` (THUG2's meter factors, filled by `thug2_engine::hud`).
+- **Skate** (`engine_core::skate`): `SkatePark`/`ParkPiece`, `SkaterLink { rider, board, on_board, grinding, size }`
+  with `focus()`, `TrickText`, `SKATER_HEIGHT`.
+- **engine-api** wraps them: `CurrentStage`, `PlacePlayer` (a message), `PlayerFocus` (the one focus map: it was
+  `engine_hud`'s `HudFocus`), `skate::{CurrentPark, SkaterLink, TrickHud}`.
+- **The app** (`real_world::assemble`) builds the stage and park together and always offers the latest; it rebuilds
+  mid-grind now. Generic consumers read the stage (spawn aiming, build mode, room light, controller shapes, contact
+  shadow patches) or the running engine's focus (planes' free-roam floor, the world-scale re-place, carrying the
+  player over, `THUG2_SHOT`); a skate-layer system (`xr::link::focus_from_link`) makes the focus from the link. The
+  contact shadow reads `SkaterLink.board` until step 6.
+- **Skate 3** (`skate3_engine::stage`, `::trick`): `StageFeed` (`set_park`, `set_stage` with the grind deferral and
+  the sim's `set_real_surfaces`/`set_grind_rails` arguments rebuilt from stage and park), `place_player` (the travel
+  matrix, 5 cm up), `link` (board: the deck body; rider: the animation root `animation_to_world`, its stance axes
+  turned as the sim's effective root does; on the board unless in the biped states), `trick::text` and
+  `readable_trick`.
+- **THUG2** (`thug2_engine::stage`): units (`to_game`/`from_game`, `OFFSET`), face classes (`WALL_UP`/`RAMP_UP`/
+  `VERT_UP`, `triangles`, `piece_faces`), `DECK_HEIGHT`, `SOUND_HEIGHT`, `spawn`, `link`, and `StageFeed` (the grind
+  deferral, a new world size re-placing the skater, waiting for a place to put it). C API gap: one skater frame, no
+  board of its own and no off-board state, so its board is the rider's frame `DECK_HEIGHT` up and `on_board` is
+  always true.
+- **SK8** (app-resident) takes the stage and park in `clean::sim` (its own grind deferral, as before); its rider and
+  board are one frame (the engine gives the rider's state only).
+- **Parity:** before the split, `xr::stage_parity` recorded the `f32` bits of what each engine was given (Skate 3's
+  four `set_real_surfaces` arguments and `set_grind_rails`, THUG2's classified faces and rails at world sizes 1 and
+  2.5, SK8's collision triangles with surfaces and its rails) for three worlds: the room alone, the room with a piece
+  of every kind, and both through a turned, scaled rig. Through the stage and park they are identical. The meter's
+  placement is checked against the old factors exactly (`engine_hud` tests).
 
 ### Risks
 

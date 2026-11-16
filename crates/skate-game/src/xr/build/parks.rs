@@ -469,9 +469,9 @@ fn save(placed: Res<PlacedPieces>, rig: Res<Rig>, placing: Res<Placing>, mut par
 /// The anchor the open park is kept by moved in the tracking space (the
 /// first time it is found, or the boundary was re-centred): the pieces move
 /// with it.
-fn follow(anchors: Res<Anchors>, link: Res<crate::xr::link::SkaterLink>, mut placed: ResMut<PlacedPieces>, mut parks: ResMut<Parks>) {
-    // (pieces are not moved under a hand or a grind)
-    if placed.busy() || link.grinding {
+fn follow(anchors: Res<Anchors>, mut placed: ResMut<PlacedPieces>, mut parks: ResMut<Parks>) {
+    // (pieces are not moved under a hand; mid-grind they are, and the engine takes the new stage when the grind ends)
+    if placed.busy() {
         return;
     }
     let Some(current) = parks.current.clone() else { return };

@@ -159,61 +159,68 @@ pub(crate) fn step(time: Res<Time<Real>>, mut sim: ResMut<CleanSkate>) {
     }
 }
 
-/// Rebuild collision whenever the AR world changes (not mid-grind).
+/// The stage and park as collision whenever they change (not mid-grind: the grind refers to the rails it has; the
+/// latest is taken when it ends).
 #[cfg(feature = "xr")]
 pub(crate) fn apply_ar_world(
-    world: Res<crate::xr::link::ArWorld>,
+    stage: Res<crate::xr::link::CurrentStage>,
+    park: Res<crate::xr::link::CurrentPark>,
     mut sim: ResMut<CleanSkate>,
     mut applied: Local<u64>,
 ) {
-    if world.revision == *applied || sim.current.mode == Mode::Grind {
+    if stage.revision == *applied || park.revision != stage.revision || sim.current.mode == Mode::Grind {
         return;
     }
-    *applied = world.revision;
+    *applied = stage.revision;
     let mut grid = Grid::default();
-    for (t, surface) in collision_faces(&world) {
+    for (t, surface) in collision_faces(&stage, &park) {
         grid.add(t, surface);
     }
-    sim.set_collision(grid, &world.rails);
+    sim.set_collision(grid, &park.rails);
     info!(
         "SK8 collision: {} triangles, {} rails (AR revision {})",
         sim.collision_triangles,
-        world.rails.len(),
-        world.revision
+        park.rails.len(),
+        stage.revision
     );
 }
 
-/// The AR world's faces as the engine's collision is given them, in order: each triangle and its surface.
+/// The stage's faces as the engine's collision is given them, in order: each triangle and its surface (the room's
+/// ground, a piece's body wood, its rail tubes metal).
 #[cfg(feature = "xr")]
-pub(crate) fn collision_faces(world: &crate::xr::link::ArWorld) -> Vec<([Vec3; 3], i32)> {
-    let mut out: Vec<([Vec3; 3], i32)> = world.room().map(|t| (t, SURFACE_GROUND)).collect();
+pub(crate) fn collision_faces(stage: &engine_core::Stage, park: &engine_core::skate::SkatePark) -> Vec<([Vec3; 3], i32)> {
+    let mut out: Vec<([Vec3; 3], i32)> = stage.room().map(|t| (t, SURFACE_GROUND)).collect();
     let mut quad = |[a, b, c, d]: [Vec3; 4], surface: i32| out.extend([([a, b, c], surface), ([a, c, d], surface)]);
-    for p in &world.pieces {
-        for &q in &p.quads {
+    for solid in &stage.solids {
+        let tubes = park.piece(solid.id).map_or(0..0, |p| p.rail_quads.clone());
+        for (_, &q) in solid.quads.iter().enumerate().filter(|(i, _)| !tubes.contains(i)) {
             quad(q, SURFACE_WOOD);
         }
-        for &q in &p.rail_quads {
+        for (_, &q) in solid.quads.iter().enumerate().filter(|(i, _)| tubes.contains(i)) {
             quad(q, SURFACE_METAL);
         }
     }
     out
 }
 
+/// Put down where the shared layer asks: on the board, a little over the point.
 #[cfg(feature = "xr")]
-pub(crate) fn teleport(
-    mut requests: MessageReader<crate::xr::link::TeleportSkater>,
-    mut sim: ResMut<CleanSkate>,
-) {
+pub(crate) fn teleport(mut requests: MessageReader<crate::xr::link::PlacePlayer>, mut sim: ResMut<CleanSkate>) {
     for r in requests.read() {
         sim.place(r.point + Vec3::Y * 0.05, facing_of(r.forward));
         info!("SK8 placed at {:?}", r.point);
     }
 }
 
+/// Where the skater is: one frame for the rider and the board (the engine gives the rider's state only), its stance
+/// forward.
 #[cfg(feature = "xr")]
 pub(crate) fn publish_link(sim: Res<CleanSkate>, mut link: ResMut<crate::xr::link::SkaterLink>) {
     let s = &sim.current;
     let rot = Quat::from_array(s.rider_rot);
-    link.deck = Some((Vec3::from_array(s.position), rot * Vec3::Z));
+    let at = engine_core::Frame { position: Vec3::from_array(s.position), forward: rot * Vec3::Z, up: rot * Vec3::Y };
+    link.rider = Some(at);
+    link.board = Some(at);
+    link.on_board = !s.on_foot;
     link.grinding = s.mode == Mode::Grind;
 }

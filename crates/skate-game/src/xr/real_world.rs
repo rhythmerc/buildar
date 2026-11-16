@@ -18,7 +18,9 @@ use super::build::PlacedPieces;
 use super::plane_view::MeshPlanes;
 use super::build::pieces::{Finish, PieceKind};
 use crate::skate_audio::clean::SurfaceHints;
-use super::link::{ArWorld, PieceSurfaces, SkaterLink};
+use super::link::{CurrentPark, CurrentStage, SunkHoles};
+use engine_core::skate::{ParkPiece, SkatePark};
+use engine_core::{Solid, Stage};
 use super::ar_settings::ArSettings;
 use super::rig::Rig;
 use bevy::prelude::*;
@@ -53,9 +55,10 @@ fn rebuild_collision(
     revision: Res<SceneRevision>,
     mut placed: ResMut<PlacedPieces>,
     mesh_planes: Res<MeshPlanes>,
-    link: Res<SkaterLink>,
     settings: Res<ArSettings>,
-    mut world: ResMut<ArWorld>,
+    mut stage: ResMut<CurrentStage>,
+    mut park: ResMut<CurrentPark>,
+    mut sunk_holes: ResMut<SunkHoles>,
     hints: Option<ResMut<SurfaceHints>>,
     mut built: Local<Option<((Vec3, f32), u64, u64, u64)>>,
 ) {
@@ -64,10 +67,10 @@ fn rebuild_collision(
     };
     // Re-located poses wobble by tracking noise every frame; only a new
     // anchor, a different set of entities or an edited layout is worth a
-    // rebuild. A piece being dragged rebuilds when it is dropped, and grind
-    // state refers to the current rails, so a grind finishes first.
+    // rebuild. A piece being dragged rebuilds when it is dropped. (Mid-grind
+    // too: an engine takes the new stage once its grind ends.)
     let key = (anchor, revision.0, placed.revision, settings.revision);
-    if shapes.0.is_empty() || *built == Some(key) || placed.busy() || link.grinding {
+    if shapes.0.is_empty() || *built == Some(key) || placed.busy() {
         return;
     }
     *built = Some(key);
@@ -164,11 +167,12 @@ fn rebuild_collision(
             }
         }
     }
-    let revision = world.revision + 1;
+    let revision = stage.revision + 1;
     let pieces = placed.items.iter().map(|item| (item.id, item.world_transform(&root, placed.park_scale), item.geometry()));
-    *world = assemble(revision, room_quads, room_triangles, sunk, room_edges, pieces);
-    let piece_count = world.pieces.len();
-    let rail_count = world.rails.len();
+    (stage.0, park.0) = assemble(revision, room_quads, room_triangles, room_edges, pieces);
+    sunk_holes.0 = sunk;
+    let piece_count = stage.solids.len();
+    let rail_count = park.rails.len();
     if let Some(mut hints) = hints {
         *hints = sound;
     }
@@ -184,29 +188,33 @@ fn rebuild_collision(
     );
 }
 
-/// The world the engines ride, from the room (world space, opened over the sunk pieces already) and the placed
-/// pieces (id, where, shape).
+/// The stage every engine is offered, and the park over it for a skate engine, from the room (world space, opened
+/// over the sunk pieces already) and the placed pieces (id, where, shape). A piece is a solid of the stage (its body's
+/// quads, then its rail tubes'), and the park says which of its quads are the tubes, its grindable edges and its
+/// rails.
 pub(crate) fn assemble(
     revision: u64,
     room_quads: Vec<[Vec3; 4]>,
     room_triangles: Vec<[Vec3; 3]>,
-    holes: Vec<(u64, [Vec3; 4])>,
     room_edges: Vec<(Vec3, Vec3)>,
     placed: impl Iterator<Item = (u64, Transform, super::build::pieces::PieceGeometry)>,
-) -> ArWorld {
+) -> (Stage, SkatePark) {
     // Table and furniture tops are grindable ledges.
     let mut rails: Vec<Vec<Vec3>> = room_edges.iter().map(|&(a, b)| vec![a, b]).collect();
+    let mut solids = Vec::new();
     let mut pieces = Vec::new();
-    for (_, at, geometry) in placed {
+    for (id, at, geometry) in placed {
         let local = |p: Vec3| at.transform_point(p);
         rails.extend(geometry.rails.iter().map(|r| r.iter().map(|&p| local(p)).collect()));
-        pieces.push(PieceSurfaces {
-            quads: geometry.quads.iter().map(|q| q.map(local)).collect(),
-            rail_quads: geometry.rail_quads.iter().map(|q| q.map(local)).collect(),
+        let body = geometry.quads.len();
+        solids.push(Solid { id, quads: geometry.all_quads().map(|q| q.map(local)).collect() });
+        pieces.push(ParkPiece {
+            solid: id,
+            rail_quads: body..body + geometry.rail_quads.len(),
             edges: geometry.edges.iter().map(|&(a, b)| (local(a), local(b))).collect(),
         });
     }
-    ArWorld { revision, room_quads, room_triangles, holes, room_edges, pieces, rails }
+    (Stage { revision, room_quads, room_triangles, solids }, SkatePark { revision, room_edges, pieces, rails })
 }
 
 /// The height a sunk piece's rim belongs at: the lowest of the level faces

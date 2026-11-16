@@ -6,5 +6,8 @@
 //!
 //! - [`hud`]: the game's 2D as a [`engine_core::hud::HudFrame`]: which draw is which part, and where each part goes.
 //! - [`input`]: the Touch controllers as the game's pad, and its controls sheet.
+//! - [`stage`]: the stage and park as the game's world (its units, face classes, rails; not mid-grind), putting the
+//!   skater down, and where it is.
 pub mod hud;
 pub mod input;
+pub mod stage;
