@@ -122,6 +122,30 @@ Placement = Hand { metres_per_px, offset, anchor, hand: Option<HudHand>, on_left
           | HeadCorner
 ```
 
+### Rider and board are separate
+
+Both engines can separate the skater from the board: off-board walking, bails, a board left behind.
+
+- **Drawing is fine.** Each engine draws the board as bones in the skater's one skeleton (Skate 3's
+  `board_bones` in its render pose; THUG2's skin palette), so a separated board is only bone positions.
+- **What breaks is `SkaterLink`.** Today it has one point, `deck`. Skate 3 fills it from the board's
+  physics body (`skate3_sim::Link::of`), so with the rider walking away the app's "skater" is the board.
+  Everything that follows the skater follows that one point:
+  - the contact shadow (`xr/contact_shadow.rs`);
+  - the AR collision rebuild and plane captures (`xr/link.rs`, `xr/planes.rs`);
+  - THUG2's sound emitter;
+  - the menus' distance checks (`xr/ui/pages.rs`).
+- **The contract reports both:**
+
+  ```rust
+  SkaterLink { rider: Option<Frame>, board: Option<Frame>, on_board: bool, grinding: bool, size: f32 }
+  ```
+
+  Followers take the rider (falling back to the board). The contact shadow draws one per body that is
+  present. Teleport still puts the rider back on the board.
+- **For an engine that draws its board as its own model,** `ModelSource` takes a list of models, each with
+  its own pose. That costs nothing for one-skeleton engines.
+
 ### Model and pose
 
 - **Renderer-neutral, not shaders-as-data.**
