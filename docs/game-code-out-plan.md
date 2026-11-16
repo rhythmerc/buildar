@@ -318,6 +318,12 @@ panel appears only once the HUD has loaded, so without `private/hud` the corner 
 0). The first try pre-scaled the stage by 1.5 instead of `resolution`; that was 2/255 off in 21-38 pixels of three
 frames (glyph sampling).
 
+**Left over from steps 2-3:** `engine_hud.rs`'s `at_player` still hard-codes the geometry factors of
+THUG2's meter pictures (0.55, 0.3, 0.15, 0.2). They belong to the engine: move them into
+`Placement::AtPlayer` (e.g. a picture anchor and a lift) when the next engine places a part at the player,
+or with step 5. The Skate 3 multiplier-sound choice is still in the app's Skate 3 adapter (it reads
+app-side `SkaterRuntime`/`skate_audio`); it moves with steps 5 and 7.
+
 ### Risks
 
 - **Quest performance:**
