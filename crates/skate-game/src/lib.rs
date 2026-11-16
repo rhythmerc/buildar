@@ -48,6 +48,7 @@ mod skate_audio;
 #[cfg(not(feature = "retail"))]
 #[path = "skate_audio_store.rs"]
 mod skate_audio;
+#[cfg(feature = "thug2")]
 mod stream_pcm;
 #[cfg(feature = "retail")]
 mod world;
