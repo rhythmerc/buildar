@@ -1,5 +1,5 @@
 name: Check
-# Type-checks the store build's game crate (skate-game with only `xr`: the clean-room tier and the
+# Type-checks the app layer without game code (skate-game with only `xr`: the clean-room tier and the
 # headset code, no imported-disc tier, no THUG2 engine). Needs no game data and no THUG2 checkouts.
 on:
   push:
@@ -25,7 +25,7 @@ jobs:
       # the crate embeds it, so a type-check needs a file there, not a real model.
       - name: Placeholder for the generated clean skater
         run: mkdir -p crates/skate-game/src/clean/assets && touch -a crates/skate-game/src/clean/assets/skater.glb
-      - name: cargo check (store build)
+      - name: cargo check (app layer, no game code)
         env:
           # rustc needs a large stack for the game crate.
           RUST_MIN_STACK: "268435456"

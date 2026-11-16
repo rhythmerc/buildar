@@ -51,9 +51,8 @@ maps onto the C++ port [skatecore-cpp](https://github.com/andrewnakas/skatecore-
 
 ## Building
 
-The headset app is `crates/skate-quest` (`scripts/quest/build-apk.sh`) and the store build,
-clean-room only, is `crates/sk8-quest` (`scripts/quest/build-store-apk.sh`); both share the game
-crate `crates/skate-game`. The Skate 3 simulation comes from
+The headset app is `crates/skate-quest` (`scripts/quest/build-apk.sh`), on the game crate
+`crates/skate-game`. The Skate 3 simulation comes from
 [skate3-headless](https://github.com/rhythmerc/skate3-headless). See
 [scripts/quest/README.md](scripts/quest/README.md) for the toolchain.
 

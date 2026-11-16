@@ -16,8 +16,8 @@ path = "src/main.rs"
 default = ["dev-dynamic", "retail"]
 dev-dynamic = ["bevy/dynamic_linking"]
 # The imported-disc tier: the faithful port of the retail game, run on the player's own converted
-# Skate 3 data, and its importer. The GitHub builds have it; the store build (crates/sk8-quest) is
-# built without it, so none of that code (nor the crates it needs) is in that app.
+# Skate 3 data, and its importer. The headset app (crates/skate-quest) has it; without it the crate is
+# the app layer and the clean-room engine alone (what CI type-checks).
 retail = [
     "dep:tracing-log", "dep:skate3-sim", "dep:skate-core", "dep:skate-data", "dep:skate-audio-formats",
     "dep:half", "dep:zip", "zip/deflate-flate2-zlib-rs",
