@@ -1122,8 +1122,14 @@ mod tests {
         let ollie = skate_lite_sys::trick_demo_path(0);
         assert_eq!(describe_path(&ollie), "down, centre, up");
         let names = skate_lite_sys::trick_names();
+        // sk8 f6b044c (5d898b7): a pop shove-it sweeps on round the rim to up, as in the port.
         let shove = names.iter().position(|n| *n == "Pop Shove-it").unwrap();
-        assert_eq!(describe_path(&skate_lite_sys::trick_demo_path(shove)), "down, down-right, right, let go");
+        let path = skate_lite_sys::trick_demo_path(shove);
+        assert_eq!(describe_path(&path), "down, down-right, right, up-right, up");
+        assert_eq!(skate_lite_sys::classify(&path), Some("Pop Shove-it"));
+        // A path that ends back at the centre reads "let go".
+        let fs = names.iter().position(|n| *n == "Frontside Shove-it").unwrap();
+        assert_eq!(describe_path(&skate_lite_sys::trick_demo_path(fs)), "down, down-left, left, let go");
     }
 
     #[test]
