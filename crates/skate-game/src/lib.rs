@@ -76,12 +76,12 @@ pub fn set_storage_hooks(hooks: StorageHooks) {
 }
 
 /// Shared storage can be read (always, without hooks: the desktop).
-#[cfg_attr(not(feature = "xr"), allow(dead_code))]
+#[cfg(all(feature = "xr", feature = "retail"))]
 pub(crate) fn storage_access() -> bool {
     STORAGE_HOOKS.get().is_none_or(|h| (h.has_access)())
 }
 
-#[cfg_attr(not(feature = "xr"), allow(dead_code))]
+#[cfg(all(feature = "xr", feature = "retail"))]
 pub(crate) fn request_storage_access() {
     if let Some(h) = STORAGE_HOOKS.get() {
         (h.request_access)();

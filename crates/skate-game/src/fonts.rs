@@ -5,6 +5,7 @@ use bevy::prelude::*;
 /// Headings and HUD figures: a heavy italic sans (Montserrat).
 pub(crate) const HEADING: &str = "embedded://skate_game/fonts/Montserrat-Italic.ttf";
 /// Running text (Inter, variable weight).
+#[cfg(feature = "xr")]
 pub(crate) const BODY: &str = "embedded://skate_game/fonts/Inter.ttf";
 
 /// Embeds them (every app that shows text calls it once; again is harmless).

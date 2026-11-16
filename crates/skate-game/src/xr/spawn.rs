@@ -18,6 +18,7 @@ const MAX_RANGE: f32 = 2000.0;
 const MISS_LENGTH: f32 = 40.0;
 /// Only ground-like faces are spawn targets, not walls.
 const MIN_UP: f32 = 0.6;
+#[cfg(feature = "retail")]
 const SPAWN_LIFT: f32 = 0.05;
 
 /// The player asked (from the menu) to place the skater: the right
@@ -229,6 +230,7 @@ pub(crate) fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: V
 
 /// Row-major teleport matrix (axes in rows 0-2, position in row 3); the
 /// skater faces row 2.
+#[cfg(feature = "retail")]
 pub(super) fn spawn_matrix(point: Vec3, aim: Vec3) -> [[f32; 4]; 4] {
     let forward = aim.with_y(0.0).try_normalize().unwrap_or(Vec3::Z);
     let right = Vec3::Y.cross(forward);
@@ -259,6 +261,7 @@ mod tests {
         assert!(ray_triangle(Vec3::new(2.0, 2.0, 2.0), Vec3::NEG_Y, Vec3::ZERO, Vec3::X, Vec3::Z).is_none());
     }
 
+    #[cfg(feature = "retail")]
     #[test]
     fn identity_heading_matches_the_course_spawn() {
         let m = spawn_matrix(Vec3::ZERO, Vec3::new(0.0, -0.5, 1.0));

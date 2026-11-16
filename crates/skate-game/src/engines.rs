@@ -30,7 +30,9 @@ use bevy::utils::prelude::DebugName;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-pub(crate) use engine_api::{Availability, BeforeSwitch, CourseSettings, Engine, EngineOwned, EngineSet, EngineSwitched, Mode};
+pub(crate) use engine_api::{Availability, BeforeSwitch, Engine, EngineOwned, EngineSet, EngineSwitched};
+#[cfg(feature = "xr")]
+pub(crate) use engine_api::{CourseSettings, Mode};
 
 /// The engines the app carries and which one runs.
 #[derive(Resource)]
@@ -109,6 +111,7 @@ impl Engines {
 
     /// Don't start the app on `engine` this launch (it crashed the app while starting last time): it can still be
     /// picked from the menu.
+    #[cfg(any(feature = "thug2", test))]
     pub(crate) fn not_at_launch(&mut self, engine: Engine) {
         self.not_at_launch.insert(engine);
     }

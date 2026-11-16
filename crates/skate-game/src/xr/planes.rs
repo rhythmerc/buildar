@@ -21,39 +21,6 @@ use openxr::sys::{self, Handle as _};
 use std::ptr;
 use std::sync::Arc;
 
-/// One upward-facing real surface, in the same tracking-space frame as
-/// [`super::actions::Hand`] transforms (pre-rig-scale, pre-root-transform).
-/// Local +Y is the surface normal; the surface spans local X/Z.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct DetectedPlane {
-    pub pose: Transform,
-    pub half_extent: Vec2,
-    pub upward: bool,
-}
-
-#[derive(Resource, Default)]
-pub(crate) struct DetectedPlanes(pub Vec<DetectedPlane>);
-
-impl DetectedPlanes {
-    /// The point on the upward-facing surface under/over `point` whose height
-    /// is closest to `point.y`.
-    pub(crate) fn snap(&self, point: Vec3) -> Option<Vec3> {
-        self.0
-            .iter()
-            .filter(|p| p.upward)
-            .filter_map(|p| {
-                let local = p.pose.rotation.inverse() * (point - p.pose.translation);
-                (local.x.abs() <= p.half_extent.x && local.z.abs() <= p.half_extent.y)
-                    .then_some((p, local.y.abs()))
-            })
-            .min_by(|(_, a), (_, b)| a.total_cmp(b))
-            .map(|(p, _)| {
-                let normal = p.pose.rotation * Vec3::Y;
-                point - normal * (point - p.pose.translation).dot(normal)
-            })
-    }
-}
-
 /// A located Scene entity in tracking space.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum Shape {
@@ -171,7 +138,6 @@ const FLOOR_HALF_EXTENT_M: f32 = 10.0;
 /// under the skater, a grid cell of this size at a time.
 const FREE_FLOOR_HALF_M: f32 = 24.0;
 const FREE_FLOOR_CELL_M: f32 = 8.0;
-const UPWARD_MIN_COS: f32 = 0.9;
 /// Anything bigger is the room-sized global mesh, not furniture.
 const MAX_OBJECT_HALF_M: f32 = 2.0;
 const RECOGNIZED_LABELS: &std::ffi::CStr = c"TABLE,COUCH,FLOOR,CEILING,WALL_FACE,WINDOW_FRAME,DOOR_FRAME,STORAGE,BED,SCREEN,LAMP,PLANT,WALL_ART,GLOBAL_MESH,INVISIBLE_WALL_FACE,OTHER";
@@ -189,8 +155,7 @@ pub(crate) struct PlanesPlugin;
 
 impl Plugin for PlanesPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DetectedPlanes>()
-            .init_resource::<SceneShapes>()
+        app.init_resource::<SceneShapes>()
             .init_resource::<RoomMesh>()
             .init_resource::<SceneRevision>()
             .init_resource::<SceneLabels>()
@@ -636,7 +601,6 @@ fn locate_surfaces(
     primary_space: Res<XrPrimaryReferenceSpace>,
     frame_state: Option<Res<OxrFrameState>>,
     mut query: ResMut<SceneQuery>,
-    mut planes: ResMut<DetectedPlanes>,
     mut shapes: ResMut<SceneShapes>,
     mut labels: ResMut<SceneLabels>,
     mut room: ResMut<RoomMesh>,
@@ -674,7 +638,6 @@ fn locate_surfaces(
             floor: true,
         };
         room.0 = None;
-        planes.0 = upward_surface(&floor).into_iter().collect();
         if labels.0.len() != 1 {
             labels.0 = vec!["FLOOR".into()];
         }
@@ -769,35 +732,8 @@ fn locate_surfaces(
         revision.0 += 1;
     }
     room.0 = room_mesh;
-    planes.0 = located.iter().filter_map(upward_surface).collect();
     if shapes.0 != located {
         shapes.0 = located;
-    }
-}
-
-/// The upward face a skater could be placed on.
-fn upward_surface(shape: &Shape) -> Option<DetectedPlane> {
-    match *shape {
-        Shape::Plane { pose, half, .. } => Some(DetectedPlane {
-            pose,
-            half_extent: half,
-            upward: (pose.rotation * Vec3::Y).y >= UPWARD_MIN_COS,
-        }),
-        Shape::Box { pose, half } => {
-            let (axis, sign) = up_axis(pose.rotation);
-            let normal = pose.rotation * (axis * sign);
-            // A plane frame on the top face: +Y along the face normal.
-            let rotation = Quat::from_rotation_arc(pose.rotation * Vec3::Y, normal) * pose.rotation;
-            Some(DetectedPlane {
-                pose: Transform {
-                    translation: pose.translation + normal * axis.dot(half).abs(),
-                    rotation,
-                    scale: Vec3::ONE,
-                },
-                half_extent: top_extent(half, axis),
-                upward: normal.y >= UPWARD_MIN_COS,
-            })
-        }
     }
 }
 
@@ -812,18 +748,6 @@ pub(crate) fn up_axis(rotation: Quat) -> (Vec3, f32) {
         .max_by(|a, b| a.2.total_cmp(&b.2))
         .map(|(a, s, _)| (a, s))
         .expect("three axes")
-}
-
-/// Conservative top-face half extents: the smaller of the two horizontal
-/// half sizes on both axes, so a placement snap never lands past the edge
-/// whatever the face's in-plane orientation is.
-fn top_extent(half: Vec3, up: Vec3) -> Vec2 {
-    let horizontal: Vec<f32> = [(Vec3::X, half.x), (Vec3::Y, half.y), (Vec3::Z, half.z)]
-        .into_iter()
-        .filter(|(a, _)| *a != up)
-        .map(|(_, h)| h)
-        .collect();
-    Vec2::splat(horizontal[0].min(horizontal[1]))
 }
 
 fn pose_transform(pose: sys::Posef) -> Transform {
@@ -905,25 +829,6 @@ mod tests {
         assert!((p.rotation * Vec3::Y).distance(Vec3::Y) < 1e-5);
         assert!(p.translation.distance(Vec3::new(1.0, 0.0, -2.0)) < 1e-5);
         assert_eq!(half, Vec2::new(0.6, 0.4));
-    }
-
-    #[test]
-    fn table_box_top_is_a_snap_target_whichever_axis_is_up() {
-        // Box local Z up (Meta's convention for some volumes) and local Y up.
-        for rotation in [Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2), Quat::IDENTITY] {
-            let local_up = rotation.inverse() * Vec3::Y;
-            let half = Vec3::splat(0.5) + local_up.abs() * (0.375 - 0.5);
-            let shape = Shape::Box {
-                pose: Transform::from_translation(Vec3::new(0.0, 0.375, 0.0)).with_rotation(rotation),
-                half,
-            };
-            let top = upward_surface(&shape).unwrap();
-            assert!(top.upward);
-            assert!((top.pose.translation.y - 0.75).abs() < 1e-5, "{:?}", top.pose);
-            let planes = DetectedPlanes(vec![top]);
-            let snapped = planes.snap(Vec3::new(0.2, 0.9, -0.1)).unwrap();
-            assert!(snapped.distance(Vec3::new(0.2, 0.75, -0.1)) < 1e-4);
-        }
     }
 
     #[test]

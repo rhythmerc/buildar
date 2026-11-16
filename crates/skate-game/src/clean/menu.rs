@@ -87,6 +87,7 @@ pub(crate) struct Menu {
     pub park_scale: f32,
     pub world_scale: f32,
     pub xr_requests: XrRequests,
+    #[cfg(feature = "retail")]
     retail_available: bool,
 }
 
@@ -118,6 +119,7 @@ impl Menu {
         tabs.push(Tab::Practice);
         tabs.push(Tab::World);
         tabs.push(Tab::Presets);
+        #[cfg(feature = "retail")]
         let retail_available = files.join("assets/private/game.json").is_file();
         Self {
             // The scripted demo (SK8_DEMO) skips the start screen.
@@ -139,6 +141,7 @@ impl Menu {
             park_scale: 1.0,
             world_scale: 12.0,
             xr_requests: XrRequests::default(),
+            #[cfg(feature = "retail")]
             retail_available,
         }
     }
@@ -148,22 +151,26 @@ impl Menu {
     }
 
     /// Open on the SK8 sheet (the headset menu's "Advanced tuning").
+    #[cfg(feature = "xr")]
     pub(crate) fn open_sk8(&mut self) {
         self.open = true;
         self.page = Page::Sk8;
         self.cursor = 0;
     }
 
+    #[cfg(feature = "xr")]
     pub(crate) fn never_bail(&self) -> bool {
         self.never_bail
     }
 
+    #[cfg(feature = "xr")]
     pub(crate) fn set_never_bail(&mut self, on: bool) {
         self.never_bail = on;
         self.dirty = true;
     }
 
     /// Engine values changed elsewhere (the skater page): save them.
+    #[cfg(feature = "xr")]
     pub(crate) fn mark_dirty(&mut self) {
         self.dirty = true;
     }

@@ -70,8 +70,6 @@ const SCALE_RATE: f32 = 1.0;
 /// its real size while the skater grows or shrinks (world scale 1..60).
 pub(crate) const MIN_PARK_SCALE: f32 = 0.05;
 pub(crate) const MAX_PARK_SCALE: f32 = 60.0;
-/// A grip counts as held for the park-scale chord past this pull.
-const PARK_CHORD_GRIP: f32 = 0.6;
 /// One piece's own uniform scale, on top of the park scale.
 pub(crate) const MIN_PIECE_SCALE: f32 = 0.25;
 pub(crate) const MAX_PIECE_SCALE: f32 = 4.0;

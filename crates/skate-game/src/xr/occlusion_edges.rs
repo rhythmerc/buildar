@@ -49,6 +49,7 @@ pub(crate) struct GuideFrame {
     pub intrinsics: Vec4,
 }
 
+#[cfg(target_os = "android")]
 pub(crate) fn wanted() -> bool {
     WANTED.load(Ordering::Relaxed)
 }
