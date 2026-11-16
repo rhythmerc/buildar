@@ -137,6 +137,11 @@ the Escape menu.
 - Without it, the corner readout shows instead.
 - Switching engines hides and restores the panel.
 
+**Done (2026-11-16):** the flat path is deleted (`setup`, `resize_target`/`resize_image`,
+`HudComposite`, `hud_composite.wgsl`, `UiMaterialPlugin`, and the `target`/`composite`/
+`rebind_after_resize`/`fixed` fields, with the resize test). Steps 2 and 3 were done in passes 3+5.
+`hud_render.wgsl` is still embedded (`embed_render_shader`). The flat desktop run has no HUD.
+
 ### Pass 5 (decided: do it, L): Skate 3 without maps, the AR course only
 
 **Decided (2026-11-16):** retail Skate 3 maps are out of scope. The app is a generic runtime that brings
