@@ -1,6 +1,4 @@
 /target/
-/bin/
-/logs/
 /.local/
 /settings/
 /data/
@@ -34,7 +32,6 @@ __pycache__/
 *.aab
 *.pcm
 /quest-data/
-/lite-maps/
 
 # Khronos OpenXR loader, fetched by scripts/quest/fetch-openxr-loader.sh
 /crates/skate-quest/runtime_libs/**/*.so
@@ -44,3 +41,6 @@ __pycache__/
 
 # Steam Audio (scripts/quest/fetch-steam-audio.sh), never committed.
 /vendor/steam-audio/
+
+# Claude Code session state (worktrees, settings).
+.claude/
