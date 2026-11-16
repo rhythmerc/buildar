@@ -3,13 +3,10 @@
 Private runtime assets, extracted maps, custom animation clips, build output,
 settings and logs stay local. They are excluded by `.gitignore`.
 
-The two project-owned binary fixtures are generated without game assets:
-
-- `maps/format-demo.skate`: `python tools/make_skate_demo.py`
-- `skate-data/tests/fixtures/retail-collision.rwcmset` (now in the
-  [skate3-headless](https://github.com/rhythmerc/skate3-headless) repo, which also keeps a copy of
-  `format-demo.skate` for its tests; the script writes into a sibling checkout of it):
-  `python tools/make_collision_fixture.py`
+The project-owned binary test fixtures live in the
+[skate3-headless](https://github.com/rhythmerc/skate3-headless) repo, generated without game assets:
+`skate-data/tests/fixtures/retail-collision.rwcmset` (`python tools/make_collision_fixture.py` here writes
+into a sibling checkout of it) and `sim/tests/fixtures/format-demo.skate`.
 
 Run these commands from the repository root. Both generators reproduced the
 tracked fixtures byte for byte during publication preparation.

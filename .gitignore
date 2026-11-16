@@ -7,9 +7,6 @@
 __pycache__/
 *.pyc
 /assets/private/
-/maps/private/
-/maps/*.skate
-!/maps/format-demo.skate
 
 # Local extraction, animation authoring, archives and credentials.
 *.zip
