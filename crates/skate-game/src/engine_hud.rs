@@ -31,8 +31,8 @@ use engine_core::hud::{HudBlend, HudFrame, HudPart, Placement, Rgba8, Shading, S
 use std::collections::HashMap;
 
 /// The render layers the parts' pictures are drawn on, one a part (nothing else uses them: the controllers' shapes
-/// have 20 and 21; Skate 3's own HUD 31, until it draws here).
-const LAYERS: std::ops::RangeInclusive<usize> = 22..=30;
+/// have 20 and 21).
+const LAYERS: std::ops::RangeInclusive<usize> = 22..=31;
 /// The parts' cameras' order: before the views showing their pictures, each its own.
 const FIRST_ORDER: isize = -20;
 

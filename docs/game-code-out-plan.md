@@ -305,6 +305,19 @@ synthetic every-blend frame were recorded and drawn through the old path. Replay
 pictures are identical (max difference 0). A GPU test checks each shading and blend against its maths (within
 1/255).
 
+**Step 3, as done (2026-11-16):** Skate 3's HUD is on the same renderer. Its side moved to a Bevy-free crate in the
+app's workspace, marked Skate-3-only so it can move into skate3-headless as it is: `crates/skate3-engine`
+(`hud::Hud`). It covers loading `private/hud`, the `hud_runtime` advance, `apt_scene::draw` → `HudFrame` (one part:
+`AREA` of the 1280x720 stage at `resolution` 1.5), the panel constants and texture name → id. Textures are handed
+over once each, not kept twice. A frame is drawn only after an advance. skate3-headless itself is unchanged. The
+app's adapter is `skate3_hud.rs`. It loads on the `AsyncComputeTaskPool`, advances per tick, draws per frame, and
+keeps the multiplier-sound choice per tick (it reads `SkaterRuntime` and `skate_audio`, both still app-side). The
+panel appears only once the HUD has loaded, so without `private/hud` the corner readout stays. `scoring_hud.rs` and
+`hud_render.wgsl` are gone, and layer 31 is back in the pool (22-31). Parity: the real HUD (this machine's
+`private/hud`) through a line's ten frames, old path and new at the headset's 960x540, is identical (max difference
+0). The first try pre-scaled the stage by 1.5 instead of `resolution`; that was 2/255 off in 21-38 pixels of three
+frames (glyph sampling).
+
 ### Risks
 
 - **Quest performance:**

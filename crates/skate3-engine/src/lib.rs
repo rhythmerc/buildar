@@ -1,0 +1,10 @@
+//! **Skate 3 only.** Skate 3's side of the engine contract ([`engine_core`]): what the app needs to know about Skate 3
+//! to host it, said as the contract's plain data, over its simulation (`skate3-sim`). No Bevy.
+//!
+//! It lives in the app's workspace for now and is meant to move into the skate3-headless repo as it is (beside
+//! `skate3-sim`, or into it as `skate3_sim::hud`: `docs/game-code-out-plan.md`, step 3). Nothing here may depend on
+//! the app.
+//!
+//! - [`hud`]: the retail trick display (its movie, read from the player's prepared HUD files) as a
+//!   [`engine_core::hud::HudFrame`].
+pub mod hud;
