@@ -30,6 +30,8 @@ pub enum Part {
 /// and with the skater small).
 pub const METER_PER_SKATER: f32 = 1.2;
 pub const METER_LEAST_SHARE: f32 = 0.16;
+/// The skater's middle, a share of its height up from its feet (an upright meter is beside it).
+pub const METER_MIDDLE: f32 = 0.55;
 /// The skater's height, the game's metres (how tall it's drawn: the app's world size divides it).
 pub const SKATER_HEIGHT: f32 = 1.8;
 
@@ -71,6 +73,10 @@ impl Part {
                 side: if upright { Side::Beside } else { Side::Above },
                 width_per_height: METER_PER_SKATER,
                 least_view_share: METER_LEAST_SHARE,
+                middle: METER_MIDDLE,
+                // (an upright meter is about a fifth of the panel across: just clear of the side; an arc is about a
+                // third of the panel high, its middle the panel's: just over the head)
+                clear: if upright { (0.3, 0.15) } else { (0.0, 0.2) },
             },
             // (its right edge, the string's end, left of the controller)
             Part::Trick => Placement::Hand {

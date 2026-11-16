@@ -8,15 +8,14 @@
 //!
 //! - Start: picked the first time, the game boots on a thread of its own (its scripts and an empty level), then the
 //!   skater is put in front of the player, or where the last engine's skater was.
-//! - World: the room and the park pieces become its collision ([`triangles`]), the rails its rails. The game's units
-//!   are inches, y up, right-handed like ours, so metres map onto it by scale; it is offset ([`OFFSET`]) clear of
-//!   the empty level's own scene.
+//! - World: the stage and the park become its collision and rails (`thug2_engine::stage`: its units, offset and face
+//!   classes; not mid-grind). Offered every frame; the game takes the latest when it can.
 //! - Frames: the game steps at its 60 Hz from the headset's frames (several a frame at most), and waits while a menu
 //!   or build mode has the controllers.
-//! - Pad: the Touch controllers as a PlayStation 2 pad ([`CONTROLS`]).
+//! - Pad: the Touch controllers as a PlayStation 2 pad (`thug2_engine::input`).
 use crate::engines::{self, Engine, EngineSet};
-use crate::xr::link::{ArWorld, PieceSurfaces, SkaterLink, TeleportSkater};
-use crate::xr::touch::TouchState;
+use crate::xr::link::{CurrentPark, CurrentStage, PlacePlayer, SkaterLink};
+use thug2_engine::stage::{DECK_HEIGHT, SOUND_HEIGHT, from_game};
 use bevy::prelude::*;
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
@@ -27,30 +26,6 @@ const STEP: f32 = 1.0 / 60.0;
 const MAX_STEPS_PER_FRAME: u32 = 4;
 /// Game frames run at boot, before the skater is put anywhere (the level puts it at its own start first).
 const SETTLE_FRAMES: u32 = 120;
-/// Where our origin is in the game's world (inches): clear of the empty level's sky.
-const OFFSET: Vec3 = Vec3::new(50_000.0, 0.0, 50_000.0);
-/// A face whose normal is less up than this is upright (a wall: steeper than 75°); one more up than `RAMP_UP` is level
-/// ground (under 18°), between them a ramp. A piece's transition steeper than `VERT_UP` (45°), joined to the ramp below
-/// it, is vert: the game's vert air, spine transfers and hips need it (they look for vert faces steeper than 45°).
-const WALL_UP: f32 = 0.26;
-const RAMP_UP: f32 = 0.95;
-const VERT_UP: f32 = 0.707;
-/// Where the deck is above the skater's feet, metres.
-const DECK_HEIGHT: f32 = 0.08;
-const PRESSED: f32 = 0.5;
-
-/// The Touch controllers as THUG2's pad.
-const CONTROLS: [(&str, &str); 8] = [
-    ("Either stick", "steer, push (up), trick directions"),
-    ("A / B", "ollie (X) / grind (triangle)"),
-    ("X / Y", "flip trick (square) / grab trick (circle)"),
-    ("Grips", "L1 / R1: spin left / right"),
-    ("Triggers", "L2 / R2: revert, nollie, switch"),
-    ("Left grip + trigger", "aim, let go to put the skater there"),
-    ("Left menu (tap)", "this menu"),
-    ("Left menu (hold 1 s)", "build mode"),
-];
-
 /// Where the game's files are, and where it may write.
 #[derive(Resource, Clone)]
 struct Thug2Files {
@@ -103,7 +78,7 @@ pub(crate) fn install(app: &mut App, files: &Path) {
     app.world_mut().resource_mut::<engines::CourseSettings>().0.insert(Engine::Thug2, (park_settings, apply_park_settings));
     app.world_mut()
         .resource_mut::<crate::xr::ui::ControlsSheet>()
-        .set(Engine::Thug2, CONTROLS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect());
+        .set(Engine::Thug2, thug2_engine::input::CONTROLS.to_vec());
     crate::engine_hud::install(app);
     engines::add_engine(app, Engine::Thug2, available, |app| {
         app.init_resource::<Thug2>()
@@ -111,7 +86,7 @@ pub(crate) fn install(app: &mut App, files: &Path) {
             .add_systems(Startup, (boot, spawn_stand_in, hud_parts))
             .add_systems(
                 Update,
-                (finish_boot, read_pad, teleport, apply_world, want_hud, step, publish, play_sounds, draw_hud)
+                (finish_boot, read_pad, place_player, offer_stage, want_hud, step, publish, play_sounds, draw_hud)
                     .chain()
                     .after(crate::xr::ui::UiSet)
                     .in_set(EngineSet(Engine::Thug2)),
@@ -154,15 +129,13 @@ enum Phase {
 #[derive(Resource, Default)]
 struct Thug2 {
     phase: Phase,
-    pad: t2::Pad,
-    /// A menu or build mode has the controllers: the game waits.
-    hold: bool,
+    /// Its pad, and whether it waits (a menu or build mode has the controllers).
+    input: thug2_engine::input::Input,
     accum: f32,
     previous: Option<t2::Skater>,
     current: Option<t2::Skater>,
-    /// The `ArWorld` revision the game has, and the world size it was given at.
-    world_given: Option<u64>,
-    scale_given: f32,
+    /// What the game has of the stage: its revision and world size (`thug2_engine::stage`).
+    stage: thug2_engine::stage::StageFeed,
     /// Where to put the skater, waiting for the game or the world.
     spawn: Option<t2::Spawn>,
     /// The game has stepped since it was given our world (the skater is in it, not at the level's own start).
@@ -281,38 +254,9 @@ fn finish_boot(world: &mut World) {
     }
 }
 
+/// The game's pad from the controllers (`thug2_engine::input`).
 fn read_pad(touch: Res<engine_api::LatestTouch>, held: Res<engine_api::PadHeld>, mut thug2: ResMut<Thug2>) {
-    let t = &touch.0;
-    thug2.hold = held.pause;
-    thug2.pad = if held.held || t.menu { t2::PAD_AT_REST } else { pad(t) };
-}
-
-/// The controllers as the game's pad: sticks 0-255 (0x80 at rest, up and left 0).
-fn pad(t: &TouchState) -> t2::Pad {
-    use t2::buttons::*;
-    let axis = |v: f32| (128.0 + v.clamp(-1.0, 1.0) * 127.0).round() as u8;
-    let mut buttons = 0;
-    for (on, bit) in [
-        // (laid out as a pad's: ollie and grind on the right face buttons, flip and grab on the left's, the grips
-        // the shoulder buttons and the triggers the triggers)
-        (t.a, CROSS),
-        (t.b, TRIANGLE),
-        (t.x, SQUARE),
-        (t.y, CIRCLE),
-        (t.left_grip > PRESSED, L1),
-        (t.right_grip > PRESSED, R1),
-        (t.left_trigger > PRESSED, L2),
-        (t.right_trigger > PRESSED, R2),
-    ] {
-        if on {
-            buttons |= bit;
-        }
-    }
-    // Either stick is the game's direction stick (the pad's left; its right stick does nothing in the game): the
-    // further pushed one, so a thumb can leave its stick for a button (the left one for flip and grab, X / Y).
-    let length = |v: [f32; 2]| v[0] * v[0] + v[1] * v[1];
-    let stick = if length(t.right_stick) > length(t.left_stick) { t.right_stick } else { t.left_stick };
-    t2::Pad { left_x: axis(stick[0]), left_y: axis(-stick[1]), right_x: 0x80, right_y: 0x80, buttons }
+    thug2.input.set_input(&touch.0, **held);
 }
 
 /// THUG2's HUD (`thug2_engine::hud`: its parts and where they go) drawn by the app's HUD renderer. Its parts are
@@ -340,37 +284,13 @@ fn want_hud(
     }
 }
 
-/// The last step's 2D drawn, and where the skater is for the balance meter at it.
-fn draw_hud(
-    mut thug2: ResMut<Thug2>,
-    mut renderer: crate::engine_hud::HudRenderer,
-    mut focus: ResMut<crate::engine_hud::HudFocus>,
-    mut frame: Local<engine_core::hud::HudFrame>,
-) {
+/// The last step's 2D drawn (the balance meter goes at the skater: its focus, from the link `publish` fills).
+fn draw_hud(mut thug2: ResMut<Thug2>, mut renderer: crate::engine_hud::HudRenderer, mut frame: Local<engine_core::hud::HudFrame>) {
     let thug2 = &mut *thug2;
-    let scale = thug2.scale_given.max(1e-3);
-    focus.set(
-        Engine::Thug2,
-        thug2.current.filter(|_| thug2.placed).map(|s| engine_core::Focus {
-            feet: from_game(s.position, scale),
-            up: Vec3::from_array(s.up).normalize_or(Vec3::Y),
-            height: thug2_engine::hud::SKATER_HEIGHT / scale,
-        }),
-    );
     let Phase::Running(engine) = &mut thug2.phase else { return };
     let balancing = thug2.current.is_some_and(|s| s.balance.is_some());
     thug2_engine::hud::frame(&thug2.hud, balancing, &mut frame);
     renderer.show(Engine::Thug2, &frame, |id| engine.hud_texture(thug2_engine::hud::game_texture(id)).map(thug2_engine::hud::texture));
-}
-
-/// Our metres as the game's units: `scale` is the world size ([`Tuning::scale`]: how much bigger the room is to the
-/// game than it is to the player).
-fn to_game(p: Vec3, scale: f32) -> [f32; 3] {
-    (p * t2::INCHES_PER_METRE * scale + OFFSET).to_array()
-}
-
-fn from_game(p: [f32; 3], scale: f32) -> Vec3 {
-    (Vec3::from_array(p) - OFFSET) / (t2::INCHES_PER_METRE * scale)
 }
 
 /// How THUG2 plays in the room, kept in `thug2.json` beside the app's other settings.
@@ -501,13 +421,12 @@ impl crate::xr::ui::UiProvider for Thug2Pages {
     }
 }
 
-fn teleport(mut requests: MessageReader<TeleportSkater>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
+/// Put down where the shared layer asks (`thug2_engine::stage::spawn`: on the board, a little over the point): now if
+/// the game has a stage of ours, else with the next one it takes.
+fn place_player(mut requests: MessageReader<PlacePlayer>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
     for r in requests.read() {
-        let spawn = t2::Spawn {
-            point: to_game(r.point + Vec3::Y * 0.1, tuning.scale),
-            heading_degrees: t2::heading_of(r.forward.to_array()),
-        };
-        let given = thug2.world_given.is_some();
+        let spawn = thug2_engine::stage::spawn(r.point, r.forward, tuning.scale);
+        let given = thug2.stage.given().is_some();
         match &mut thug2.phase {
             Phase::Running(engine) if given => engine.teleport(spawn),
             _ => thug2.spawn = Some(spawn),
@@ -515,46 +434,26 @@ fn teleport(mut requests: MessageReader<TeleportSkater>, tuning: Res<Tuning>, mu
     }
 }
 
-/// The room and pieces given to the game when they change (not mid-grind: the rails would go from under it), once
-/// there is somewhere to put the skater.
-fn apply_world(world: Res<ArWorld>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
-    let grinding = thug2.current.is_some_and(|s| s.state == t2::State::Rail);
-    let rescaled = thug2.world_given.is_some() && thug2.scale_given != tuning.scale;
-    if world.revision == 0 || (thug2.world_given == Some(world.revision) && !rescaled) || grinding {
-        return;
-    }
-    // (a new world size: the skater put back where it is in the room, in the new units)
-    if rescaled && thug2.spawn.is_none()
-        && let Some(s) = thug2.current
-    {
-        let at = from_game(s.position, thug2.scale_given);
-        thug2.spawn = Some(t2::Spawn {
-            point: to_game(at + Vec3::Y * 0.1, tuning.scale),
-            heading_degrees: t2::heading_of(s.forward),
-        });
-    }
-    if thug2.spawn.is_none() && thug2.world_given.is_none() {
-        return;
-    }
-    let spawn = thug2.spawn.take();
-    let Phase::Running(engine) = &mut thug2.phase else {
-        thug2.spawn = spawn;
-        return;
+/// The stage and park offered every frame: the game takes them (`thug2_engine::stage::StageFeed`) when they or the
+/// world size change - not mid-grind, and once there's somewhere to put the skater.
+fn offer_stage(stage: Res<CurrentStage>, park: Res<CurrentPark>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
+    let thug2 = &mut *thug2;
+    let given = thug2.stage.given();
+    thug2.stage.set_park(&park);
+    let engine = match &mut thug2.phase {
+        Phase::Running(engine) => Some(engine),
+        _ => None,
     };
-    let faces = triangles(&world, tuning.scale);
-    let rails: Vec<Vec<[f32; 3]>> =
-        world.rails.iter().map(|r| r.iter().map(|&p| to_game(p, tuning.scale)).collect()).collect();
-    engine.set_world(&faces, spawn);
-    engine.set_rails(&rails);
-    info!("THUG2 world: {} faces, {} rails (AR revision {})", faces.len(), rails.len(), world.revision);
-    thug2.world_given = Some(world.revision);
-    thug2.scale_given = tuning.scale;
+    thug2.stage.set_stage(engine, thug2.current.as_ref(), &stage, tuning.scale, &mut thug2.spawn);
+    if thug2.stage.given() != given {
+        info!("THUG2 world: {} faces, {} rails (AR revision {})", thug2.stage.faces, thug2.stage.rails, stage.revision);
+    }
 }
 
 fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
     let thug2 = &mut *thug2;
     let Phase::Running(engine) = &mut thug2.phase else { return };
-    if thug2.hold || thug2.world_given.is_none() {
+    if thug2.input.hold || thug2.stage.given().is_none() {
         thug2.accum = 0.0;
         return;
     }
@@ -563,7 +462,7 @@ fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
     while thug2.accum >= STEP && steps < MAX_STEPS_PER_FRAME {
         thug2.accum -= STEP;
         steps += 1;
-        match engine.step(&thug2.pad) {
+        match engine.step(&thug2.input.pad) {
             Ok(skater) => {
                 thug2.previous = thug2.current;
                 thug2.current = skater;
@@ -618,9 +517,6 @@ struct VoiceEmitter {
     looping: bool,
 }
 
-/// Where the skater's sounds come from: its board, a little up from its feet (metres at its own size).
-const SOUND_HEIGHT: f32 = 0.3;
-
 /// The game's sound effects from the skater, heard through the headset (`xr::spatial_audio`): each voice the game
 /// plays, an emitter at the skater playing its sound at the game's level and pitch. A voice played again from its
 /// start is a new emitter; a looping one goes when the game stops it, one played once when it has run out. While the
@@ -641,8 +537,10 @@ fn play_sounds(
     }
     let started = std::mem::take(&mut thug2.heard.started);
     let Some(s) = thug2.current.filter(|_| thug2.placed) else { return };
-    let scale = thug2.scale_given.max(1e-3);
-    let at = from_game(s.position, scale) + Vec3::from_array(s.up).normalize_or(Vec3::Y) * (SOUND_HEIGHT / scale);
+    // (from the skater's focus: its feet, a little up)
+    let link = thug2_engine::stage::link(&s, thug2.stage.scale());
+    let Some(focus) = link.focus() else { return };
+    let at = focus.feet + focus.up * (SOUND_HEIGHT * link.size());
     let voices = &thug2.heard.voices;
     for (entity, emitter, mut transform, sink) in &mut emitters {
         let now = voices.iter().find(|v| v.voice == emitter.voice);
@@ -655,14 +553,14 @@ fn play_sounds(
         if let (Some(v), Some(mut sink)) = (now, sink) {
             sink.set_volume(Volume::Linear(v.gain * tuning.volume));
             sink.set_speed(v.speed);
-            match (thug2.hold, sink.is_paused()) {
+            match (thug2.input.hold, sink.is_paused()) {
                 (true, false) => sink.pause(),
                 (false, true) => sink.play(),
                 _ => {}
             }
         }
     }
-    if thug2.hold {
+    if thug2.input.hold {
         return;
     }
     for v in started {
@@ -685,107 +583,10 @@ fn play_sounds(
     }
 }
 
+/// Where the skater is (`thug2_engine::stage::link`), once it is in our world.
 fn publish(thug2: Res<Thug2>, mut link: ResMut<SkaterLink>) {
     let Some(s) = thug2.current.filter(|_| thug2.placed) else { return };
-    let up = Vec3::from_array(s.up);
-    let scale = thug2.scale_given;
-    link.deck = Some((from_game(s.position, scale) + up * DECK_HEIGHT / scale, Vec3::from_array(s.forward)));
-    link.grinding = s.state == t2::State::Rail;
-    link.size = 1.0 / scale.max(1e-3);
-}
-
-/// The room and pieces as the game's collision faces (game units, offset). The game rides a face only from its
-/// front, so each is turned the way it is met:
-/// - ground (level to a steep ramp): facing up, skatable;
-/// - a piece's transition steeper than 45° above a ramp (a quarter pipe's top half): vert, facing the ramp, so the
-///   skater goes straight up and comes back down into it - or transfers to a vert face behind the coping (a spine);
-/// - any other upright face (room walls, furniture and box sides): both ways, wallridable.
-pub(crate) fn triangles(world: &ArWorld, scale: f32) -> Vec<t2::Triangle> {
-    let mut out = Vec::new();
-    for t in world.room() {
-        face(&mut out, t, None, scale);
-    }
-    for piece in &world.pieces {
-        piece_faces(&mut out, piece, scale);
-    }
-    out
-}
-
-fn normal(t: [Vec3; 3]) -> Vec3 {
-    (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero()
-}
-
-/// One face; `vert`: it is a quarter pipe's top, facing (across) `vert`.
-fn face(out: &mut Vec<t2::Triangle>, t: [Vec3; 3], vert: Option<Vec3>, scale: f32) {
-    use t2::face::*;
-    let n = normal(t);
-    if n == Vec3::ZERO {
-        return;
-    }
-    let flipped = [t[0], t[2], t[1]];
-    let game = |t: [Vec3; 3], flags: u16| t2::Triangle { v: t.map(|p| to_game(p, scale)), flags, terrain: 0 };
-    if let Some(toward) = vert {
-        let t = if n.with_y(0.0).dot(toward.with_y(0.0)) >= 0.0 { t } else { flipped };
-        out.push(game(t, SKATABLE | VERT));
-    } else if n.y.abs() >= WALL_UP {
-        // (ground, or a slope or overhang turned to face up)
-        out.push(game(if n.y > 0.0 { t } else { flipped }, SKATABLE));
-    } else {
-        out.push(game(t, SKATABLE | WALL));
-        out.push(game(flipped, SKATABLE | WALL));
-    }
-}
-
-/// A piece's faces, its quarter pipes' tops found: a quad steeper than 45° whose lower edge is the upper edge of a
-/// gentler ramp quad (or of another such top) is vert, facing that ramp.
-fn piece_faces(out: &mut Vec<t2::Triangle>, piece: &PieceSurfaces, scale: f32) {
-    let quads: Vec<[Vec3; 4]> = piece.quads.iter().chain(&piece.rail_quads).copied().collect();
-    let up_normal = |q: &[Vec3; 4]| {
-        let n = normal([q[0], q[1], q[2]]);
-        if n.y < 0.0 { -n } else { n }
-    };
-    // (a quad's two lowest corners)
-    let bottom = |q: &[Vec3; 4]| {
-        let mut c = *q;
-        c.sort_by(|a, b| a.y.total_cmp(&b.y));
-        [c[0], c[1]]
-    };
-    let has = |q: &[Vec3; 4], p: Vec3| q.iter().any(|c| c.distance_squared(p) < 1e-4);
-    // Each quad's vert facing: none, or the ramp's way.
-    let mut vert: Vec<Option<Vec3>> = vec![None; quads.len()];
-    for _ in 0..quads.len().min(32) {
-        let mut changed = false;
-        for (i, q) in quads.iter().enumerate() {
-            if vert[i].is_some() || up_normal(q).y >= VERT_UP {
-                continue;
-            }
-            let [a, b] = bottom(q);
-            let below = quads.iter().enumerate().find_map(|(j, r)| {
-                let n = up_normal(r);
-                let ramp = n.y >= VERT_UP && n.y < RAMP_UP;
-                let joins = j != i && has(r, a) && has(r, b);
-                if !joins {
-                    None
-                } else if ramp {
-                    Some(n)
-                } else {
-                    vert[j]
-                }
-            });
-            if let Some(toward) = below.filter(|n| n.with_y(0.0).length_squared() > 1e-6) {
-                vert[i] = Some(toward);
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-    for (q, v) in quads.iter().zip(vert) {
-        let [a, b, c, d] = *q;
-        face(out, [a, b, c], v, scale);
-        face(out, [a, c, d], v, scale);
-    }
+    **link = thug2_engine::stage::link(&s, thug2.stage.scale());
 }
 
 /// The skater's stand-in: a board and a body.
@@ -830,7 +631,7 @@ fn place_stand_in(
     };
     let before = thug2.previous.unwrap_or(now);
     let alpha = (thug2.accum / STEP).clamp(0.0, 1.0);
-    let scale = thug2.scale_given;
+    let scale = thug2.stage.scale();
     let at = from_game(before.position, scale).lerp(from_game(now.position, scale), alpha);
     let up = Vec3::from_array(now.up).normalize_or(Vec3::Y);
     let forward = Vec3::from_array(now.forward).normalize_or(Vec3::Z);
@@ -987,8 +788,9 @@ fn pose_skater(thug2: Res<Thug2>, joints: Option<Res<SkaterJoints>>, mut q: Quer
     if !shown {
         return;
     }
-    let scale = thug2.scale_given;
-    let to_ours = Mat4::from_scale(Vec3::splat(1.0 / (t2::INCHES_PER_METRE * scale))) * Mat4::from_translation(-OFFSET);
+    let scale = thug2.stage.scale();
+    let to_ours =
+        Mat4::from_scale(Vec3::splat(1.0 / (t2::INCHES_PER_METRE * scale))) * Mat4::from_translation(-thug2_engine::stage::OFFSET);
     // (between the last two frames: the game steps at 60 Hz, the headset draws faster)
     let now = thug2.current.unwrap();
     let before = thug2.previous.unwrap_or(now);
@@ -1023,7 +825,7 @@ fn pose_skater(thug2: Res<Thug2>, joints: Option<Res<SkaterJoints>>, mut q: Quer
 fn shoot(
     mut commands: Commands,
     engines: Res<engines::Engines>,
-    link: Res<SkaterLink>,
+    focus: Res<crate::xr::link::PlayerFocus>,
     time: Res<Time<Real>>,
     mut images: ResMut<Assets<Image>>,
     mut cameras: Query<&mut Transform, With<ShotImage>>,
@@ -1055,7 +857,7 @@ fn shoot(
     if engines.current() != Some(wanted) || *done >= 12 {
         return;
     }
-    let Some((deck, nose)) = link.deck else { return };
+    let Some((deck, nose)) = focus.of(wanted).map(|f| (f.feet, f.forward)) else { return };
     let started = *since.get_or_insert(time.elapsed_secs());
     let after: f32 = std::env::var("THUG2_SHOT_AFTER").ok().and_then(|v| v.parse().ok()).unwrap_or(2.0);
     let side = nose.cross(Vec3::Y).normalize_or(Vec3::X);
@@ -1090,63 +892,6 @@ struct ShotImage(Handle<Image>);
 mod tests {
     use super::*;
 
-    fn quad(a: Vec3, b: Vec3, c: Vec3, d: Vec3) -> [Vec3; 4] {
-        [a, b, c, d]
-    }
-
-    fn up(t: &t2::Triangle) -> f32 {
-        let v = t.v.map(Vec3::from_array);
-        normal([v[0], v[1], v[2]]).y
-    }
-
-    #[test]
-    fn metres_map_to_offset_inches_and_back() {
-        let p = Vec3::new(1.0, 2.0, -3.0);
-        let g = to_game(p, 1.0);
-        assert!((g[1] - 2.0 * 39.370_08).abs() < 1e-3);
-        assert!((from_game(g, 1.0) - p).length() < 1e-4);
-        // A world twice the size: twice the inches, and back.
-        let g2 = to_game(p, 2.0);
-        assert!((g2[1] - 4.0 * 39.370_08).abs() < 1e-3);
-        assert!((from_game(g2, 2.0) - p).length() < 1e-4);
-    }
-
-    #[test]
-    fn ground_faces_up_whichever_way_it_was_wound_and_walls_both_ways() {
-        let mut out = Vec::new();
-        // A floor wound to face down, and a wall.
-        face(&mut out, [Vec3::ZERO, Vec3::X, Vec3::Z], None, 1.0);
-        assert_eq!(out.len(), 1);
-        assert!(up(&out[0]) > 0.99, "turned up");
-        assert_eq!(out[0].flags, t2::face::SKATABLE);
-        face(&mut out, [Vec3::ZERO, Vec3::Y, Vec3::X], None, 1.0);
-        assert_eq!(out.len(), 3, "a wall is two faces");
-        assert_eq!(out[1].flags, t2::face::SKATABLE | t2::face::WALL);
-    }
-
-    #[test]
-    fn a_quarter_pipes_top_is_vert_facing_its_ramp() {
-        // A quarter pipe along +z: flat, a 45° ramp, then an upright top (wound facing away, +z).
-        let r = 1.0;
-        let flat = quad(Vec3::new(0.0, 0.0, -1.0), Vec3::new(1.0, 0.0, -1.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 0.0));
-        let ramp = quad(Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), Vec3::new(1.0, 0.5 * r, 0.5 * r), Vec3::new(0.0, 0.5 * r, 0.5 * r));
-        let top = quad(Vec3::new(0.0, 0.5 * r, 0.5 * r), Vec3::new(1.0, 0.5 * r, 0.5 * r), Vec3::new(1.0, 1.5 * r, 0.5 * r), Vec3::new(0.0, 1.5 * r, 0.5 * r));
-        // A box side elsewhere, on nothing: a wall.
-        let side = quad(Vec3::new(3.0, 0.0, 0.0), Vec3::new(3.0, 0.5, 0.0), Vec3::new(3.0, 0.5, 1.0), Vec3::new(3.0, 0.0, 1.0));
-        let piece = PieceSurfaces { quads: vec![flat, ramp, top, side], ..default() };
-        let mut out = Vec::new();
-        piece_faces(&mut out, &piece, 1.0);
-        let verts: Vec<&t2::Triangle> = out.iter().filter(|t| t.flags & t2::face::VERT != 0).collect();
-        assert_eq!(verts.len(), 2, "the top's two triangles");
-        for t in verts {
-            let v = t.v.map(Vec3::from_array);
-            assert!(normal([v[0], v[1], v[2]]).z < -0.9, "facing back down the ramp (-z)");
-        }
-        let walls = out.iter().filter(|t| t.flags & t2::face::WALL != 0).count();
-        assert_eq!(walls, 4, "the box side, both ways");
-        assert!(out.iter().filter(|t| t.flags == t2::face::SKATABLE).all(|t| up(t) > 0.3));
-    }
-
     /// The adapter on the real engine (`THUG2_GAME_DIR`: the folder holding the player's `Data`; skipped without
     /// it): a room floor given, the skater put on it, pushed forward with the left stick; then a second engine
     /// picked and the stand-in hidden, and THUG2 picked again carrying on.
@@ -1168,6 +913,7 @@ mod tests {
             .add_plugins(bevy::audio::AudioPlugin::default())
             .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(std::time::Duration::from_secs_f64(1.0 / 60.0)))
             .init_resource::<SkaterLink>()
+            .init_resource::<CurrentPark>()
             .init_resource::<crate::xr::ui::ControlsSheet>()
             .init_resource::<crate::xr::ui::UiProviders>()
             .init_resource::<crate::xr::actions::LatestTouch>()
@@ -1177,22 +923,23 @@ mod tests {
             .init_resource::<crate::xr::spawn::PlaceSkater>()
             .init_resource::<crate::xr::ui::hud::TrickHud>()
             .init_resource::<crate::xr::ui::XrUi>()
-            .add_message::<TeleportSkater>();
+            .add_message::<PlacePlayer>();
         // A 20 m room floor (wound facing down: it is turned up) and a rail.
-        let mut room = ArWorld { revision: 1, ..default() };
+        let mut room = engine_core::Stage { revision: 1, ..default() };
         room.room_quads.push([Vec3::new(-10.0, 0.0, -10.0), Vec3::new(10.0, 0.0, -10.0), Vec3::new(10.0, 0.0, 10.0), Vec3::new(-10.0, 0.0, 10.0)]);
-        room.rails.push(vec![Vec3::new(1.0, 0.3, 0.0), Vec3::new(1.0, 0.3, 2.0)]);
-        app.insert_resource(room);
+        app.insert_resource(CurrentStage(room));
+        app.world_mut().resource_mut::<CurrentPark>().revision = 1;
+        app.world_mut().resource_mut::<CurrentPark>().rails.push(vec![Vec3::new(1.0, 0.3, 0.0), Vec3::new(1.0, 0.3, 2.0)]);
         engines::add_engine(&mut app, Engine::Sk8, |_| Ok(()), |app| {
             app.add_systems(Update, || {});
         });
         install(&mut app, &files);
         app.world_mut().resource_mut::<Engines>().request(Engine::Thug2);
-        app.world_mut().write_message(TeleportSkater { point: Vec3::new(0.0, 0.0, -2.0), forward: Vec3::Z });
+        app.world_mut().write_message(PlacePlayer::new(Vec3::new(0.0, 0.0, -2.0), Vec3::Z));
         let mut deck = None;
         for _ in 0..600 {
             app.update();
-            deck = app.world().resource::<SkaterLink>().deck;
+            deck = app.world().resource::<SkaterLink>().board.map(|b| (b.position, b.forward));
             if deck.is_some() {
                 break;
             }
@@ -1205,7 +952,7 @@ mod tests {
         for _ in 0..60 {
             app.update();
         }
-        let (pushed, _) = app.world().resource::<SkaterLink>().deck.unwrap();
+        let pushed = app.world().resource::<SkaterLink>().board.unwrap().position;
         assert!(pushed.z > start.z + 2.0, "pushed along +z: {start} -> {pushed}");
         assert!(pushed.y.abs() < 0.2, "on the floor: {pushed}");
         // Its sound: rolling, a looping emitter at the skater, playing the game's own samples.
@@ -1214,12 +961,12 @@ mod tests {
         assert!((rolling - pushed).length() < 0.6, "from the skater: {rolling} vs {pushed}");
         assert!(!app.world().resource::<Thug2Sounds>().samples.is_empty());
         // A world twice the size: the skater stays where it is in the room, and is drawn half size.
-        let here = app.world().resource::<SkaterLink>().deck.unwrap().0;
+        let here = app.world().resource::<SkaterLink>().board.unwrap().position;
         app.world_mut().resource_mut::<Tuning>().scale = 2.0;
         for _ in 0..3 {
             app.update();
         }
-        let there = app.world().resource::<SkaterLink>().deck.unwrap().0;
+        let there = app.world().resource::<SkaterLink>().board.unwrap().position;
         assert!((there.xz() - here.xz()).length() < 0.6, "kept its place: {here} -> {there}");
         // The game's own skater drawn: its parts skinned to joints that sit on it (half size now, as the world is
         // twice as big), the stand-in not shown.
@@ -1254,56 +1001,6 @@ mod tests {
         assert!(frame(&app) > left_at, "and carries on when picked again");
         assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Inherited, "the model shown again");
         let _ = std::fs::remove_dir_all(files);
-    }
-
-    #[test]
-    fn a_transition_is_vert_from_45_degrees_up() {
-        // Up +z: a 30° ramp, then 60°, then 85° (each quad's lower edge the last one's upper edge).
-        let mut quads = Vec::new();
-        let mut at = Vec3::ZERO;
-        for degrees in [30.0f32, 60.0, 85.0] {
-            let rise = Vec3::new(0.0, degrees.to_radians().sin(), degrees.to_radians().cos()) * 0.3;
-            let next = at + rise;
-            quads.push(quad(at, at + Vec3::X, next + Vec3::X, next));
-            at = next;
-        }
-        let piece = PieceSurfaces { quads, ..default() };
-        let mut out = Vec::new();
-        piece_faces(&mut out, &piece, 1.0);
-        let vert: Vec<bool> = out.iter().map(|t| t.flags & t2::face::VERT != 0).collect();
-        assert_eq!(vert, vec![false, false, true, true, true, true], "the 30° quad isn't vert, the 60° and 85° are");
-        for t in out.iter().filter(|t| t.flags & t2::face::VERT != 0) {
-            let v = t.v.map(Vec3::from_array);
-            assert!(normal([v[0], v[1], v[2]]).z < 0.0, "facing back down the ramp");
-        }
-    }
-
-    #[test]
-    fn the_pad_is_the_games() {
-        let mut t = TouchState::default();
-        assert_eq!(pad(&t), t2::Pad { left_x: 128, left_y: 128, right_x: 128, right_y: 128, buttons: 0 });
-        t.left_stick = [-1.0, 1.0];
-        t.a = true;
-        t.x = true;
-        let p = pad(&t);
-        assert_eq!((p.left_x, p.left_y), (1, 1), "left and up are low");
-        assert_eq!(p.buttons, t2::buttons::CROSS | t2::buttons::SQUARE);
-        // A pad's layout: B grind, Y grab, grips the shoulders, triggers the triggers.
-        let mut u = TouchState { b: true, y: true, left_grip: 1.0, right_trigger: 1.0, ..default() };
-        assert_eq!(pad(&u).buttons, t2::buttons::TRIANGLE | t2::buttons::CIRCLE | t2::buttons::L1 | t2::buttons::R2);
-        u = TouchState { right_grip: 1.0, left_trigger: 1.0, ..default() };
-        assert_eq!(pad(&u).buttons, t2::buttons::R1 | t2::buttons::L2);
-        // The left thumb off its stick for X: the right stick steers.
-        t.left_stick = [0.0, 0.0];
-        t.right_stick = [1.0, -0.2];
-        t.y = true;
-        let p = pad(&t);
-        assert_eq!((p.left_x, p.left_y), (255, 153), "the right stick as the direction");
-        assert_eq!((p.right_x, p.right_y), (128, 128));
-        assert_eq!(p.buttons & t2::buttons::CIRCLE, t2::buttons::CIRCLE);
-        // Both pushed: the further one.
-        t.left_stick = [-0.3, 0.0];
-        assert_eq!(pad(&t).left_x, 255);
     }
 
     /// The HUD mid-grind as the app draws it (the app's HUD renderer), saved as pictures to look at, a part each:

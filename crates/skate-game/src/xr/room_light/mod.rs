@@ -25,7 +25,7 @@
 //! Roomtone's `Recorder` (`--clean`, no `--xr`).
 use super::ar_settings::ArSettings;
 use super::build::PlacedPieces;
-use super::link::ArWorld;
+use super::link::CurrentStage;
 use super::rig::Rig;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::Exposure;
@@ -260,7 +260,7 @@ fn root(rig: Option<&Rig>) -> Transform {
 }
 
 /// The room's bounds in tracking space, from the surfaces the skater rides.
-fn room_bounds(world: &ArWorld, tracking_from_world: &GlobalTransform) -> Option<(Vec3, Vec3)> {
+fn room_bounds(world: &engine_core::Stage, tracking_from_world: &GlobalTransform) -> Option<(Vec3, Vec3)> {
     let mut bounds: Option<(Vec3, Vec3)> = None;
     for p in world.room().flatten() {
         let p = tracking_from_world.transform_point(p);
@@ -306,7 +306,7 @@ fn feed_surfaces(
     feed: Res<RoomFeed>,
     settings: Res<ArSettings>,
     rig: Res<Rig>,
-    world: Res<ArWorld>,
+    world: Res<CurrentStage>,
     mut seen: Local<Option<(u64, Transform, bool)>>,
 ) {
     let root = root(Some(&rig));
@@ -336,7 +336,7 @@ fn place_points(
     capture: Res<RoomCapture>,
     mut light: ResMut<RoomLight>,
     rig: Option<Res<Rig>>,
-    world: Option<Res<ArWorld>>,
+    world: Option<Res<CurrentStage>>,
     pieces: Option<Res<PlacedPieces>>,
     mut seen: Local<Option<(u64, u64, Transform, bool)>>,
 ) {

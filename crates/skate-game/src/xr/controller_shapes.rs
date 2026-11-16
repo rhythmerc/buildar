@@ -252,7 +252,7 @@ fn shape(bytes: &[u8]) -> Result<Mesh, String> {
 fn place(
     settings: Res<ArSettings>,
     rig: Res<Rig>,
-    world: Res<super::link::ArWorld>,
+    stage: Res<super::link::CurrentStage>,
     grips: Query<(&Transform, &Grip), Without<Shape>>,
     // (The eye cameras' own transforms are tracking space, as the grips' are.)
     eyes: Query<(&Transform, &XrCamera), Without<Shape>>,
@@ -271,7 +271,7 @@ fn place(
         let (from, to) = (root.transform_point(camera), root.transform_point(grip.translation));
         let reach = (to - from).length();
         let dir = (to - from) / reach.max(1e-6);
-        let room = world.room().filter_map(|triangle| hit(from, dir, triangle)).filter(|&along| along > reach).fold(f32::INFINITY, f32::min);
+        let room = stage.room().filter_map(|triangle| hit(from, dir, triangle)).filter(|&along| along > reach).fold(f32::INFINITY, f32::min);
         let scale = root.scale.x.max(1e-6);
         let room_m = if room.is_finite() { room / scale } else { reach / scale + ROOM_M };
         let moved = seen_at(grip.translation, eye.translation, camera, room_m) - grip.translation;

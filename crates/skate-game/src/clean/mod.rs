@@ -233,9 +233,10 @@ fn add_sk8(app: &mut App, files: &std::path::Path, xr: bool) {
     bevy::asset::embedded_asset!(app, "assets/skater.glb");
     #[cfg(feature = "xr")]
     if xr {
-        app.world_mut().resource_mut::<crate::xr::ui::ControlsSheet>().set(
+        // (SK8's sheet lists the shared layer's chords itself: its own menu's comes after them)
+        app.world_mut().resource_mut::<crate::xr::ui::ControlsSheet>().set_whole(
             crate::engines::Engine::Sk8,
-            menu::XR_CONTROLS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
+            menu::XR_CONTROLS.iter().map(|&(a, b)| engine_api::Control::new(a, b)).collect(),
         );
         app.add_systems(Startup, |panel: Res<crate::xr::panel::XrPanel>, mut commands: Commands| {
             commands.insert_resource(menu::MenuTarget(panel.camera));

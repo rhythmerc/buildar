@@ -9,7 +9,7 @@ use crate::engines::{Engine, Engines};
 use crate::xr::actions::Hand;
 use crate::xr::ar_settings::{ArMode, ArSettings, HudHand};
 use crate::xr::build::{BuildMode, MAX_PARK_SCALE, MAX_PIECE_SCALE, MAX_SCALE, MIN_PARK_SCALE, MIN_PIECE_SCALE, MIN_SCALE, PlacedPieces};
-use crate::xr::link::{ArWorld, SkaterLink, TeleportSkater};
+use crate::xr::link::{CurrentStage, PlacePlayer};
 use crate::xr::planes::{RoomMesh, SceneCapture, SceneShapes};
 use crate::xr::rig::Rig;
 use crate::xr::room_light::RoomLight;
@@ -199,7 +199,7 @@ fn pair(a: &str, b: &str) -> Widget {
 }
 
 fn controls_rows(world: &World) -> Vec<Widget> {
-    ControlsSheet::rows(world).iter().map(|(a, b)| pair(a, b)).collect()
+    ControlsSheet::rows(world).iter().map(|c| pair(&c.input, &c.action)).collect()
 }
 
 fn tier_line(engine: Option<Engine>) -> &'static str {
@@ -399,7 +399,7 @@ fn ar_act(widget: &str, world: &mut World) -> Outcome {
                 "kind": "start",
                 "world_from_tracking": root.map(|r| r.to_matrix().to_cols_array()),
                 // (the room's surfaces, in the game's world)
-                "room_quads": world.resource::<crate::xr::link::ArWorld>().room_quads.iter().map(|q| q.map(|p| p.to_array())).collect::<Vec<_>>(),
+                "room_quads": world.resource::<CurrentStage>().room_quads.iter().map(|q| q.map(|p| p.to_array())).collect::<Vec<_>>(),
             });
             let said = match world.resource::<crate::xr::occlusion_capture::Capture>().start(folder, start) {
                 Ok(()) => "Recording: look at edges that go wrong".to_string(),
@@ -486,17 +486,14 @@ fn park_from_slider(v: f32) -> f32 {
 
 pub(crate) fn set_world_scale(world: &mut World, scale: f32) {
     let before = world.resource::<Rig>().root_transform();
-    let deck = world.resource::<SkaterLink>().deck;
+    let focus = crate::xr::link::running_focus(world);
     world.resource_mut::<Rig>().scale = scale;
     world.resource_mut::<PlacedPieces>().revision += 1; // saves the layout (it carries the scale)
     let after = world.resource::<Rig>().root_transform();
-    if let (Some(before), Some(after), Some((deck, forward))) = (before, after, deck) {
+    if let (Some(before), Some(after), Some(focus)) = (before, after, focus) {
         let inverse = before.compute_affine().inverse();
-        let (spot, dir) = (inverse.transform_point3(deck), inverse.transform_vector3(forward));
-        world.write_message(TeleportSkater {
-            point: after.transform_point(spot),
-            forward: after.rotation * dir,
-        });
+        let (spot, dir) = (inverse.transform_point3(focus.feet), inverse.transform_vector3(focus.forward));
+        world.write_message(PlacePlayer::new(after.transform_point(spot), after.rotation * dir));
     }
 }
 
@@ -719,16 +716,13 @@ pub(crate) fn put_skater_ahead(world: &mut World) {
     let ahead = root.transform_point(ahead_tracking);
     let from = ahead + Vec3::Y * root.scale.y * 0.5;
     let ground = world
-        .resource::<ArWorld>()
-        .all_triangles()
+        .resource::<CurrentStage>()
+        .triangles()
         .filter(|[a, b, c]| (*b - *a).cross(*c - *a).normalize_or_zero().y.abs() > 0.6)
         .filter_map(|[a, b, c]| ray_triangle(from, Vec3::NEG_Y, a, b, c))
         .min_by(f32::total_cmp)
         .map(|t| from - Vec3::Y * t);
     let floor_y = world.resource::<ArSettings>().floor_offset;
     let point = ground.unwrap_or_else(|| root.transform_point(ahead_tracking.with_y(floor_y)));
-    world.write_message(TeleportSkater {
-        point,
-        forward: root.rotation * forward,
-    });
+    world.write_message(PlacePlayer::new(point, root.rotation * forward));
 }

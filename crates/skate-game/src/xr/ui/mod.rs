@@ -27,6 +27,7 @@ use super::actions::LatestTouch;
 use super::build::BuildMode;
 use super::panel::XrPanel;
 use crate::engines::{Engine, Engines};
+use engine_api::Control;
 use bevy::prelude::*;
 use std::sync::Arc;
 
@@ -192,17 +193,32 @@ impl UiProviders {
     }
 }
 
-/// The controls list shown under "Controls", each engine's own.
+/// The shared layer's own controls, listed after an engine's.
+pub(crate) const HOST_CONTROLS: &[Control] = &[
+    Control::new("Left grip + trigger", "aim, let go to put the skater there"),
+    Control::new("Left menu (tap)", "this menu"),
+    Control::new("Left menu (hold 1 s)", "build mode"),
+];
+
+/// The controls list shown under "Controls": each engine's own (from the engine), then the shared layer's.
 #[derive(Resource, Clone, Default)]
-pub(crate) struct ControlsSheet(pub std::collections::HashMap<Engine, Vec<(String, String)>>);
+pub(crate) struct ControlsSheet(std::collections::HashMap<Engine, Vec<Control>>);
 
 impl ControlsSheet {
-    pub(crate) fn set(&mut self, engine: Engine, rows: Vec<(String, String)>) {
+    /// `engine`'s rows, the shared layer's after them.
+    #[cfg_attr(not(any(feature = "retail", feature = "thug2")), allow(dead_code))]
+    pub(crate) fn set(&mut self, engine: Engine, rows: Vec<Control>) {
+        self.0.insert(engine, rows.into_iter().chain(HOST_CONTROLS.iter().cloned()).collect());
+    }
+
+    /// `engine`'s rows as they are: they list the shared layer's themselves (SK8's, whose own menu's chord comes
+    /// after them).
+    pub(crate) fn set_whole(&mut self, engine: Engine, rows: Vec<Control>) {
         self.0.insert(engine, rows);
     }
 
     /// The running engine's.
-    pub(crate) fn rows(world: &World) -> Vec<(String, String)> {
+    pub(crate) fn rows(world: &World) -> Vec<Control> {
         let running = world.get_resource::<Engines>().and_then(Engines::current);
         running.and_then(|e| world.resource::<ControlsSheet>().0.get(&e).cloned()).unwrap_or_default()
     }

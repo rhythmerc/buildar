@@ -1,62 +1,6 @@
-//! Quest Touch controllers presented as the Xbox pad the imported-disc tier's input pipeline was
-//! built for. Everything downstream (the TU3 conversion in `skate_core::input::xbox`, gesture
-//! mapping, flick-it) sees an ordinary `XboxState`, so skating on Touch uses the exact same code as
-//! on a pad.
-//!
-//! Face buttons, sticks, triggers and stick clicks map one-to-one (the Touch labels A/B/X/Y match
-//! the Xbox ones); the grips are the bumpers. The left menu button is the shared layer's (a tap is
-//! the headset menu, a hold build mode, menu + both grips the SK8 sheet), so while it is held the
-//! left stick and X do not reach the game. Touch has no D-pad, Back or Start, and nothing on the
-//! headset reads them.
-#[cfg(feature = "retail")]
-pub(crate) use skate_core::input::xbox::XboxState;
+//! The Touch controllers' state, and a Bluetooth game pad folded into it ([`pad_into_touch`]). Each engine maps the
+//! state to its own game's pad (Skate 3: `skate3_engine::input`; THUG2: `thug2_engine::input`; SK8: `clean::input`).
 pub(crate) use engine_api::TouchState;
-
-#[cfg(feature = "retail")]
-mod bits {
-    pub(crate) const LEFT_THUMB: u16 = 0x0040;
-    pub(crate) const RIGHT_THUMB: u16 = 0x0080;
-    pub(crate) const LEFT_SHOULDER: u16 = 0x0100;
-    pub(crate) const RIGHT_SHOULDER: u16 = 0x0200;
-    pub(crate) const A: u16 = 0x1000;
-    pub(crate) const B: u16 = 0x2000;
-    pub(crate) const X: u16 = 0x4000;
-    pub(crate) const Y: u16 = 0x8000;
-}
-#[cfg(feature = "retail")]
-use bits::*;
-
-/// A grip counts as a held bumper past this pull.
-#[cfg(feature = "retail")]
-const GRIP_PRESSED: f32 = 0.5;
-
-/// The Xbox pad state for the Touch controllers' state.
-#[cfg(feature = "retail")]
-pub(crate) fn touch_to_pad(touch: &TouchState) -> XboxState {
-    let mut buttons = 0u16;
-    // The menu button's chords are the shared layer's: neither the stick nor X leaks into the game.
-    let (left, x) = if touch.menu { ([0.0, 0.0], false) } else { (touch.left_stick, touch.x) };
-    for (pressed, bit) in [
-        (touch.a, A),
-        (touch.b, B),
-        (x, X),
-        (touch.y, Y),
-        (touch.left_stick_click, LEFT_THUMB),
-        (touch.right_stick_click, RIGHT_THUMB),
-        (touch.left_grip >= GRIP_PRESSED, LEFT_SHOULDER),
-        (touch.right_grip >= GRIP_PRESSED, RIGHT_SHOULDER),
-    ] {
-        if pressed {
-            buttons |= bit;
-        }
-    }
-    XboxState {
-        buttons,
-        triggers: [trigger(touch.left_trigger), trigger(touch.right_trigger)],
-        left: stick(left),
-        right: stick(touch.right_stick),
-    }
-}
 
 /// A game pad's buttons, as `pad_into_touch` takes them (the winit Android backend's bits).
 #[cfg(any(target_os = "android", test))]
@@ -99,26 +43,6 @@ pub(crate) fn pad_into_touch(t: TouchState, axes: [f32; 8], buttons: u32) -> Tou
     }
 }
 
-#[cfg(feature = "retail")]
-fn trigger(value: f32) -> u8 {
-    (value.clamp(0.0, 1.0) * 255.0).round() as u8
-}
-
-#[cfg(feature = "retail")]
-fn stick([x, y]: [f32; 2]) -> [i16; 2] {
-    // XInput's range is asymmetric (-32768..=32767); full deflection either
-    // way lands on the ends the TU3 conversion normalises by 1/32768.
-    let axis = |v: f32| {
-        let v = v.clamp(-1.0, 1.0);
-        if v < 0.0 {
-            (v * 32768.0).round() as i16
-        } else {
-            (v * 32767.0).round() as i16
-        }
-    };
-    [axis(x), axis(y)]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,51 +61,6 @@ mod tests {
         let t = pad_into_touch(touch, [0.3; 8], 0);
         assert_eq!(t.left_stick[0], -0.9);
         assert!(t.b);
-    }
-
-    #[cfg(feature = "retail")]
-    #[test]
-    fn buttons_sticks_and_triggers_map_one_to_one() {
-        let state = touch_to_pad(&TouchState {
-            left_stick: [-1.0, 1.0],
-            right_stick: [0.5, -0.25],
-            left_trigger: 1.0,
-            right_trigger: 0.5,
-            left_grip: 0.9,
-            right_grip: 0.2,
-            a: true,
-            y: true,
-            right_stick_click: true,
-            ..default()
-        });
-        assert_eq!(state.buttons, A | Y | RIGHT_THUMB | LEFT_SHOULDER);
-        assert_eq!(state.left, [-32768, 32767]);
-        assert_eq!(state.right, [16384, -8192]);
-        assert_eq!(state.triggers, [255, 128]);
-    }
-
-    #[cfg(feature = "retail")]
-    #[test]
-    fn out_of_range_runtime_values_are_clamped() {
-        let state = touch_to_pad(&TouchState {
-            left_stick: [1.2, -3.0],
-            left_trigger: -0.1,
-            right_trigger: 1.5,
-            ..default()
-        });
-        assert_eq!(state.left, [32767, -32768]);
-        assert_eq!(state.triggers, [0, 255]);
-    }
-
-    #[cfg(feature = "retail")]
-    #[test]
-    fn menu_held_keeps_the_left_stick_and_x_from_the_game() {
-        let held = touch_to_pad(&TouchState { menu: true, left_stick: [0.9, 0.0], x: true, a: true, ..default() });
-        assert_eq!(held.buttons, A, "only the menu's chord inputs are held back");
-        assert_eq!(held.left, [0, 0], "stick does not also steer");
-        let released = touch_to_pad(&TouchState { left_stick: [0.9, 0.0], x: true, ..default() });
-        assert_eq!(released.buttons, X);
-        assert_ne!(released.left, [0, 0]);
     }
 
     fn default() -> TouchState {

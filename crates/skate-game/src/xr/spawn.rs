@@ -8,7 +8,7 @@
 //! skater there; B leaves it where it was.
 use super::actions::{Hand, LatestTouch};
 use super::rig::Rig;
-use super::link::{ArWorld, TeleportSkater};
+use super::link::{CurrentStage, PlacePlayer};
 use bevy::prelude::*;
 use bevy_mod_openxr::openxr_session_running;
 
@@ -18,8 +18,6 @@ const MAX_RANGE: f32 = 2000.0;
 const MISS_LENGTH: f32 = 40.0;
 /// Only ground-like faces are spawn targets, not walls.
 const MIN_UP: f32 = 0.6;
-#[cfg(feature = "retail")]
-const SPAWN_LIFT: f32 = 0.05;
 
 /// The player asked (from the menu) to place the skater: the right
 /// controller aims until a spot is confirmed or the request is called off.
@@ -91,8 +89,8 @@ fn aim_and_spawn(
     rig: Res<Rig>,
     build: Res<super::build::BuildMode>,
     hands: Query<(&Hand, &Transform)>,
-    world: Res<ArWorld>,
-    mut teleport: MessageWriter<TeleportSkater>,
+    stage: Res<CurrentStage>,
+    mut place_player: MessageWriter<PlacePlayer>,
     mut pad_held: ResMut<super::actions::PadHeld>,
     mut aim: ResMut<Aim>,
     mut place: ResMut<PlaceSkater>,
@@ -113,7 +111,7 @@ fn aim_and_spawn(
         let aimed = rig.root_transform().zip(hands.iter().find(|(hand, _)| matches!(hand, Hand::Right))).map(|(root, (_, controller))| {
             let origin = root.transform_point(controller.translation);
             let direction = (root.rotation * (controller.rotation * Vec3::NEG_Z)).normalize();
-            (origin, direction, raycast(&world, origin, direction))
+            (origin, direction, raycast(&stage, origin, direction))
         });
         aim.target = None;
         aim.ray = aimed.map(|(origin, direction, hit)| match hit {
@@ -125,7 +123,7 @@ fn aim_and_spawn(
             aim.ray = None;
         } else if let (true, Some((_, direction, Some(point)))) = (confirmed, aimed) {
             info!("XR spawn at {point:?} (placed from the menu)");
-            teleport.write(TeleportSkater { point, forward: direction });
+            place_player.write(PlacePlayer::new(point, direction));
             place.0 = false;
             aim.ray = None;
         }
@@ -137,7 +135,7 @@ fn aim_and_spawn(
         aim.ray = None;
         if let Some((point, forward)) = aim.target.take() {
             info!("XR spawn at {point:?}");
-            teleport.write(TeleportSkater { point, forward });
+            place_player.write(PlacePlayer::new(point, forward));
         }
         return;
     }
@@ -150,7 +148,7 @@ fn aim_and_spawn(
     };
     let origin = root.transform_point(controller.translation);
     let direction = (root.rotation * (controller.rotation * Vec3::NEG_Z)).normalize();
-    let hit = raycast(&world, origin, direction);
+    let hit = raycast(&stage, origin, direction);
     aim.target = hit.map(|point| (point, direction));
     aim.ray = Some(match hit {
         Some(point) => (origin, point, true),
@@ -190,9 +188,9 @@ fn show_aim(
 }
 
 /// Nearest ground-like collision face along the ray.
-fn raycast(world: &ArWorld, origin: Vec3, direction: Vec3) -> Option<Vec3> {
-    world
-        .all_triangles()
+fn raycast(stage: &engine_core::Stage, origin: Vec3, direction: Vec3) -> Option<Vec3> {
+    stage
+        .triangles()
         .filter_map(|[a, b, c]| {
             let normal = (b - a).cross(c - a).normalize_or_zero();
             if normal.y.abs() < MIN_UP {
@@ -228,21 +226,6 @@ pub(crate) fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: V
     (t > 0.0).then_some(t)
 }
 
-/// Row-major teleport matrix (axes in rows 0-2, position in row 3); the
-/// skater faces row 2.
-#[cfg(feature = "retail")]
-pub(super) fn spawn_matrix(point: Vec3, aim: Vec3) -> [[f32; 4]; 4] {
-    let forward = aim.with_y(0.0).try_normalize().unwrap_or(Vec3::Z);
-    let right = Vec3::Y.cross(forward);
-    let p = point + Vec3::Y * SPAWN_LIFT;
-    [
-        [right.x, right.y, right.z, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [forward.x, forward.y, forward.z, 0.0],
-        [p.x, p.y, p.z, 1.0],
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,14 +242,5 @@ mod tests {
         .unwrap();
         assert!((t - 2.0).abs() < 1e-5);
         assert!(ray_triangle(Vec3::new(2.0, 2.0, 2.0), Vec3::NEG_Y, Vec3::ZERO, Vec3::X, Vec3::Z).is_none());
-    }
-
-    #[cfg(feature = "retail")]
-    #[test]
-    fn identity_heading_matches_the_course_spawn() {
-        let m = spawn_matrix(Vec3::ZERO, Vec3::new(0.0, -0.5, 1.0));
-        assert_eq!(m[0], [1.0, 0.0, 0.0, 0.0]);
-        assert_eq!(m[2], [0.0, 0.0, 1.0, 0.0]);
-        assert!((m[3][1] - SPAWN_LIFT).abs() < 1e-6);
     }
 }

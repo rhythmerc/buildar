@@ -27,7 +27,9 @@ use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPlug
 use engine_api::{EngineHudCamera, HandHud};
 #[cfg(feature = "xr")]
 use engine_core::Focus;
-use engine_core::hud::{HudBlend, HudFrame, HudPart, Placement, Rgba8, Shading, Side, TextureId};
+#[cfg(feature = "xr")]
+use engine_core::hud::Side;
+use engine_core::hud::{HudBlend, HudFrame, HudPart, Placement, Rgba8, Shading, TextureId};
 use std::collections::HashMap;
 
 /// The render layers the parts' pictures are drawn on, one a part (nothing else uses them: the controllers' shapes
@@ -42,8 +44,10 @@ pub(crate) struct EngineHudPlugin;
 impl Plugin for EngineHudPlugin {
     fn build(&self, app: &mut App) {
         #[cfg(feature = "xr")]
-        app.init_resource::<HudFocus>()
-            .add_systems(PostUpdate, place_at_player.before(bevy::transform::TransformSystems::Propagate));
+        app.init_resource::<engine_api::PlayerFocus>().add_systems(
+            PostUpdate,
+            place_at_player.after(crate::xr::link::FocusSet).before(bevy::transform::TransformSystems::Propagate),
+        );
         // (not without a renderer: tests)
         if app.is_plugin_added::<bevy::render::RenderPlugin>() {
             embedded_asset!(app, "engine_hud.wgsl");
@@ -184,29 +188,8 @@ impl Material2d for HudPaint {
 pub(crate) struct AtPlayerHud {
     pub camera: Entity,
     pub empty: bool,
-    pub side: Side,
-    pub width_per_height: f32,
-    pub least_view_share: f32,
-}
-
-/// Where each engine's player is now, for what's placed at it (none: not in the room yet). Each engine with a HUD
-/// part at the player keeps its own up to date.
-#[cfg(feature = "xr")]
-#[derive(Resource, Default)]
-pub(crate) struct HudFocus(HashMap<Engine, Focus>);
-
-#[cfg(feature = "xr")]
-impl HudFocus {
-    pub(crate) fn set(&mut self, engine: Engine, focus: Option<Focus>) {
-        match focus {
-            Some(focus) => {
-                self.0.insert(engine, focus);
-            }
-            None => {
-                self.0.remove(&engine);
-            }
-        }
-    }
+    /// Its [`Placement::AtPlayer`].
+    pub placement: Placement,
 }
 
 /// The engines' HUDs as drawn (there only with a renderer).
@@ -471,11 +454,11 @@ impl PartSlot {
                     on_left,
                 });
             }
-            Placement::AtPlayer { side, width_per_height, least_view_share } => {
+            Placement::AtPlayer { .. } => {
                 if matches!(before, Some(Placement::Hand { .. })) {
                     panel.remove::<HandHud>();
                 }
-                panel.insert(AtPlayerHud { camera: self.camera, empty, side, width_per_height, least_view_share });
+                panel.insert(AtPlayerHud { camera: self.camera, empty, placement: self.placement });
             }
         }
     }
@@ -529,22 +512,23 @@ fn mesh_of(frame: &HudFrame, index: usize) -> Mesh {
     mesh
 }
 
-/// Where a part at the player goes and how wide, turned to the eye: above it (an arc's, clear of its head however
-/// big the panel), or beside it to the viewer's right. As wide as `width_per_height` of its drawn height, and never
-/// narrower than `least_view_share` of its distance from `eye`.
+/// Where a part at the player goes and how wide (`placement`: its [`Placement::AtPlayer`]), turned to the eye: above
+/// it, or beside it to the viewer's right, as clear of it as the engine says. As wide as `width_per_height` of its
+/// drawn height, and never narrower than `least_view_share` of its distance from `eye`.
 #[cfg(feature = "xr")]
-pub(crate) fn at_player(focus: Focus, eye: Vec3, side: Side, width_per_height: f32, least_view_share: f32) -> Transform {
-    let Focus { feet, up, height } = focus;
-    let middle = feet + up * (height * 0.55);
+pub(crate) fn at_player(focus: Focus, eye: Vec3, placement: Placement) -> Transform {
+    let Placement::AtPlayer { side, width_per_height, least_view_share, middle, clear } = placement else {
+        return Transform::from_translation(focus.feet);
+    };
+    let Focus { feet, up, height, .. } = focus;
+    let middle = feet + up * (height * middle);
     let distance = eye.distance(middle);
     let width = (height * width_per_height).max(distance * least_view_share);
     let to_eye = (eye - middle).normalize_or(Vec3::Z);
     let right = Vec3::Y.cross(to_eye).normalize_or(Vec3::X);
     let at = match side {
-        // (an upright meter is about a fifth of the panel across: just clear of the side)
-        Side::Beside => middle + right * (height * 0.3 + width * 0.15),
-        // (an arc is about a third of the panel high, its middle the panel's)
-        Side::Above => feet + up * height + Vec3::Y * (width * 0.2),
+        Side::Beside => middle + right * (height * clear.0 + width * clear.1),
+        Side::Above => feet + up * height + Vec3::Y * (height * clear.0 + width * clear.1),
     };
     // (facing the eyes from where it is)
     let facing = (eye - at).normalize_or(to_eye);
@@ -559,7 +543,7 @@ fn place_at_player(
     settings: Option<Res<crate::xr::ar_settings::ArSettings>>,
     panel: Option<Res<crate::xr::panel::XrPanel>>,
     engines: Option<Res<crate::engines::Engines>>,
-    focus: Res<HudFocus>,
+    focus: Res<engine_api::PlayerFocus>,
     eyes: Query<&GlobalTransform, With<bevy_mod_xr::camera::XrCamera>>,
     mut huds: Query<(&AtPlayerHud, &EngineOwned, &mut Transform, &mut Visibility)>,
     mut cameras: Query<&mut Camera>,
@@ -572,10 +556,8 @@ fn place_at_player(
         let place = if Some(owner.0) != running {
             None
         } else {
-            match (focus.0.get(&owner.0), eye) {
-                (Some(focus), Some(eye)) if seen && !hud.empty => {
-                    Some(at_player(*focus, eye, hud.side, hud.width_per_height, hud.least_view_share))
-                }
+            match (focus.of(owner.0), eye) {
+                (Some(focus), Some(eye)) if seen && !hud.empty => Some(at_player(focus, eye, hud.placement)),
                 _ => None,
             }
         };
@@ -603,20 +585,38 @@ pub(crate) mod tests {
     #[test]
     fn a_part_at_the_player_is_there_and_never_too_small_to_read() {
         let (wide, share) = (1.2, 0.16);
-        let focus = |height: f32| Focus { feet: Vec3::ZERO, up: Vec3::Y, height };
-        let near = at_player(focus(1.8), Vec3::new(0.0, 1.6, 3.0), Side::Above, wide, share);
+        let place = |side: Side| Placement::AtPlayer {
+            side,
+            width_per_height: wide,
+            least_view_share: share,
+            middle: 0.55,
+            clear: if side == Side::Beside { (0.3, 0.15) } else { (0.0, 0.2) },
+        };
+        let focus = |height: f32| Focus { feet: Vec3::ZERO, up: Vec3::Y, forward: Vec3::Z, height };
+        let near = at_player(focus(1.8), Vec3::new(0.0, 1.6, 3.0), place(Side::Above));
         assert!(near.translation.y > 1.8, "over the head: {near:?}");
         assert!((near.scale.x - 1.8 * wide).abs() < 1e-4);
         let front = near.rotation * Vec3::Z;
         assert!(front.dot((Vec3::new(0.0, 1.6, 3.0) - near.translation).normalize()) > 0.95);
         // (a small player far off: the share of the view wins)
         let far_eye = Vec3::new(0.0, 1.0, 40.0);
-        let far = at_player(focus(0.2), far_eye, Side::Above, wide, share);
+        let far = at_player(focus(0.2), far_eye, place(Side::Above));
         assert!(far.scale.x >= 40.0 * share * 0.99, "{far:?}");
         assert!(far.translation.y > 0.2, "still over the head");
         // (beside: to the player's right as they look at it - here +x)
-        let beside = at_player(focus(1.8), Vec3::new(0.0, 1.6, 3.0), Side::Beside, wide, share);
+        let beside = at_player(focus(1.8), Vec3::new(0.0, 1.6, 3.0), place(Side::Beside));
         assert!(beside.translation.x > 0.5 && beside.translation.y < 1.8, "{beside:?}");
+        // (exactly where the factors that were the renderer's - THUG2's meter: 0.55, 0.3, 0.15, 0.2 - put it)
+        for (eye, height) in [(Vec3::new(0.0, 1.6, 3.0), 1.8), (far_eye, 0.2), (Vec3::new(2.3, 0.4, -1.7), 0.73)] {
+            let f = Focus { feet: Vec3::new(0.3, 0.1, -0.2), up: Vec3::new(0.1, 1.0, 0.0).normalize(), forward: Vec3::Z, height };
+            let middle = f.feet + f.up * (f.height * 0.55);
+            let width = (f.height * wide).max(eye.distance(middle) * share);
+            let right = Vec3::Y.cross((eye - middle).normalize_or(Vec3::Z)).normalize_or(Vec3::X);
+            let was_beside = middle + right * (f.height * 0.3 + width * 0.15);
+            let was_above = f.feet + f.up * f.height + Vec3::Y * (width * 0.2);
+            assert_eq!(at_player(f, eye, place(Side::Beside)).translation, was_beside);
+            assert_eq!(at_player(f, eye, place(Side::Above)).translation, was_above);
+        }
     }
 
     /// Each shading and blend as the shader is told it.

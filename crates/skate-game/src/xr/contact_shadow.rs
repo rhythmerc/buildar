@@ -2,7 +2,7 @@
 //! piece's on the floor it stands on. Cheap, analytic ones - no shadow map (directional shadows cost the headset 13 fps):
 //!
 //! - **The board's.** A patch of the surfaces under the skater (the room's and the pieces' level faces, cut to a
-//!   square around it, `ArWorld`), drawn with [`ShadowMaterial`]: soft ellipses under the deck and its two trucks,
+//!   square around it, the stage), drawn with [`ShadowMaterial`]: soft ellipses under the deck and its two trucks,
 //!   fainter and wider the higher it is over the surface. The patch is made again only when the skater leaves it or
 //!   the world changes; each frame only the casters move.
 //! - **The pieces'.** A soft ring round each piece's footprint where it meets the floor ([`piece_ring`], spawned with
@@ -16,7 +16,7 @@
 //! Off with the AR settings' "Contact shadows".
 use crate::xr::ar_settings::ArSettings;
 use crate::xr::build::pieces::{PieceGeometry, PieceKind};
-use crate::xr::link::{ArWorld, SkaterLink};
+use crate::xr::link::{CurrentStage, SkaterLink};
 use crate::xr::rig::Rig;
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
@@ -139,7 +139,7 @@ fn setup(mut commands: Commands, mut materials: ResMut<Assets<ShadowMaterial>>, 
 #[allow(clippy::too_many_arguments)]
 fn board_shadow(
     settings: Res<ArSettings>,
-    world: Res<ArWorld>,
+    world: Res<CurrentStage>,
     link: Res<SkaterLink>,
     rig: Res<Rig>,
     assets: Option<Res<ShadowAssets>>,
@@ -149,7 +149,8 @@ fn board_shadow(
     mut shadow: Query<(&Mesh3d, &mut Visibility), With<BoardShadow>>,
 ) {
     let (Some(assets), Ok((mesh, mut visibility))) = (assets, shadow.single_mut()) else { return };
-    let Some((deck, nose)) = link.deck.filter(|_| settings.contact_shadows) else {
+    // (the board's frame: it may be away from the rider - a bail, walking - and it casts where it is)
+    let Some((deck, nose)) = link.board.map(|b| (b.position, b.forward)).filter(|_| settings.contact_shadows) else {
         visibility.set_if_neq(Visibility::Hidden);
         return;
     };
@@ -208,10 +209,10 @@ fn surface_under(triangles: &[[Vec3; 3]], p: Vec3, size: f32) -> Option<f32> {
 
 /// The world's level faces (the room's and the pieces') near `centre`, cut to the square `reach` round it and lifted
 /// `lift` off their face.
-fn level_faces_near(world: &ArWorld, centre: Vec3, reach: f32, lift: f32) -> Vec<[Vec3; 3]> {
+fn level_faces_near(world: &engine_core::Stage, centre: Vec3, reach: f32, lift: f32) -> Vec<[Vec3; 3]> {
     let (lo, hi) = (Vec2::new(centre.x - reach, centre.z - reach), Vec2::new(centre.x + reach, centre.z + reach));
     let mut out = Vec::new();
-    for t in world.all_triangles() {
+    for t in world.triangles() {
         let normal = (t[1] - t[0]).cross(t[2] - t[0]).normalize_or_zero();
         if normal.y.abs() < LEVEL_ENOUGH {
             continue;
@@ -383,7 +384,7 @@ fn distance_to_quad(p: Vec2, q: &[Vec2; 4]) -> f32 {
 #[allow(clippy::type_complexity)]
 fn ring_standing(
     settings: Res<ArSettings>,
-    world: Res<ArWorld>,
+    world: Res<CurrentStage>,
     rig: Res<Rig>,
     parents: Query<&GlobalTransform, Without<PieceRing>>,
     mut rings: Query<(&PieceRing, &ChildOf, &mut Visibility, &mut Transform, Ref<GlobalTransform>)>,
@@ -452,16 +453,19 @@ mod tests {
         // (the floor, and a virtual piece's top over its left half, 5 cm up)
         let floor = [Vec3::new(-3.0, 0.0, -3.0), Vec3::new(-3.0, 0.0, 3.0), Vec3::new(3.0, 0.0, 3.0), Vec3::new(3.0, 0.0, -3.0)];
         let top = [Vec3::new(-1.5, 0.05, -1.0), Vec3::new(-1.5, 0.05, 1.0), Vec3::new(0.0, 0.05, 1.0), Vec3::new(0.0, 0.05, -1.0)];
-        let world = ArWorld {
+        let stage = engine_core::Stage {
             revision: 1,
             room_quads: vec![floor],
-            pieces: vec![crate::xr::link::PieceSurfaces { quads: vec![top], ..default() }],
+            solids: vec![engine_core::Solid { id: 1, quads: vec![top] }],
             ..default()
         };
-        app.insert_resource(world)
+        app.insert_resource(CurrentStage(stage))
             .insert_resource(ArSettings::default())
             .insert_resource(Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: Some((Vec3::ZERO, 0.0)) })
-            .insert_resource(SkaterLink { deck: Some((Vec3::new(0.0, 0.15, 0.0), Vec3::new(1.0, 0.0, 0.3))), ..default() });
+            .insert_resource(SkaterLink(engine_core::skate::SkaterLink {
+                board: Some(engine_core::Frame { position: Vec3::new(0.0, 0.15, 0.0), forward: Vec3::new(1.0, 0.0, 0.3), up: Vec3::Y }),
+                ..default()
+            }));
         app.finish();
         app.cleanup();
         app.update();
@@ -504,7 +508,7 @@ mod tests {
     /// A floor quad cut to the square round the skater: just that square, lifted off it.
     #[test]
     fn the_patch_is_the_level_faces_round_the_skater() {
-        let world = ArWorld {
+        let world = engine_core::Stage {
             room_quads: vec![
                 // (the floor, 10 m across)
                 [Vec3::new(-5.0, 0.0, -5.0), Vec3::new(-5.0, 0.0, 5.0), Vec3::new(5.0, 0.0, 5.0), Vec3::new(5.0, 0.0, -5.0)],

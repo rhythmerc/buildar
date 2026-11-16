@@ -1,7 +1,8 @@
 //! The trick readout while skating: a small panel low in the corner of the
 //! view that follows the head lazily (it drifts after a look, it doesn't
 //! stick to the face). The trick being done big, its points under it in
-//! yellow, and the score / combo line. Each tier fills [`TrickHud`].
+//! yellow, and the score / combo line. Each engine without a HUD of its own fills [`TrickHud`] (the skate mode's
+//! `TrickText`: Skate 3's from `skate3_engine::trick`, SK8's from its menu's lines).
 //!
 //! Hidden while a menu is open, and off with the AR settings' "Trick and
 //! points readout". Not while Skate 3's or THUG2's own HUD is there

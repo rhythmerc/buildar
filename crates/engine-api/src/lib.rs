@@ -4,14 +4,15 @@
 //! The app (`skate-game`) carries the engines and the shared XR layer: the room, the courses, the menus, the
 //! controllers. An engine implements a [`Mode`]: it runs that mode's game in that world. The root of this crate is
 //! what every mode shares:
-//! - **To the engine:** the controllers ([`LatestTouch`]) and whether the shared layer has them ([`PadHeld`]).
-//! - **From the engine:** its own HUD panels ([`HandHud`], drawn by an [`EngineHudCamera`]), the settings a course
-//!   keeps ([`CourseSettings`]).
+//! - **To the engine:** the controllers ([`LatestTouch`]) and whether the shared layer has them ([`PadHeld`]); the
+//!   stage ([`CurrentStage`]); where to put the player ([`PlacePlayer`]).
+//! - **From the engine:** where its player is ([`PlayerFocus`]), its own HUD panels ([`HandHud`], drawn by an
+//!   [`EngineHudCamera`]), the settings a course keeps ([`CourseSettings`]).
 //! - **Ownership:** an engine's per-frame systems are those in its [`EngineSet`]; what they spawn is
 //!   [`EngineOwned`], hidden and silenced while another engine runs. [`EngineSwitched`] and [`BeforeSwitch`] mark a
 //!   switch.
 //!
-//! Each mode's own part is a module: [`skate`] (the park and room ridden, the skater, its trick text).
+//! Each mode's own part is a module: [`skate`] (the park over the stage, the skater, its trick text).
 //!
 //! The registry that runs the engines and switches between them is the app's (`skate-game`'s `engines`).
 use bevy::prelude::*;
@@ -21,7 +22,7 @@ pub mod skate;
 
 /// The Bevy-free contract the engines implement (its own repo): re-exported where the app has always named them.
 pub use engine_core;
-pub use engine_core::{HudHand, Mode, TouchState};
+pub use engine_core::{Control, HudHand, Mode, TouchState};
 
 // ---- Modes, engines and ownership ----
 
@@ -125,13 +126,49 @@ pub struct LatestTouch(pub TouchState);
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HostInput;
 
-/// Whether the controllers are the shared layer's this frame.
-#[derive(Resource, Default, Clone, Copy, Debug)]
-pub struct PadHeld {
-    /// A menu open, build mode, aiming a spawn, placing the skater or a park: the skater gets a neutral pad.
-    pub held: bool,
-    /// A menu open or build mode (the player is busy elsewhere): an engine may pause its game.
-    pub pause: bool,
+/// Whether the controllers are the shared layer's this frame ([`engine_core::PadHeld`]: `held` while a menu is open,
+/// in build mode, aiming a spawn, placing the skater or a park; `pause` while a menu is open or in build mode).
+#[derive(Resource, Default, Clone, Copy, Debug, Deref, DerefMut)]
+pub struct PadHeld(pub engine_core::PadHeld);
+
+// ---- The stage, placing the player, where the player is ----
+
+/// The stage every engine is offered ([`engine_core::Stage`]: the room and the placed pieces' solid faces, the
+/// runtime's world space), rebuilt by the shared layer when the room or the pieces change. Engines take it when they
+/// can ([`engine_core::Applied`]); the shared layer doesn't wait for them.
+#[derive(Resource, Default, Deref, DerefMut)]
+pub struct CurrentStage(pub engine_core::Stage);
+
+/// Put the player down ([`engine_core::PlacePlayer`]); the running engine says what that means.
+#[derive(Message, Clone, Copy, Debug, Deref)]
+pub struct PlacePlayer(pub engine_core::PlacePlayer);
+
+impl PlacePlayer {
+    pub fn new(point: Vec3, forward: Vec3) -> Self {
+        Self(engine_core::PlacePlayer { point, forward })
+    }
+}
+
+/// Where each engine's player is now ([`engine_core::Focus`]; none: not in the room yet): what the shared layer follows
+/// (what's placed at the player, the menus' distance checks, carrying the player over to the next engine).
+#[derive(Resource, Default)]
+pub struct PlayerFocus(HashMap<Engine, engine_core::Focus>);
+
+impl PlayerFocus {
+    pub fn set(&mut self, engine: Engine, focus: Option<engine_core::Focus>) {
+        match focus {
+            Some(focus) => {
+                self.0.insert(engine, focus);
+            }
+            None => {
+                self.0.remove(&engine);
+            }
+        }
+    }
+
+    pub fn of(&self, engine: Engine) -> Option<engine_core::Focus> {
+        self.0.get(&engine).copied()
+    }
 }
 
 // ---- HUDs ----

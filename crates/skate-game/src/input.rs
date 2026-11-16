@@ -23,63 +23,44 @@ impl Default for PublishedTickInput {
     }
 }
 
-/// The pad: the XR Touch controllers (`xr::actions`). When this resource exists it owns
-/// controller slot 0; the other slots are always disconnected.
-#[derive(Resource, Default)]
-pub(crate) struct ExternalPad {
-    state: Option<(u16, [u8; 2], [i16; 2], [i16; 2])>,
-    packet: u32,
-}
-
-impl ExternalPad {
-    #[cfg(feature = "xr")]
-    pub(crate) fn set(&mut self, state: skate_core::input::xbox::XboxState) {
-        let next = Some((state.buttons, state.triggers, state.left, state.right));
-        if next != self.state {
-            self.packet = self.packet.wrapping_add(1);
-            self.state = next;
-        }
-    }
-
-    fn packet(&self) -> Result<platform::DevicePacket, platform::DeviceError> {
-        let (buttons, triggers, left, right) =
-            self.state.ok_or(platform::DeviceError::Disconnected)?;
-        Ok(platform::DevicePacket {
-            number: self.packet,
-            state: skate_core::input::xbox::XboxState {
-                buttons,
-                triggers,
-                left,
-                right,
-            },
-            // XINPUT_DEVSUBTYPE_GAMEPAD.
-            subtype: 1,
-        })
-    }
-}
+/// Controller slot 0: the Touch controllers (`skate3_engine::input`). Disconnected until it is given a state (only in
+/// the headset); the other slots are always disconnected.
+#[derive(Resource, Default, Deref, DerefMut)]
+pub(crate) struct ExternalPad(pub skate3_engine::input::ExternalPad);
 
 pub(crate) struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ControllerInput>()
             .init_resource::<PublishedTickInput>()
+            .init_resource::<ExternalPad>()
             .add_systems(
                 PreUpdate,
                 poll_controllers.in_set(crate::app::SKATE3),
             )
             .add_systems(FixedUpdate, publish_actions.in_set(SimulationSet::Input));
+        #[cfg(feature = "xr")]
+        app.add_systems(
+            PreUpdate,
+            pad_from_touch
+                .after(engine_api::HostInput)
+                .before(poll_controllers)
+                .run_if(bevy_mod_openxr::openxr_session_running)
+                .in_set(crate::app::SKATE3),
+        );
     }
 }
 
-pub(crate) fn poll_controllers(
-    mut input: ResMut<ControllerInput>,
-    external: Option<Res<ExternalPad>>,
-) {
+/// The game's pad from the Touch controllers (`skate3_engine::input`), neutral while the shared layer has them.
+#[cfg(feature = "xr")]
+fn pad_from_touch(touch: Res<engine_api::LatestTouch>, held: Res<engine_api::PadHeld>, mut pad: ResMut<ExternalPad>) {
+    pad.set_input(&touch.0, **held);
+}
+
+pub(crate) fn poll_controllers(mut input: ResMut<ControllerInput>, external: Res<ExternalPad>) {
     let previous = input.status;
     input.collect(std::array::from_fn(|slot| {
-        if slot == 0
-            && let Some(external) = &external
-        {
+        if slot == 0 {
             external.packet()
         } else {
             // (only the external pad: the desktop's XInput transport is gone)
@@ -89,7 +70,7 @@ pub(crate) fn poll_controllers(
     for (index, (&before, &after)) in previous.iter().zip(&input.status).enumerate() {
         if before != after {
             match after {
-                ControllerStatus::Ready if index == 0 && external.is_some() => {
+                ControllerStatus::Ready if index == 0 => {
                     info!("Controller {index}: XR Touch controllers ready")
                 }
                 ControllerStatus::Ready => info!("Controller {index}: ready"),
