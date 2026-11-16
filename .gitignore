@@ -27,7 +27,7 @@ __pycache__/
 *.vlt
 *.stategraph
 *.rwcmset
-!/crates/skate-data/tests/fixtures/retail-collision.rwcmset
+!/crates/skate3/skate-data/tests/fixtures/retail-collision.rwcmset
 .env
 .env.*
 *.pem

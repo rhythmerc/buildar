@@ -110,7 +110,7 @@ fn main() {
     // downstream can move however the probe drives it.
     let ctrls = mixmap::controllers(&g, mm.host).unwrap();
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/captures/extract/mixmap_replay_4400.bin");
+        .join("../../../.local/captures/extract/mixmap_replay_4400.bin");
     let bytes = std::fs::read(&fixture).expect("replay fixture");
     preroll(&mut g, mm.manager, &ctrls, &bytes, 3600);
     println!("pre-rolled 3600 retail evaluations\n");

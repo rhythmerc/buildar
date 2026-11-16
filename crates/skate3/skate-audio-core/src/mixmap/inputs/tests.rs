@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 fn extract() -> Option<PathBuf> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.local/captures/extract");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../.local/captures/extract");
     if dir.join("state.tsv").is_file() {
         Some(dir)
     } else {

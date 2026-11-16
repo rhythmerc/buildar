@@ -157,7 +157,7 @@ fn embedded_static_rwcm_hits_distinct_actor_query_ids() {
         schema: 1,
         payload: include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../skate-data/tests/fixtures/retail-collision.rwcmset"
+            "/../skate3/skate-data/tests/fixtures/retail-collision.rwcmset"
         ))
         .to_vec(),
     });

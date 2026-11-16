@@ -167,7 +167,7 @@ fn main() {
         std::process::exit(2);
     }
 
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../probe/vmx128");
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../probe/vmx128");
     let vectors = match std::fs::read(format!("{root}/vectors.bin")) {
         Ok(v) => v,
         Err(e) => {

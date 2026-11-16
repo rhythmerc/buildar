@@ -280,7 +280,7 @@ struct Replay {
 
 fn replay_fixture() -> Option<Replay> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/captures/extract/mixmap_replay_4400.bin");
+        .join("../../../.local/captures/extract/mixmap_replay_4400.bin");
     let Ok(bytes) = std::fs::read(&path) else {
         eprintln!(
             "skipped: {} absent (see examples/mixmap_replay.rs, EXPORT)",

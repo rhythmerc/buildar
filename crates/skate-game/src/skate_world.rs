@@ -1278,7 +1278,7 @@ mod tests {
         map.extensions.push(skate_data::skate_map::Extension {
             tag: *b"RWCM",
             schema: 1,
-            payload: include_bytes!("../../skate-data/tests/fixtures/retail-collision.rwcmset")
+            payload: include_bytes!("../../skate3/skate-data/tests/fixtures/retail-collision.rwcmset")
                 .to_vec(),
         });
         validate_runtime(&map).unwrap();
@@ -1298,7 +1298,7 @@ mod tests {
     #[test]
     fn native_unit_without_edge_data_keeps_constructor_defaults() {
         let mut archive =
-            include_bytes!("../../skate-data/tests/fixtures/retail-collision.rwcmset").to_vec();
+            include_bytes!("../../skate3/skate-data/tests/fixtures/retail-collision.rwcmset").to_vec();
         let name_len = u32::from_le_bytes(archive[12..16].try_into().unwrap()) as usize;
         let cluster = 16 + name_len + 4 + 160;
         archive[cluster + 2..cluster + 4].copy_from_slice(&8_u16.to_be_bytes());

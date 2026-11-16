@@ -37,7 +37,7 @@ fn image(dir: &Path) -> Vec<Segment> {
 }
 
 fn default_capture() -> PathBuf {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/captures");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.local/captures");
     let mut logs: Vec<PathBuf> = std::fs::read_dir(&dir)
         .map(|d| d.filter_map(|e| e.ok().map(|e| e.path())).collect())
         .unwrap_or_default();

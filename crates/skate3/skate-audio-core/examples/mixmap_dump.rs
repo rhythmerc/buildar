@@ -192,7 +192,7 @@ input sources per output controller (key: ctrl-key.id ...):"
     // controllers need the game's inputs too (global faders, pause, speech ducking…); when the replay
     // fixture exists, its first 3600 retail evaluations are applied first so they hold retail values.
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/captures/extract/mixmap_replay_4400.bin");
+        .join("../../../.local/captures/extract/mixmap_replay_4400.bin");
     if let Ok(bytes) = std::fs::read(&fixture) {
         preroll(&mut g, mm.manager, &ctrls, &bytes, 3600);
         println!(

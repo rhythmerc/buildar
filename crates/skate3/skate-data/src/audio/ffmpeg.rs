@@ -94,7 +94,7 @@ fn program() -> PathBuf {
     if let Some(program) = std::env::var_os("SKATE_FFMPEG") {
         return program.into();
     }
-    let private = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.local/ffmpeg");
+    let private = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../.local/ffmpeg");
     if let Ok(entries) = std::fs::read_dir(private) {
         for entry in entries.flatten() {
             let candidate = entry.path().join("bin").join("ffmpeg.exe");
