@@ -21,6 +21,10 @@ jobs:
             g++ pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The clean skater is made in Blender (scripts/cleanroom/blender/make_skater.py) and not committed;
+      # the crate embeds it, so a type-check needs a file there, not a real model.
+      - name: Placeholder for the generated clean skater
+        run: test -f crates/skate-game/src/clean/assets/skater.glb || touch crates/skate-game/src/clean/assets/skater.glb
       - name: cargo check (store build)
         env:
           # rustc needs a large stack for the game crate.
