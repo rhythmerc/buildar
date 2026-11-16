@@ -92,7 +92,6 @@ pub(crate) fn build(
     skater: SkaterRuntime,
 ) -> App {
     let mut app = App::new();
-    crate::custom_models::register_source(&mut app);
     // Bevy's Android default `AssetReader` only ever reads from inside the
     // APK's bundled `assets/` (via `AssetManager`); it ignores
     // `AssetPlugin::file_path` entirely. The Quest build instead pushes a
@@ -202,7 +201,6 @@ fn add_retail(app: &mut App) {
     );
     hold(app);
     app.add_plugins((
-        crate::retail_render::RetailRenderPlugin,
         input::InputPlugin,
         PhysicsPlugin,
         crate::presentation::PresentationPlugin,
@@ -213,8 +211,6 @@ fn add_retail(app: &mut App) {
         crate::grind_world::GrindGeometryPlugin,
         camera::CameraPlugin,
     ));
-    app.add_plugins(crate::customiser_parts::CharacterPlugin);
-    app.add_plugins(crate::custom_models::CustomModelsPlugin);
     app.add_plugins(crate::skate_audio::SkateAudioPlugin);
     app.add_plugins(crate::scoring_hud::ScoringHudPlugin);
 }

@@ -60,8 +60,23 @@ impl Plugin for PhysicsPlugin {
                     .after(SimulationSet::Physics)
                     .in_set(crate::app::SKATE3),
             )
-            .add_systems(Update, present.in_set(FrameSet::Physics));
+            .add_systems(Update, present.in_set(FrameSet::Physics))
+            .add_systems(
+                PreUpdate,
+                preferences
+                    .before(crate::input::poll_controllers)
+                    .in_set(crate::app::SKATE3),
+            );
     }
+}
+
+/// The skater's gameplay preferences, every frame as the customiser's profile did before it went (legacy pass 6):
+/// now always the default profile's (trucks and wheels 0.7, stance 1, style and posture 0, the stock gestures).
+/// Choosing them comes back with character customisation, through the engine contract.
+fn preferences(mut physics: ResMut<GamePhysics>, mut skater: ResMut<SkaterRuntime>) {
+    static DEFAULT: std::sync::LazyLock<serde_json::Value> =
+        std::sync::LazyLock::new(|| serde_json::json!({"selections": {}, "morphs": {}}));
+    skate3_sim::physics::apply_preferences(&DEFAULT, &mut physics, &mut skater.animation);
 }
 
 /// `SimulationSet::Controls`: the sim's controller sampling on this tick's published actions.

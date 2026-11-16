@@ -21,12 +21,6 @@ mod camera;
 mod config;
 mod fonts;
 #[cfg(feature = "retail")]
-mod custom_models;
-#[cfg(feature = "retail")]
-mod customiser_material;
-#[cfg(feature = "retail")]
-mod customiser_parts;
-#[cfg(feature = "retail")]
 use skate3_sim::difficulty;
 #[cfg(feature = "retail")]
 mod graph_runtime;
@@ -44,12 +38,6 @@ mod physics;
 mod presentation;
 #[cfg(feature = "retail")]
 mod replay;
-#[cfg(feature = "retail")]
-mod retail_character;
-#[cfg(feature = "retail")]
-mod retail_irradiance;
-#[cfg(feature = "retail")]
-mod retail_render;
 #[cfg(feature = "retail")]
 mod scoring_hud;
 #[cfg(feature = "retail")]

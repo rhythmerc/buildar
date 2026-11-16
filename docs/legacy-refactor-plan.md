@@ -195,6 +195,16 @@ games.
 **Headset check:** the Skate 3 skater looks unchanged, with no missing-resource panics on Skate 3's
 first turn.
 
+**Done (2026-11-16):**
+- **Deleted:** all of the above, plus `retail_render.rs` (empty by then), `retail_exposure.wgsl`,
+  `input::Navigation` (only the menus read it), the texture-codec fixtures, and
+  `AnimationStatus::for_scene` with its two tests (it bound imported custom models).
+- **Kept behaviour:** the profile's `preferences` system ran every frame. A `physics::preferences` system
+  now applies the default profile the same way, in the same place (PreUpdate, before `poll_controllers`).
+  Without a saved `settings/character.json` that is what the headset applied before: trucks and wheels
+  0.7, stance 1, style and posture 0, stock gestures.
+- The skater draws from its manifest GLB with `StandardMaterial`.
+
 ## Estimate
 
 Passes 1-4: about 1-2 days. Pass 5 is larger.

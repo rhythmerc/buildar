@@ -57,56 +57,11 @@ impl ExternalPad {
     }
 }
 
-/// Menu navigation from the keyboard's arrows, as pad-style bits (1 up, 2 down, 4 left, 8 right),
-/// with auto-repeat while held. (On the desktop it also read XInput pads; that transport is gone.)
-#[derive(Resource, Default)]
-pub(crate) struct Navigation {
-    pub pressed: u16,
-    previous: u16,
-    held_for: f32,
-    repeat_at: f32,
-}
-
-pub(crate) fn navigation(
-    mut nav: ResMut<Navigation>,
-    time: Res<Time<Real>>,
-    keys: Res<ButtonInput<KeyCode>>,
-) {
-    let mut current = 0;
-    for (key, bit) in [
-        (KeyCode::ArrowUp, 1),
-        (KeyCode::ArrowDown, 2),
-        (KeyCode::ArrowLeft, 4),
-        (KeyCode::ArrowRight, 8),
-    ] {
-        if keys.pressed(key) {
-            current |= bit;
-        }
-    }
-    nav.pressed = current & !nav.previous;
-    if current & 15 != 0 && current & 15 == nav.previous & 15 {
-        nav.held_for += time.delta_secs();
-        if nav.held_for >= nav.repeat_at {
-            nav.pressed |= current & 15;
-            nav.repeat_at += 0.09;
-        }
-    } else {
-        nav.held_for = 0.;
-        nav.repeat_at = 0.35;
-    }
-    nav.previous = current;
-}
-
 pub(crate) struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ControllerInput>()
             .init_resource::<PublishedTickInput>()
-            .init_resource::<Navigation>()
-            .add_systems(
-                PreUpdate,
-                navigation.in_set(crate::app::SKATE3),
-            )
             .add_systems(
                 PreUpdate,
                 poll_controllers.in_set(crate::app::SKATE3),
