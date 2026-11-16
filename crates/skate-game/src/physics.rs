@@ -127,12 +127,10 @@ fn advance(
     mut camera: ResMut<crate::camera::CameraRuntime>,
     mut cadence: ResMut<Time<Fixed>>,
     mut exit: MessageWriter<AppExit>,
-    mut performance: Option<ResMut<crate::performance::Performance>>,
 ) {
     if physics.failed {
         return;
     }
-    let timer = performance.as_ref().map(|_| std::time::Instant::now());
     if let Err(message) = skate3_sim::physics::advance(
         &mut physics,
         &mut skater,
@@ -145,9 +143,6 @@ fn advance(
         exit.write(AppExit::error());
     }
     cadence.set_timestep(physics.period());
-    if let (Some(performance), Some(timer)) = (performance.as_mut(), timer) {
-        performance.physics(timer.elapsed());
-    }
 }
 
 /// After `SimulationSet::Physics`: the completed tick's player-audio observation, once.

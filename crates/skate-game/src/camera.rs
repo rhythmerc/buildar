@@ -26,7 +26,6 @@ impl Plugin for CameraPlugin {
             Update,
             present
                 .after(FrameSet::Animation)
-                .before(FrameSet::Verification)
                 .in_set(crate::app::SKATE3),
         );
     }

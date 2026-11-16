@@ -609,7 +609,6 @@ mod tests {
         let mut world = World::new();
         world.insert_resource(crate::config::Config {
             asset_root: "unused".into(),
-            verification_capture: None,
             map: None,
             map_path: None,
             difficulty: crate::difficulty::Difficulty::Hardcore,

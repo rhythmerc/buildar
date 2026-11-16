@@ -48,6 +48,9 @@ compile time.
 **Headset check:** all three engines render the same, logcat shows no wgpu validation errors, and frame
 time is the same or better.
 
+**Done (2026-11-16):** the four modules are deleted, with `--verify`, `verification_capture` and the
+`FrameSet::Verification` variant (and camera's `.before` on it); physics no longer times itself.
+
 ### Pass 2: replay, parked (S)
 
 **Decided (2026-11-16):** keep the replay code for a later headset feature. For now:

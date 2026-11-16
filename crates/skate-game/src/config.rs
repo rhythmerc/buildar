@@ -7,7 +7,6 @@ use std::path::PathBuf;
 #[derive(Resource)]
 pub(crate) struct Config {
     pub asset_root: PathBuf,
-    pub verification_capture: Option<PathBuf>,
     pub map: Option<skate_data::skate_map::SkateMap>,
     pub map_path: Option<PathBuf>,
     pub difficulty: crate::difficulty::Difficulty,
@@ -36,7 +35,6 @@ impl Config {
     pub fn from_env() -> Result<Self, String> {
         let mut config = Self {
             asset_root: crate::setup::asset_root()?,
-            verification_capture: None,
             map: None,
             map_path: None,
             difficulty: crate::difficulty::Difficulty::default(),
@@ -92,16 +90,9 @@ impl Config {
                         &value.to_string_lossy(),
                     )?);
                 }
-                Some("--verify") => {
-                    config.verification_capture = Some(
-                        args.next()
-                            .ok_or("--verify requires an output PNG path")?
-                            .into(),
-                    )
-                }
                 _ => {
                     return Err(format!(
-                        "Unknown argument {arg:?}. Usage: skate3rust [--assets DIRECTORY] [--map MAP.skate | --test-world] [--difficulty easy|normal|hardcore] [--verify CAPTURE.png] [--check-assets] [--start-paused] [--xr [--xr-scale K]]"
+                        "Unknown argument {arg:?}. Usage: skate3rust [--assets DIRECTORY] [--map MAP.skate | --test-world] [--difficulty easy|normal|hardcore] [--check-assets] [--start-paused] [--xr [--xr-scale K]]"
                     ));
                 }
             }
@@ -124,19 +115,6 @@ impl Config {
             }
         }
         config.map_fingerprint = map_fingerprint(config.map_path.as_deref())?;
-        if let Some(path) = &mut config.verification_capture {
-            if path.extension().and_then(|x| x.to_str()) != Some("png") {
-                return Err("--verify output must be a PNG file".into());
-            }
-            if !path.is_absolute() {
-                *path = std::env::current_dir()
-                    .map_err(|e| e.to_string())?
-                    .join(&path);
-            }
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-        }
         Ok(config)
     }
 }

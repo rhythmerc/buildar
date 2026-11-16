@@ -4,7 +4,7 @@ use crate::{
     graph_runtime::StockGraphs,
     input,
     physics::{GamePhysics, PhysicsPlugin, SkaterRuntime},
-    verification, world,
+    world,
 };
 use crate::engines::{Engine, EngineSet};
 use bevy::{
@@ -75,7 +75,6 @@ pub(crate) enum FrameSet {
     Assets,
     Physics,
     Animation,
-    Verification,
 }
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
@@ -205,7 +204,7 @@ fn add_retail(app: &mut App) {
     )
     .configure_sets(
         Update,
-        (FrameSet::Assets, FrameSet::Physics, FrameSet::Animation, FrameSet::Verification)
+        (FrameSet::Assets, FrameSet::Physics, FrameSet::Animation)
             .chain()
             .in_set(SKATE3),
     )
@@ -214,8 +213,7 @@ fn add_retail(app: &mut App) {
         (crate::map_transition::MapTransitionSet, crate::graphics_menu::MenuInput).in_set(SKATE3),
     );
     hold(app);
-    app.add_plugins(crate::fps_overlay::FpsOverlayPlugin)
-    .add_plugins((
+    app.add_plugins((
         crate::retail_render::RetailRenderPlugin,
         input::InputPlugin,
         PhysicsPlugin,
@@ -228,9 +226,6 @@ fn add_retail(app: &mut App) {
         camera::CameraPlugin,
         crate::graphics_menu::GraphicsMenuPlugin,
         crate::map_transition::MapTransitionPlugin,
-        crate::render_capacity::RenderCapacityPlugin,
-        verification::VerificationPlugin,
-        crate::performance::PerformancePlugin,
     ));
     app.add_plugins(crate::customiser_parts::CharacterPlugin);
     app.add_plugins(crate::custom_models::CustomModelsPlugin);

@@ -29,8 +29,6 @@ mod customiser_parts;
 #[cfg(feature = "retail")]
 use skate3_sim::difficulty;
 #[cfg(feature = "retail")]
-mod fps_overlay;
-#[cfg(feature = "retail")]
 mod graph_runtime;
 #[cfg(feature = "retail")]
 mod graphics_menu;
@@ -49,13 +47,9 @@ mod logging;
 #[cfg(feature = "retail")]
 mod map_transition;
 #[cfg(feature = "retail")]
-mod performance;
-#[cfg(feature = "retail")]
 mod physics;
 #[cfg(feature = "retail")]
 mod presentation;
-#[cfg(feature = "retail")]
-mod render_capacity;
 #[cfg(feature = "retail")]
 mod replay;
 #[cfg(feature = "retail")]
@@ -77,8 +71,6 @@ mod skate_audio;
 mod stream_pcm;
 #[cfg(feature = "retail")]
 mod skate_world;
-#[cfg(feature = "retail")]
-mod verification;
 #[cfg(feature = "retail")]
 mod world;
 #[cfg(feature = "xr")]

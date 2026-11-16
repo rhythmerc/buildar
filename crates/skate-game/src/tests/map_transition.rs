@@ -37,7 +37,6 @@ fn installed_worlds_prepare_commit_and_retire_without_simulation() {
     let mut world = World::new();
     world.insert_resource(Config {
         asset_root: root.clone(),
-        verification_capture: None,
         map: None,
         map_path: None,
         difficulty,
