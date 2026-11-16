@@ -113,7 +113,8 @@ fn frame(m: &[[f32; 4]; 4]) -> Frame {
 
 /// Where the skater is: the board from its deck's body; the rider from the animation's root, the frame the sim's
 /// biped and camera take as the skater's own (`animation_to_world`, its stance axes turned as the sim's effective root
-/// turns them). On the board the root rides the board; off it, it walks.
+/// turns them). On the board the sim builds the root from the board (`SkeletonRootFrames::update`); off it, from the
+/// biped's own world frame (the off-board ground and air skeletons reset it), so it walks away from the board.
 pub fn link(physics: &GamePhysics, skater: &SkaterRuntime) -> SkaterLink {
     let at = skate3_sim::Link::of(physics, skater);
     let deck = physics.board.part_transforms()[BodyId::Deck.index()];

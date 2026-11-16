@@ -376,7 +376,8 @@ sorting rule.
 - **Skate 3** (`skate3_engine::stage`, `::trick`): `StageFeed` (`set_park`, `set_stage` with the grind deferral and
   the sim's `set_real_surfaces`/`set_grind_rails` arguments rebuilt from stage and park), `place_player` (the travel
   matrix, 5 cm up), `link` (board: the deck body; rider: the animation root `animation_to_world`, its stance axes
-  turned as the sim's effective root does; on the board unless in the biped states), `trick::text` and
+  turned as the sim's effective root does: built from the board while riding, reset from the biped's own world
+  frame off it, as read in the sim; not yet checked on the headset; on the board unless in the biped states), `trick::text` and
   `readable_trick`.
 - **THUG2** (`thug2_engine::stage`): units (`to_game`/`from_game`, `OFFSET`), face classes (`WALL_UP`/`RAMP_UP`/
   `VERT_UP`, `triangles`, `piece_faces`), `DECK_HEIGHT`, `SOUND_HEIGHT`, `spawn`, `link`, and `StageFeed` (the grind

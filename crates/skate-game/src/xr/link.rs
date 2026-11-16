@@ -97,6 +97,7 @@ fn carry_over(
     mut switched: MessageReader<EngineSwitched>,
     mut spot: ResMut<CarriedSpot>,
     mut link: ResMut<SkaterLink>,
+    mut focus: ResMut<PlayerFocus>,
     mut hud: ResMut<super::ui::hud::TrickHud>,
     mut place: MessageWriter<PlacePlayer>,
 ) {
@@ -104,6 +105,8 @@ fn carry_over(
         let Some(from) = s.from else { continue };
         info!("XR: {} -> {}: the player carried over", from.name(), s.to.name());
         *link = SkaterLink::default();
+        // (the new engine's focus from when it last ran is stale until its link says where it is now)
+        focus.set(s.to, None);
         *hud = default();
         if let Some((feet, forward)) = spot.0.take() {
             let flat = forward.with_y(0.0);

@@ -157,7 +157,8 @@ fn each_engine_is_given_exactly_what_it_was() {
     }
 }
 
-/// Recorded at f37f837, before the split.
+/// Recorded at 5dc9513 (f37f837 with the engines' inputs taken out as pure functions, no behaviour change), before
+/// the split.
 const RECORDED: [[&str; 4]; 3] = [
     ["404 bytes e94bef4d55aae7e3", "480 bytes 58cb0e708af05d9f", "480 bytes 1b3b72a19477a47d", "440 bytes d31134ab8c18d474"],
     [

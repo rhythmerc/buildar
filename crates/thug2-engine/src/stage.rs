@@ -316,6 +316,31 @@ mod tests {
         }
     }
 
+    fn skater(state: t2::State) -> t2::Skater {
+        t2::Skater { position: to_game(Vec3::ZERO, 1.0), velocity: [0.0; 3], forward: [0.0, 0.0, 1.0], up: [0.0, 1.0, 0.0], state, frame: 0, balance: None }
+    }
+
+    /// The stage is taken later, not now: mid-grind, before its park, and before there's anywhere to put the skater;
+    /// and nothing is owed for revision 0. (The game itself isn't needed for these: it's never reached.)
+    #[test]
+    fn a_stage_waits_for_the_grind_its_park_and_a_place() {
+        let stage = Stage { revision: 2, ..Default::default() };
+        let park = SkatePark { revision: 2, ..Default::default() };
+        let mut feed = StageFeed::default();
+        let mut spawn = Some(spawn(Vec3::ZERO, Vec3::Z, 1.0));
+        assert_eq!(feed.set_stage(None, None, &Stage::default(), 1.0, &mut spawn), Applied::Done, "nothing built yet");
+        assert_eq!(feed.set_stage(None, None, &stage, 1.0, &mut spawn), Applied::Deferred, "no park yet");
+        assert_eq!(feed.set_park(&park), Applied::Deferred);
+        let grinding = skater(t2::State::Rail);
+        assert_eq!(feed.set_stage(None, Some(&grinding), &stage, 1.0, &mut spawn), Applied::Deferred, "mid-grind");
+        assert!(spawn.is_some(), "the place kept");
+        let rolling = skater(t2::State::Ground);
+        assert_eq!(feed.set_stage(None, Some(&rolling), &stage, 1.0, &mut None), Applied::Deferred, "nowhere to put it");
+        assert_eq!(feed.set_stage(None, Some(&rolling), &stage, 1.0, &mut spawn), Applied::Deferred, "the game not running");
+        assert!(spawn.is_some(), "the place kept for it");
+        assert_eq!(feed.given(), None);
+    }
+
     #[test]
     fn the_skater_is_its_feet_and_its_board_a_deck_up() {
         let s = t2::Skater {
