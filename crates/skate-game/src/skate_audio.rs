@@ -11,7 +11,7 @@
 //!
 //! ## Verified by recording the sound card
 //!
-//! `skate3-audio-check` (`src/audio_check_main.rs`) runs this plugin with no window, renderer or
+//! A headless harness (the former `skate3-audio-check` bin, now in git history) ran this plugin with no window, renderer or
 //! assets, so the audio path can be exercised on a checkout the game itself will not boot on.
 //! Playing 60 blocks of the five-channel ambience bed through it, while recording the output
 //! device's monitor:

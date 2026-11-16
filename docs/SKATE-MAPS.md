@@ -1,12 +1,12 @@
 # .skate maps
 
-Drag a `.skate` file onto `PLAY.bat`. Command-line equivalent:
+On the desktop dev harness, pass a `.skate` file on the command line:
 
-```powershell
-.\scripts\Launch.ps1 -Map 'C:\path with spaces\park.skate'
+```sh
+cargo run --release -p skate-game --bin skate3rust -- --map '/path with spaces/park.skate'
 ```
 
-The original test environment remains available through PLAY.bat without a map.
+The original test environment remains available without a map.
 Maps are parsed before initializing graphics; invalid files produce a readable
 error and do not silently load the default level instead.
 

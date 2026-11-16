@@ -29,7 +29,7 @@ fi
 # the game crate (see the desktop build notes).
 export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
 cargo apk build -p skate-quest --release --lib
-APK="$(ls -t target/release/apk/*.apk | head -1)"
+APK="$(ls -t "${CARGO_TARGET_DIR:-target}"/release/apk/skate3ar*.apk | grep -v unaligned | head -1)"
 echo "APK: $APK"
 if [ "${1:-}" = "--install" ]; then
   adb install -r "$APK"

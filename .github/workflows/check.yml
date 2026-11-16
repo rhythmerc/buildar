@@ -1,0 +1,28 @@
+name: Check
+# Type-checks the store build's game crate (skate-game with only `xr`: the clean-room tier and the
+# headset code, no imported-disc tier, no THUG2 engine). Needs no game data and no THUG2 checkouts.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Bevy's Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            g++ pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check (store build)
+        env:
+          # rustc needs a large stack for the game crate.
+          RUST_MIN_STACK: "268435456"
+        run: cargo check --release -p skate-game --lib --no-default-features --features xr

@@ -3,7 +3,7 @@
 The XML catalog contains models/materials; BIN/VLT contains preset arrays,
 colour parameters, morph order/ranges, cameras and menu filters. Preserve both.
 Raw reflected fields remain authoritative; decoded helpers only cover layouts
-corroborated with the native code. See docs/character-customisation.md.
+corroborated with the native code.
 """
 from __future__ import annotations
 
