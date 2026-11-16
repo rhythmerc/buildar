@@ -8,7 +8,7 @@ The project-owned binary test fixtures live in the
 `skate-data/tests/fixtures/retail-collision.rwcmset` (`python tools/make_collision_fixture.py` here writes
 into a sibling checkout of it) and `sim/tests/fixtures/format-demo.skate`.
 
-Run these commands from the repository root. Both generators reproduced the
+Run it from the repository root. The generators reproduced the
 tracked fixtures byte for byte during publication preparation.
 
 The README artwork in `docs/images/skating-crab.png` was supplied by the project
