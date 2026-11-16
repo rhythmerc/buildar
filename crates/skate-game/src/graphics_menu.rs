@@ -118,9 +118,6 @@ impl Menu {
         }
         self.settings.hour
     }
-    pub(crate) fn diagnostic_settings(&self) -> String {
-        format!("{:?}", self.settings)
-    }
     pub(crate) fn transition_finished(&mut self, status: String, resume: bool) {
         self.status = status;
         self.open = !resume;
@@ -326,15 +323,13 @@ pub(crate) fn interact(
     mut exit: MessageWriter<AppExit>,
     mut net: ResMut<crate::multiplayer::Multiplayer>,
     mut typing: MessageReader<bevy::input::keyboard::KeyboardInput>,
-    mut updater: ResMut<crate::updater::Updater>,
-    mut travel: ResMut<crate::teleport_menu::Travel>,
 ) {
     if transition.busy() {
         menu.open = true;
         time.pause();
         return;
     }
-    if mods.open || travel.open || travel.closed_this_frame || customiser.open || custom_models.open
+    if mods.open || customiser.open || custom_models.open
     {
         return;
     }
@@ -527,8 +522,6 @@ pub(crate) fn interact(
                     menu.selected = 0;
                 }
                 12 => custom_models.begin(),
-                13 => menu.status = updater.open(false),
-                14 => travel.open = true,
                 15 => mods.begin(),
                 16 => {
                     menu.daylight = true;
@@ -621,7 +614,6 @@ fn labels(
     time: Res<Time<Real>>,
     customiser: Res<crate::customiser::Customiser>,
     custom_models: Res<crate::custom_models::CustomModels>,
-    travel: Res<crate::teleport_menu::Travel>,
     mods: Res<crate::modding::ModMenu>,
     net: Res<crate::multiplayer::Multiplayer>,
     window: Single<&Window, With<PrimaryWindow>>,
@@ -634,7 +626,7 @@ fn labels(
     >,
 ) {
     root.display =
-        if menu.open && !mods.open && !travel.open && !customiser.open && !custom_models.open {
+        if menu.open && !mods.open && !customiser.open && !custom_models.open {
             Display::Flex
         } else {
             Display::None
@@ -761,9 +753,8 @@ fn labels(
                 9 => "Quit game".into(),
                 10 => "Character customiser".into(),
                 12 => "Custom models".into(),
-                13 => "Updates".into(),
+                13 | 14 => String::new(),
                 15 => "Mods".into(),
-                14 => "Teleport…".into(),
                 16 => "Day & night…".into(),
                 _ => "Multiplayer".into(),
             }

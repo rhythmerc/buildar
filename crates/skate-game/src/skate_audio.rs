@@ -57,9 +57,7 @@ pub(crate) mod clean;
 
 /// A front-end one-shot to play, by the 64-bit AttribSys id retail passes to `GlobalFEPlaySound`
 /// (`sub_825DFAF0`).
-///
-/// This lives here rather than beside its producer because `player_audio` is shared by every
-/// binary in this crate while `session_marker` is declared only by the game binary.
+/// (Written by the scoring HUD.)
 #[derive(Message, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FrontEndSoundRequest(pub u64);
 

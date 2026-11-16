@@ -15,7 +15,6 @@ pub(crate) struct Config {
     pub start_paused: bool,
     pub multiplayer: crate::multiplayer::Options,
     pub map_fingerprint: u64,
-    pub teleport: Option<String>,
     /// `--xr [--xr-scale K]`: OpenXR passthrough miniature.
     pub xr: Option<XrOptions>,
 }
@@ -46,7 +45,6 @@ impl Config {
             start_paused: false,
             multiplayer: crate::multiplayer::Options::default(),
             map_fingerprint: 0,
-            teleport: None,
             xr: None,
         };
         let mut difficulty_override = None;
@@ -54,10 +52,6 @@ impl Config {
         let mut args = std::env::args_os().skip(1);
         while let Some(arg) = args.next() {
             match arg.to_str() {
-                Some("--trace" | "--trace-seconds" | "--trace-delay" | "--trace-min-us") => {
-                    args.next().ok_or("Trace option requires a value")?;
-                }
-                Some("--trace-wait" | "--trace-gpu") => {}
                 Some("--net-host") => {
                     config.multiplayer.host = Some(
                         args.next()
@@ -163,14 +157,6 @@ impl Config {
                 }
                 Some("--check-assets") => config.check_assets = true,
                 Some("--start-paused") => config.start_paused = true,
-                Some("--teleport") => {
-                    config.teleport = Some(
-                        args.next()
-                            .ok_or("--teleport requires a destination ID")?
-                            .to_string_lossy()
-                            .into_owned(),
-                    )
-                }
                 Some("--difficulty") => {
                     let value = args
                         .next()
@@ -213,23 +199,6 @@ impl Config {
         config.map_fingerprint = map_fingerprint(config.map_path.as_deref())?;
         if config.multiplayer.direct.is_some() && config.multiplayer.session == 0 {
             return Err("Direct multiplayer requires --net-session (a nonzero number shared by both players)".into());
-        }
-        if let Some(id) = &config.teleport {
-            let destinations = crate::teleport_menu::load(&config.asset_root)?;
-            let target = destinations
-                .iter()
-                .find(|d| &d.id == id)
-                .ok_or("Unknown teleport destination")?;
-            if target.matrix.is_none()
-                || !config
-                    .map_path
-                    .as_ref()
-                    .is_some_and(|p| crate::teleport_menu::same_map(p, &target.map))
-            {
-                return Err(
-                    "Teleport destination is unavailable or belongs to a different map".into(),
-                );
-            }
         }
         if let Some(path) = &mut config.verification_capture {
             if path.extension().and_then(|x| x.to_str()) != Some("png") {

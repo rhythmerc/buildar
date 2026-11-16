@@ -243,17 +243,12 @@ fn add_retail(app: &mut App) {
         verification::VerificationPlugin,
         crate::performance::PerformancePlugin,
     ));
-    app.add_plugins((crate::session_marker::SessionMarkerPlugin, crate::customiser::CustomiserPlugin));
+    app.add_plugins(crate::customiser::CustomiserPlugin);
     app.add_plugins(crate::custom_models::CustomModelsPlugin);
     app.add_plugins(crate::modding::ModdingPlugin);
     app.add_plugins(crate::skate_audio::SkateAudioPlugin);
-    crate::teleport_menu::install(app);
-    app.add_plugins(crate::updater::UpdaterPlugin);
     app.add_plugins(crate::multiplayer::MultiplayerPlugin);
     app.add_plugins(crate::scoring_hud::ScoringHudPlugin);
-    app.add_systems(Last, crate::crash_context::sample.in_set(SKATE3));
-    // (the profiler's frame markers stay shared: they time every frame, whichever engine runs)
-    crate::profiling::install(app);
 }
 
 #[cfg(test)]
