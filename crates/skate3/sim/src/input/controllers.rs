@@ -1,7 +1,6 @@
 //! Persistent platform-input owner. Device collection runs on host frames;
 //! this does not choose the skater simulation clock or advance Derived input.
-use super::platform::{DeviceError, DevicePacket};
-use bevy::prelude::Resource;
+use super::device::{DeviceError, DevicePacket};
 use skate_core::input::{
     controller::ActionMap,
     gameplay_map::GameplayActions,
@@ -12,14 +11,14 @@ use skate_core::input::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ControllerStatus {
+pub enum ControllerStatus {
     Unpolled,
     Ready,
     Unavailable(DeviceError),
 }
 
-#[derive(Resource)]
-pub(crate) struct ControllerInput {
+
+pub struct ControllerInput {
     raw: [RawInput; DEVICE_SLOTS],
     cache: [[HistoryRecord; DEVICE_SLOTS]; 2],
     active: usize,
@@ -54,7 +53,7 @@ impl Default for ControllerInput {
 impl ControllerInput {
     /// Original input.cfg: LB.held && DPadD.pressed / LB.held && DPadU.held.
     /// Use the same debounced native Pad publication as ordinary gameplay.
-    pub(crate) fn session_marker_actions(&self) -> (bool, bool, bool) {
+    pub fn session_marker_actions(&self) -> (bool, bool, bool) {
         let Some(device) = self
             .status
             .iter()
@@ -74,7 +73,7 @@ impl ControllerInput {
             modifier && flags(0) & 0xff00 != 0,
         )
     }
-    pub(crate) fn raw_input(&self) -> RawInput {
+    pub fn raw_input(&self) -> RawInput {
         self.status
             .iter()
             .position(|s| *s == ControllerStatus::Ready)
@@ -82,12 +81,12 @@ impl ControllerInput {
     }
 
     // Replay controls must never queue a flick or a button press for gameplay.
-    pub(crate) fn discard_gameplay(&mut self) {
+    pub fn discard_gameplay(&mut self) {
         self.history = PadHistory::new();
         self.pads = std::array::from_fn(|_| Pad::new());
         self.mapped_actions = [[0.0; 18]; DEVICE_SLOTS];
     }
-    pub(crate) fn player_actions(&self) -> GameplayActions {
+    pub fn player_actions(&self) -> GameplayActions {
         let device = self
             .status
             .iter()
@@ -96,7 +95,7 @@ impl ControllerInput {
         GameplayActions::from_pad(&self.pads[device])
     }
 
-    pub(super) fn tick_input(&self) -> TickInput {
+    pub fn tick_input(&self) -> TickInput {
         let device = self
             .status
             .iter()
@@ -110,7 +109,7 @@ impl ControllerInput {
     /// TU3 8296D288/8296D0D0: write the inactive cache, publish one four-device
     /// batch. Even an unchanged platform packet is sampled; packet-number
     /// deduplication would alter native Pad edge/repeat behavior.
-    pub(super) fn collect(&mut self, samples: [Result<DevicePacket, DeviceError>; DEVICE_SLOTS]) {
+    pub fn collect(&mut self, samples: [Result<DevicePacket, DeviceError>; DEVICE_SLOTS]) {
         let next = self.active ^ 1;
         for (device, sample) in samples.into_iter().enumerate() {
             match sample {
@@ -143,7 +142,7 @@ impl ControllerInput {
     /// TU3 82699230 drains first, then updates each Pad once. The game owns
     /// this snapshot for subsequent consumers; Derived timers require the
     /// actual actor timestep and state flags and are not driven by render dt.
-    pub(super) fn publish_actions(&mut self) -> bool {
+    pub fn publish_actions(&mut self) -> bool {
         self.tick = self.tick.wrapping_add(1);
         if !self.history.drain_to_latest(&mut self.pads) {
             return false;
@@ -155,10 +154,28 @@ impl ControllerInput {
         self.consumed_batches += 1;
         true
     }
+
+    /// Feed test packets through the production conversion, cache, history and Pad.
+    /// Only the operating-system read is supplied by the test. (Test support: compiled
+    /// unconditionally so tests in dependent crates can use it too.)
+    #[doc(hidden)]
+    pub fn sample_raw_for_test(&mut self, state: xbox::XboxState) {
+        self.collect([
+            Ok(DevicePacket {
+                number: self.publications as u32 + 1,
+                state,
+                subtype: 1,
+            }),
+            Err(DeviceError::Disconnected),
+            Err(DeviceError::Disconnected),
+            Err(DeviceError::Disconnected),
+        ]);
+        assert!(self.publish_actions());
+    }
 }
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct RawInput {
+pub struct RawInput {
     pub buttons: u16,
     pub triggers: [f32; 2],
     pub left: [f32; 2],

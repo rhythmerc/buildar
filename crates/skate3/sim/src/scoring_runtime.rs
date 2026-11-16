@@ -251,7 +251,7 @@ enum Collector {
     Offboard,
     Handplant,
 }
-pub(crate) struct Frame {
+pub struct Frame {
     pub tick: u32,
     pub dt: f32,
     pub category: FilteredCategory,
@@ -293,7 +293,7 @@ pub(crate) struct Frame {
     /// is always false. It is **not** State+66, the revert's active lifetime.
     pub manual_block_70: bool,
 }
-pub(crate) struct Runtime {
+pub struct Runtime {
     pub data: ScoringData,
     pub session: Session,
     collector: Collector,
@@ -468,7 +468,7 @@ impl Runtime {
 
     /// Uses the same landing-quality thresholds as the retail scoring/HUD path without requiring
     /// audio to infer clean or sketchy from animation names.
-    pub(crate) fn classify_landing_audio(
+    pub fn classify_landing_audio(
         &self,
         landing: skate_core::animation::landing_quality::Output,
     ) -> (bool, bool) {
@@ -851,12 +851,12 @@ impl Runtime {
     }
 
     /// Whether a sequence is open, i.e. whether the collectors are still building one.
-    pub(crate) fn sequence_open(&self) -> bool {
+    pub fn sequence_open(&self) -> bool {
         self.sequence_active
     }
 
     /// The composed name the display is showing, as [`compose_trick_name`] last built it.
-    pub(crate) fn displayed_name(&self) -> &str {
+    pub fn displayed_name(&self) -> &str {
         &self.trick_name
     }
 

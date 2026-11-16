@@ -14,7 +14,7 @@ use skate_data::{
 use std::path::Path;
 mod authored_clips;
 
-pub(crate) struct PoseEvaluator {
+pub struct PoseEvaluator {
     pub frames: AnimationFrames,
     authored: authored_clips::Replacements,
     mod_clips: std::sync::RwLock<std::collections::BTreeMap<String, authored_clips::Replacements>>,
@@ -42,7 +42,7 @@ impl PoseEvaluator {
     }
 
     /// Reuses the existing constrained body-clip parser; never replaces board/trajectory data.
-    pub(crate) fn install_mod_clips(&self, owner: &str, text: &str) -> Result<(), String> {
+    pub fn install_mod_clips(&self, owner: &str, text: &str) -> Result<(), String> {
         let clips = authored_clips::Replacements::parse(text, &self.frames)?;
         let mut all = self
             .mod_clips
@@ -56,12 +56,12 @@ impl PoseEvaluator {
         all.insert(owner.to_owned(), clips);
         Ok(())
     }
-    pub(crate) fn remove_mod_clips(&self, owner: &str) {
+    pub fn remove_mod_clips(&self, owner: &str) {
         if let Ok(mut all) = self.mod_clips.write() {
             all.remove(owner);
         }
     }
-    pub(crate) fn clear_mod_clips(&self) {
+    pub fn clear_mod_clips(&self) {
         if let Ok(mut all) = self.mod_clips.write() {
             all.clear();
         }
@@ -71,7 +71,7 @@ impl PoseEvaluator {
     /// reparented hand and toe helpers. This is the same split `authored_clips` uses to replace a
     /// body animation while leaving the board's trajectory alone, which is what makes it possible
     /// to hold a pose while the board keeps moving underneath it.
-    pub(crate) fn body_bones(&self) -> &[usize] {
+    pub fn body_bones(&self) -> &[usize] {
         self.body_bones.get_or_init(|| {
             let index = |name: &str| self.frames.bone_names.iter().position(|n| n == name);
             let (Some(hips), Some(board)) = (index("HIPS"), index("SKATEBOARD_ROOT")) else {

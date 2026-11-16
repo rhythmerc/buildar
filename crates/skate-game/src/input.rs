@@ -2,14 +2,17 @@
 use crate::app::SimulationSet;
 use bevy::prelude::*;
 
-mod controllers;
-pub(crate) mod gesture_catalog;
-pub(crate) mod gesture_input;
-pub(crate) mod gesture_mapping;
-mod gesture_mapping_data;
+// The pad history and gesture recognisers are the sim's (skate3-sim); this module is the Bevy side.
+pub(crate) use skate3_sim::input::ControllerStatus;
+#[allow(unused_imports)]
+pub(crate) use skate3_sim::input::{gesture_catalog, gesture_input, gesture_mapping};
 pub(crate) mod platform;
-pub(crate) use controllers::{ControllerInput, ControllerStatus};
 use skate_core::input::tick::TickInput;
+
+/// The sim's [`skate3_sim::input::ControllerInput`] as a Bevy resource (a transitional shim: the
+/// sim has no Bevy, so the `Resource` impl lives on this wrapper).
+#[derive(Resource, Default, Deref, DerefMut)]
+pub(crate) struct ControllerInput(pub skate3_sim::input::ControllerInput);
 
 #[derive(Resource, Clone, Copy, Debug)]
 pub(crate) struct PublishedTickInput(pub TickInput);
@@ -127,6 +130,3 @@ fn publish_actions(
     input.publish_actions();
     published.0 = input.tick_input();
 }
-
-#[cfg(test)]
-pub(crate) mod manual_replay;

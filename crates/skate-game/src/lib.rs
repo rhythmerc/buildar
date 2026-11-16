@@ -5,19 +5,13 @@ mod android;
 #[cfg(all(feature = "retail", any(target_os = "android", test)))]
 mod clean_pack;
 #[cfg(feature = "retail")]
-mod animation_pose;
+use skate3_sim::animation_pose;
 #[cfg(feature = "retail")]
 mod app;
 #[cfg(feature = "retail")]
-mod apt_display;
-#[cfg(feature = "retail")]
-mod apt_movie;
-#[cfg(feature = "retail")]
-mod apt_scene;
-#[cfg(feature = "retail")]
-mod apt_text;
-#[cfg(feature = "retail")]
-mod apt_vm;
+use skate3_sim::apt_scene;
+#[cfg(all(feature = "retail", test))]
+use skate3_sim::apt_vm;
 #[cfg(feature = "retail")]
 mod assets;
 mod binaural;
@@ -40,7 +34,7 @@ mod customiser_material;
 #[cfg(feature = "retail")]
 mod customiser_parts;
 #[cfg(feature = "retail")]
-mod difficulty;
+use skate3_sim::difficulty;
 #[cfg(feature = "retail")]
 mod fps_overlay;
 #[cfg(feature = "retail")]
@@ -52,7 +46,7 @@ mod graphics_menu;
 #[cfg(feature = "retail")]
 mod grind_world;
 #[cfg(feature = "retail")]
-mod hud_runtime;
+use skate3_sim::hud_runtime;
 #[cfg(feature = "retail")]
 mod input;
 // The store build: the pad plumbing the imported-disc tier reads, as stand-ins.
@@ -60,7 +54,7 @@ mod input;
 #[path = "input_store.rs"]
 mod input;
 #[cfg(feature = "retail")]
-mod map_library;
+use skate3_sim::map_library;
 #[cfg(feature = "retail")]
 mod map_render;
 #[cfg(feature = "retail")]
@@ -90,7 +84,7 @@ mod retail_render;
 #[cfg(feature = "retail")]
 mod scoring_hud;
 #[cfg(feature = "retail")]
-mod scoring_runtime;
+use skate3_sim::scoring_runtime;
 #[cfg(feature = "retail")]
 mod session_marker;
 #[cfg(feature = "retail")]

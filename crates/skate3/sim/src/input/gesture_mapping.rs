@@ -2,7 +2,7 @@
 use super::{gesture_catalog::Group, gesture_mapping_data::TABLES};
 use skate_core::{animation::playback_parameters::intent_key, graph::intents::IntentMap};
 
-pub(crate) fn select(group: Group, intents: &IntentMap, mirrored: bool) -> Option<&'static str> {
+pub fn select(group: Group, intents: &IntentMap, mirrored: bool) -> Option<&'static str> {
     let rows = TABLES[group as usize];
     // 82BC0D90 uses greatest prime <=46, then maximum load10000.
     // 82BC1BE8 prepends entries; 82BA07F0 visits ascending buckets.
@@ -35,7 +35,7 @@ pub(crate) fn select(group: Group, intents: &IntentMap, mirrored: bool) -> Optio
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct State {
+pub struct State {
     first_update: bool,
     selected: Option<String>,
     successor: Option<&'static str>,

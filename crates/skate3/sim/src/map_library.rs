@@ -2,12 +2,12 @@
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
-pub(crate) struct Entry {
+pub struct Entry {
     pub label: String,
     pub path: Option<PathBuf>,
 }
 
-pub(crate) fn discover(assets: &Path) -> Vec<Entry> {
+pub fn discover(assets: &Path) -> Vec<Entry> {
     let mut maps = Vec::new();
     let root = assets.parent().unwrap_or(assets).join("maps");
     for directory in [&root, &root.join("private")] {
@@ -42,7 +42,7 @@ pub(crate) fn discover(assets: &Path) -> Vec<Entry> {
     maps
 }
 
-pub(crate) fn default_map(assets: &Path) -> Result<Option<PathBuf>, String> {
+pub fn default_map(assets: &Path) -> Result<Option<PathBuf>, String> {
     // Only a completed release installation creates this pointer. Existing
     // development checkouts continue to boot the test world.
     let pointer = assets
@@ -70,7 +70,7 @@ pub(crate) fn default_map(assets: &Path) -> Result<Option<PathBuf>, String> {
 }
 
 /// Save only a successfully activated map. Null explicitly selects the test world.
-pub(crate) fn save_default(assets: &Path, map: Option<&Path>) -> Result<(), String> {
+pub fn save_default(assets: &Path, map: Option<&Path>) -> Result<(), String> {
     let root = assets.parent().unwrap_or(assets);
     let relative = map
         .map(|path| {

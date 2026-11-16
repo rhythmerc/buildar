@@ -3,7 +3,7 @@
 //! against all270 raw map-insertion calls. PAT paths do not define these groups.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Group {
+pub enum Group {
     Square,
     Nose,
     Tail,
@@ -15,7 +15,7 @@ pub(crate) enum Group {
 
 impl Group {
     /// Original82BA0F78 does case-sensitive constructor comparisons.
-    pub(crate) fn parse(name: &str) -> Result<Self, String> {
+    pub fn parse(name: &str) -> Result<Self, String> {
         Ok(match name {
             "Square" => Self::Square,
             "Nose" => Self::Nose,
@@ -30,7 +30,7 @@ impl Group {
 
     ///82BA07F0 tests map-key presence, never the intent value. All seven maps
     ///contain the same30 unrotated keys; each rotated map adds its15 own keys.
-    pub(crate) fn has_intent(self, has: impl Fn(&str) -> bool) -> bool {
+    pub fn has_intent(self, has: impl Fn(&str) -> bool) -> bool {
         let additional: &[&str] = match self {
             Self::Square | Self::Nose | Self::Tail => &[],
             Self::Nose90 => &NOSE_90,

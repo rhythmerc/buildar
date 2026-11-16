@@ -2,9 +2,9 @@
 //! The same packets run in production-frame tests and the normal rendered game.
 use skate_core::input::xbox::XboxState;
 
-pub(crate) const END_TICK: u64 = 330;
+pub const END_TICK: u64 = 330;
 
-pub(crate) fn sample(tick: u64, sign: i16) -> XboxState {
+pub fn sample(tick: u64, sign: i16) -> XboxState {
     XboxState {
         buttons: if (12..40).contains(&tick) { 0x1000 } else { 0 },
         triggers: [0; 2],

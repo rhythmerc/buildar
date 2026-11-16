@@ -1,6 +1,6 @@
 //! Optional authored body clips. Stock graph timing, board, trajectory and attributes remain authoritative.
 use super::*;
-use bevy::math::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 #[derive(Default)]
@@ -179,7 +179,7 @@ fn words(s: Sqt) -> SampleWords {
 mod tests {
     use super::*;
     fn fixture() -> (AnimationFrames, String) {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets");
         let banks = AnimationBanks::load(&root).unwrap();
         let frames = AnimationFrames::from_banks(&banks).unwrap();
         let text =

@@ -3,7 +3,6 @@
 //! separate idle clip or own the skater's pose.
 use crate::{app::FrameSet, assets::AssetStatus, physics::SkaterRuntime, world::PlayerRoot};
 use bevy::{camera::visibility::NoFrustumCulling, mesh::skinning::SkinnedMesh, prelude::*};
-use skate_core::animation::output::NativeMatrix;
 
 #[derive(Resource, Default)]
 pub(crate) struct AnimationStatus {
@@ -333,14 +332,7 @@ fn present(
 fn render_basis() -> Mat4 {
     Mat4::from_cols(Vec4::X, -Vec4::Z, Vec4::Y, Vec4::W)
 }
-pub(crate) fn native_matrix(matrix: NativeMatrix) -> Mat4 {
-    Mat4::from_cols(
-        Vec3::from_array(matrix[0][..3].try_into().unwrap()).extend(0.0),
-        Vec3::from_array(matrix[1][..3].try_into().unwrap()).extend(0.0),
-        Vec3::from_array(matrix[2][..3].try_into().unwrap()).extend(0.0),
-        Vec3::from_array(matrix[3][..3].try_into().unwrap()).extend(1.0),
-    )
-}
+pub(crate) use skate3_sim::animation::native_matrix;
 
 /// Vehicle clips use the same native model-space skeleton matrices as the SDK.
 ///
