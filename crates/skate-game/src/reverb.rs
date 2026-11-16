@@ -348,6 +348,7 @@ pub(crate) struct Geometry {
 }
 
 impl Geometry {
+    #[cfg(any(feature = "xr", test))]
     pub(crate) fn quad(&mut self, corners: [Vec3; 4]) {
         let first = self.vertices.len() as u32;
         self.vertices.extend(corners);
@@ -464,6 +465,7 @@ impl Room {
     }
 
     /// The room's surfaces (none: no room, no reverberation).
+    #[cfg(any(feature = "xr", test))]
     pub(crate) fn set_geometry(&self, geometry: Option<Arc<Geometry>>) {
         let mut want = lock(&self.want);
         want.geometry = geometry.filter(|g| !g.triangles.is_empty());
@@ -471,6 +473,7 @@ impl Room {
     }
 
     /// Where the head is and how it is turned, in the geometry's space.
+    #[cfg(any(feature = "xr", test))]
     pub(crate) fn set_head(&self, position: Vec3, rotation: Quat) {
         lock(&self.want).head = (position, rotation);
         let axes = [rotation * Vec3::X, rotation * Vec3::Y, rotation * Vec3::NEG_Z];

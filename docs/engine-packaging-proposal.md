@@ -1,6 +1,8 @@
 # Engine packaging: a standalone Skate 3 engine (and SK8, THUG2) behind one engine API
 
-Status: proposal, 2026-11-16. Research only: no code was changed for this document.
+Status: done (historical). The plan below was carried out; it is kept as the record of the design.
+
+Originally: proposal, 2026-11-16. Research only: no code was changed for this document.
 
 Goal (the user's words): *"Now that we've become a modular skate engine consumer, we should refactor out
 our skate 3 code into a standalone package (like thug2-headless). Ditto for sk8 core if needed."*

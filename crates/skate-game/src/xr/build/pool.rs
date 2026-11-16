@@ -408,7 +408,7 @@ impl PoolAssets {
         images: &mut Assets<Image>,
         shadows: &mut Assets<super::pool_shadow::PoolShadow>,
     ) {
-        let mut child = |commands: &mut Commands, bundle: (Mesh3d, MeshMaterial3d<StandardMaterial>)| {
+        let child = |commands: &mut Commands, bundle: (Mesh3d, MeshMaterial3d<StandardMaterial>)| {
             commands.spawn((bundle, Transform::default(), ChildOf(parent)));
         };
         let textured = |images: &mut Assets<Image>, image: Image, metres: f32, color: Color, roughness: f32| StandardMaterial {

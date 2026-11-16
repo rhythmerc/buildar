@@ -28,6 +28,7 @@ pub(crate) const FLAT: [Band; BANDS] = [
     Band { freq: 7000.0, gain: 0.0, q: 0.71 },
 ];
 
+#[cfg(feature = "xr")]
 pub(crate) const BAND_NAMES: [&str; BANDS] = ["Low shelf", "Peak 1", "Peak 2", "High shelf"];
 
 fn flat() -> [Band; BANDS] {
@@ -116,6 +117,7 @@ fn biquad(index: usize, band: &Band, rate: f32) -> Biquad {
 }
 
 /// What the four bands together do to a tone at `freq`, dB.
+#[cfg(any(feature = "xr", test))]
 pub(crate) fn response_db(bands: &[Band; BANDS], rate: f32, freq: f32) -> f32 {
     let w = std::f64::consts::TAU * f64::from(freq) / f64::from(rate);
     let (c1, s1, c2, s2) = (w.cos(), w.sin(), (2.0 * w).cos(), (2.0 * w).sin());

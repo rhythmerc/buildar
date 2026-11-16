@@ -1,6 +1,8 @@
 # Skate 3 as a standalone, Bevy-free sim (thug2-headless shape)
 
-Status: scoping study, 2026-11-16. Research only: no code was changed. Builds on
+Status: done (historical). The split below was carried out; it is kept as the record of the design.
+
+Originally: scoping study, 2026-11-16. Research only: no code was changed. Builds on
 `docs/engine-packaging-proposal.md` (the audit: crate layout, coupling points, steps 0-9). That document's
 step 9 is now the target. Its steps 0-3 stay as written. Its step 6 shrinks to "adapter + renderer".
 

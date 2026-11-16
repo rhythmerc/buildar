@@ -169,8 +169,6 @@ fn retail_controls() -> Vec<(String, String)> {
         ("Triggers", "grabs (LT / RT)"),
         ("Grips", "LB / RB"),
         ("Stick clicks", "LS / RS"),
-        ("Left menu held + left stick", "D-pad"),
-        ("Left menu held + X", "Back"),
         ("Left grip + trigger", "aim, let go to put the skater there"),
         ("Left menu (tap)", "this menu"),
         ("Left menu (hold 1 s)", "build mode"),

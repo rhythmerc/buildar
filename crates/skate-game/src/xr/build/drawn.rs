@@ -10,7 +10,7 @@
 //!
 //! Outlines are filled from their middle, so a pad or bowl should be a
 //! shape whose middle sees all of its edge (no hooks or hourglasses).
-use super::{MAX_SIZE, MIN_SIZE, Piece, PieceGeometry, PieceKind, box_quads, push, swept_tube};
+use super::{MAX_SIZE, MIN_SIZE, Piece, PieceGeometry, PieceKind, push, swept_tube};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::f32::consts::FRAC_PI_2;

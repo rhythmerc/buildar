@@ -190,7 +190,7 @@ def _install(iso,base,game_exe,report,game_root=None,refresh=False,finalize=None
         return {g:saved[g] if g not in groups and g in saved else record(stage,g) for g in GROUPS}
     if not groups:
         with (base/'refresh-validation.log').open('w',encoding='utf-8') as log:
-            run([game_exe,'--assets',previous[0]/'assets','--test-world','--check-assets'],log,report)
+            run([game_exe,'--assets',previous[0]/'assets','--check-assets'],log,report)
         if finalize:finalize(previous[0])
         from .optional_content import summary
         summary(previous[0])
@@ -291,7 +291,7 @@ def _install(iso,base,game_exe,report,game_root=None,refresh=False,finalize=None
                 if (work/'dmo').exists():remove_intermediate(work/'dmo',work)
                 note(private/'native-props/props-availability.json','Movable props',error,report=report)
         report('Validating skater, input and animation data')
-        run([game_exe,'--assets',stage/'assets','--test-world','--check-assets'],log,report)
+        run([game_exe,'--assets',stage/'assets','--check-assets'],log,report)
         if 'maps' in groups:
             archives=list((game_root/'data/content').glob('worldDIST_*.big'))
             archives.sort(key=lambda p:(p.stem!='worldDIST_University',p.name.lower()))
@@ -342,7 +342,7 @@ def _install(iso,base,game_exe,report,game_root=None,refresh=False,finalize=None
                     if old['path'] not in valid_paths:(stage/old['path']).unlink(missing_ok=True)
             if not catalog:raise RuntimeError('No playable map could be prepared or recovered. Restore at least one worldDIST_*.big archive beside default.xex and retry; the previous installation has been kept.')
         report('Validating installed runtime inputs')
-        run([game_exe,'--assets',stage/'assets','--test-world','--check-assets'],log,report)
+        run([game_exe,'--assets',stage/'assets','--check-assets'],log,report)
         settings=stage/'settings';settings.mkdir(exist_ok=True)
         if not previous:
             (settings/'default-map.json').write_text(json.dumps(next((m['path'] for m in catalog if m['name']=='University'),catalog[0]['path'])),encoding='utf-8')

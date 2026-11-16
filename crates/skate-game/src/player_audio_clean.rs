@@ -220,15 +220,18 @@ struct CleanAudio {
     targets: [(f32, f32); 7],
     last_pick: [usize; 8],
     rng: u32,
+    #[cfg(feature = "retail")]
     previous: Option<Edges>,
     pending_catch: Option<f32>,
     last_land: f32,
     last_wipe: f32,
     paused: bool,
+    #[cfg(feature = "retail")]
     seen_surfaces: u128,
 }
 
 /// What the previous observation said, for edge detection.
+#[cfg(feature = "retail")]
 #[derive(Clone, Default)]
 struct Edges {
     state: u32,
@@ -492,11 +495,13 @@ fn setup(
         targets: [(0.0, 1.0); 7],
         last_pick: [usize::MAX; 8],
         rng: 0x9E37_79B9,
+        #[cfg(feature = "retail")]
         previous: None,
         pending_catch: None,
         last_land: -1.0,
         last_wipe: -1.0,
         paused: false,
+        #[cfg(feature = "retail")]
         seen_surfaces: 0,
     });
 }
@@ -824,11 +829,13 @@ impl SoundLab {
         }
     }
 
+    #[cfg(feature = "xr")]
     pub(crate) fn tune(&self, kind: usize) -> &Tune {
         &self.tunes[kind]
     }
 
     /// Where the tuning is saved, if anywhere.
+    #[cfg(feature = "xr")]
     pub(crate) fn path(&self) -> Option<&std::path::Path> {
         self.path.as_deref()
     }
@@ -840,6 +847,7 @@ impl SoundLab {
     }
 
     /// Change a kind's tuning: saved, and its sounds made again if what they are made from changed.
+    #[cfg(any(feature = "xr", test))]
     pub(crate) fn edit(&mut self, kind: usize, f: impl FnOnce(&mut Tune)) {
         let before = self.tunes[kind].clone();
         f(&mut self.tunes[kind]);
@@ -854,6 +862,7 @@ impl SoundLab {
         }
     }
 
+    #[cfg(any(feature = "xr", test))]
     pub(crate) fn set_value(&mut self, kind: usize, param: usize, value: f32) {
         let (key, default) = (KINDS[kind].params[param].key, KINDS[kind].defaults[param]);
         self.edit(kind, |tune| {
@@ -866,6 +875,7 @@ impl SoundLab {
     }
 
     /// Set the room's reverberation (saved).
+    #[cfg(feature = "xr")]
     pub(crate) fn set_reverb(&mut self, reverb: f32, damping: f32) {
         if (self.reverb, self.damping) != (reverb, damping) {
             (self.reverb, self.damping) = (reverb, damping);
@@ -874,6 +884,7 @@ impl SoundLab {
     }
 
     /// Play the selected hit once.
+    #[cfg(feature = "xr")]
     pub(crate) fn play_once(&mut self) {
         self.play = true;
     }

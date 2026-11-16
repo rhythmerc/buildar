@@ -230,7 +230,7 @@ struct Made {
     provider: sys::EnvironmentDepthProviderMETA,
     /// Each swapchain image, both eyes' layers. (Kept for as long as the
     /// app runs: the runtime owns the images.)
-    views: Vec<(Texture, TextureView)>,
+    _images: Vec<(Texture, TextureView)>,
     /// Each image's eyes, one at a time (what the filter reads).
     layers: Vec<[TextureView; 2]>,
     /// The latest image filtered: both eyes, and each.
@@ -537,7 +537,7 @@ fn make(session: &OxrSession, device: &RenderDevice) -> Result<Made, &'static st
         info!("Occlusion: room depth {}x{}, {} images", state.width, state.height, views.len());
         Ok(Made {
             provider,
-            views,
+            _images: views,
             layers,
             filtered: (texture, both, each),
             sampler,
@@ -722,7 +722,7 @@ fn init_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>, asse
         "occlusion matte",
         &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (float(), float(), float(), float(), sampler(SamplerBindingType::Filtering))),
     );
-    let mut edge_pass = |label: &'static str, reads: &BindGroupLayoutDescriptor, shader: &'static str, format| {
+    let edge_pass = |label: &'static str, reads: &BindGroupLayoutDescriptor, shader: &'static str, format| {
         cache.queue_render_pipeline(RenderPipelineDescriptor {
             label: Some(label.into()),
             layout: vec![reads.clone(), look_layout.clone()],

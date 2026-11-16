@@ -6,12 +6,3 @@ pub(crate) use skate3_sim::graph_runtime::*;
 
 #[derive(Resource, Clone, Debug, Deref, DerefMut)]
 pub(crate) struct StockGraphs(pub skate3_sim::graph_runtime::StockGraphs);
-
-impl StockGraphs {
-    pub(crate) fn load(
-        root: &std::path::Path,
-        manifest: &skate_data::GameAssets,
-    ) -> Result<Self, String> {
-        skate3_sim::graph_runtime::StockGraphs::load(root, manifest).map(Self)
-    }
-}

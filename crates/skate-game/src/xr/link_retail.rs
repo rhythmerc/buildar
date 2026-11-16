@@ -37,22 +37,18 @@ fn hold(held: Res<crate::xr::actions::PadHeld>, fixed: Res<Time<Fixed>>, mut hol
     hold.set(held.pause, &fixed);
 }
 
-/// The game's pad from the Touch controllers (Skate 3's gestures: `TouchMapper`), neutral while the shared layer has
-/// them.
+/// The game's pad from the Touch controllers (`touch::touch_to_pad`), neutral while the shared layer has them.
 fn pad_from_touch(
     touch: Res<crate::xr::actions::LatestTouch>,
     held: Res<crate::xr::actions::PadHeld>,
-    time: Res<Time<Real>>,
-    mut mapper: Local<crate::xr::touch::TouchMapper>,
     mut pad: ResMut<crate::input::ExternalPad>,
 ) {
-    use crate::xr::touch::{START, XboxState};
-    let mut state = mapper.map(&touch.0, time.delta_secs());
-    // A menu tap is the shared layer's (its menu), never the game's Start.
-    state.buttons &= !START;
-    if held.held {
-        state = XboxState { buttons: 0, triggers: [0, 0], left: [0, 0], right: [0, 0] };
-    }
+    use crate::xr::touch::{XboxState, touch_to_pad};
+    let state = if held.held {
+        XboxState { buttons: 0, triggers: [0, 0], left: [0, 0], right: [0, 0] }
+    } else {
+        touch_to_pad(&touch.0)
+    };
     pad.set(state);
 }
 

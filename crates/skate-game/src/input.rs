@@ -32,6 +32,7 @@ pub(crate) struct ExternalPad {
 }
 
 impl ExternalPad {
+    #[cfg(feature = "xr")]
     pub(crate) fn set(&mut self, state: skate_core::input::xbox::XboxState) {
         let next = Some((state.buttons, state.triggers, state.left, state.right));
         if next != self.state {

@@ -65,7 +65,7 @@ fn options() -> Result<Options, String> {
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--clean" | "--test-world" => {}
+            "--clean" => {}
             "--check-assets" => o.check = true,
             "--xr" => {
                 if !cfg!(feature = "xr") {

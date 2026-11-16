@@ -19,8 +19,8 @@ dev-dynamic = ["bevy/dynamic_linking"]
 # Skate 3 data, and its importer. The headset app (crates/skate-quest) has it; without it the crate is
 # the app layer and the clean-room engine alone (what CI type-checks).
 retail = [
-    "dep:tracing-log", "dep:skate3-sim", "dep:skate-core", "dep:skate-data", "dep:skate-audio-formats",
-    "dep:half", "dep:zip", "zip/deflate-flate2-zlib-rs",
+    "dep:tracing-log", "dep:skate3-sim", "dep:skate-core", "dep:skate-data", "dep:zip",
+    "zip/deflate-flate2-zlib-rs",
 ]
 # OpenXR passthrough mode (`--xr`); the Quest build always enables it.
 xr = ["dep:gltf", "dep:bevy_mod_openxr", "dep:bevy_mod_xr", "dep:openxr", "dep:roomtone-sys", "dep:wgpu", "dep:wgpu-hal", "dep:ash"]
@@ -40,8 +40,6 @@ gltf = { version = "1.4", default-features = false, optional = true }
 skate3-sim = { workspace = true, optional = true }
 skate-core = { workspace = true, optional = true }
 skate-data = { workspace = true, optional = true }
-skate-audio-formats = { workspace = true, optional = true }
-half = { version = "=2.7.1", optional = true }
 serde_json.workspace = true
 # Steam Audio (libphonon.so) is loaded at run time, if it is there (src/binaural.rs).
 libloading = "0.8"
@@ -69,6 +67,4 @@ winit = { version = "0.30.13", default-features = false }
 ndk-sys = { version = "0.6", features = ["media"] }
 
 [dev-dependencies]
-naga = { version = "=27.0.3", features = ["wgsl-in"] }
-naga_oil = { version = "=0.20.0", default-features = false }
 wgpu = { version = "=27.0.1", default-features = false, features = ["vulkan", "naga-ir"] }

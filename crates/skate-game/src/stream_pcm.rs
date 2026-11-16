@@ -1,5 +1,4 @@
-//! Decoded 16-bit PCM as a Bevy audio source: the sound banks of the imported-disc tier and the
-//! clean tier's own sounds both play through it.
+//! Decoded 16-bit PCM as a Bevy audio source: THUG2's sound effects play through it (`thug2.rs`).
 use bevy::audio::{Decodable, Source};
 use bevy::prelude::*;
 use std::sync::Arc;
@@ -11,27 +10,11 @@ pub struct StreamPcm {
     pub(crate) samples: Arc<Vec<i16>>,
     pub(crate) channels: u16,
     pub(crate) sample_rate: u32,
-    /// Frame interval to repeat for an inline EAAC loop. Archive streams without an inline loop
-    /// continue to use Bevy's whole-source looping setting.
+    /// Frame interval to repeat inline (a looping clip repeats the whole of itself).
     pub(crate) loop_range: Option<(usize, usize)>,
 }
 
 impl StreamPcm {
-    pub fn frames(&self) -> usize {
-        if self.channels == 0 {
-            0
-        } else {
-            self.samples.len() / usize::from(self.channels)
-        }
-    }
-
-    pub fn duration(&self) -> Duration {
-        if self.sample_rate == 0 {
-            return Duration::ZERO;
-        }
-        Duration::from_secs_f64(self.frames() as f64 / f64::from(self.sample_rate))
-    }
-
     /// Interleaved 16-bit PCM; `looping` repeats the whole clip inline, forever.
     pub(crate) fn from_i16(samples: Arc<Vec<i16>>, channels: u16, sample_rate: u32, looping: bool) -> Self {
         let frames = if channels == 0 { 0 } else { samples.len() / usize::from(channels) };
@@ -40,27 +23,6 @@ impl StreamPcm {
             channels,
             sample_rate,
             loop_range: (looping && frames > 0).then_some((0, frames)),
-        }
-    }
-
-    /// A short mono sine wave for verifying the host mixer and output device without game data.
-    ///
-    /// This deliberately lives beside decoded streams so the diagnostic exercises the exact same
-    /// Bevy source, mixer and Windows device backend as retail audio does.
-    pub(crate) fn tone(hertz: f32, duration: Duration) -> Self {
-        const RATE: u32 = 48_000;
-        let frames = (duration.as_secs_f64() * f64::from(RATE)).round() as usize;
-        let angular_step = std::f32::consts::TAU * hertz / RATE as f32;
-        let samples = (0..frames)
-            // Keep headroom so the device test is not itself a clipping test.
-            .map(|frame| (angular_step * frame as f32).sin() * 0.20 * i16::MAX as f32)
-            .map(|sample| sample.round() as i16)
-            .collect();
-        Self {
-            samples: Arc::new(samples),
-            channels: 1,
-            sample_rate: RATE,
-            loop_range: None,
         }
     }
 }
@@ -133,3 +95,48 @@ impl Decodable for StreamPcm {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn playback_converts_full_scale_without_exceeding_unity() {
+        // i16::MIN / 32767 would be 1.000031, which clips on a mixer that trusts the range.
+        let pcm = StreamPcm::from_i16(Arc::new(vec![i16::MIN, i16::MAX, 0]), 1, 48_000, false);
+        let got: Vec<f32> = pcm.decoder().collect();
+        assert_eq!(got.len(), 3);
+        assert!(got.iter().all(|s| (-1.0..=1.0).contains(s)), "{got:?}");
+        assert_eq!(got[0], -1.0);
+        assert_eq!(got[2], 0.0);
+    }
+
+    #[test]
+    fn duration_counts_frames_not_samples() {
+        // Five channels at 48 kHz: 240,000 samples are one second, not five.
+        let pcm = StreamPcm::from_i16(Arc::new(vec![0i16; 48_000 * 5]), 5, 48_000, false);
+        assert_eq!(pcm.decoder().total_duration(), Some(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn a_looping_clip_repeats_without_end() {
+        let pcm = StreamPcm::from_i16(Arc::new(vec![100i16, 200, 300]), 1, 48_000, true);
+        let mut playback = pcm.decoder();
+        let got: Vec<i16> = (0..7).map(|_| (playback.next().unwrap() * 32768.0).round() as i16).collect();
+        assert_eq!(got, [100, 200, 300, 100, 200, 300, 100]);
+        assert_eq!(playback.current_frame_len(), None);
+        assert_eq!(playback.total_duration(), None);
+    }
+
+    #[test]
+    fn inline_loop_restarts_at_its_frame_not_at_zero() {
+        let pcm = StreamPcm {
+            samples: Arc::new(vec![100i16, 200, 300]),
+            channels: 1,
+            sample_rate: 48_000,
+            loop_range: Some((1, 3)),
+        };
+        let mut playback = pcm.decoder();
+        let got: Vec<i16> = (0..6).map(|_| (playback.next().unwrap() * 32768.0).round() as i16).collect();
+        assert_eq!(got, [100, 200, 300, 200, 300, 200]);
+    }
+}

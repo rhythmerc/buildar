@@ -39,6 +39,7 @@ pub(crate) enum Item {
     Note(Value),
     /// A depth image (16 bits a texel) or a camera frame, with its note.
     Depth(Value, Vec<u8>),
+    #[cfg(any(target_os = "android", test))]
     Camera(Value, Vec<u8>),
 }
 
@@ -141,6 +142,7 @@ fn write(mut files: Files, rx: Receiver<Item>) -> String {
             let (mut note, blob) = match item {
                 Item::Note(note) => (note, None),
                 Item::Depth(note, data) => (note, Some((false, data))),
+                #[cfg(any(target_os = "android", test))]
                 Item::Camera(note, data) => (note, Some((true, data))),
             };
             if let Some((camera, data)) = blob {
