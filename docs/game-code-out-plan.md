@@ -69,41 +69,76 @@ Classes:
 
 ## The contract
 
+### Core and modes
+
+The contract has a **core** that every engine implements, and a module per **mode** (`skate` now; `race`,
+`platformer` and others later) that an engine of that mode also implements. Skating concepts live only in
+the skate module.
+
+**The sorting rule: when in doubt, it goes in the mode module.** Moving something from a mode into core
+later is an addition, and no engine breaks. Moving something out of core breaks every engine. So core holds
+only what a racing or platformer engine would need unchanged. This doesn't design the race contract (see
+`buildar-proposal.md`: "don't build the abstraction ahead of the second mode"). It only keeps skate out of
+core.
+
+**Guard:** core must contain none of the words skater, board, deck, grind, rail, trick or park. That
+becomes a test in `engine-core` once the crate exists.
+
 ### Where it lives
 
 - **`engine-core`:** a new Bevy-free crate, with glam pinned to Bevy's version.
-  - It holds plain data and the `EngineCore` trait.
-  - `engine_api::skate` and `TouchState` move into it.
-  - `engine-api` stays as the app's Bevy wrapper, with newtypes and re-exports.
+  - Core is the crate root. Each mode is a module: `engine_core::skate`.
+  - `TouchState` moves into core. `engine_api::skate` moves into `engine_core::skate`.
+  - `engine-api` stays as the app's Bevy wrapper, with newtypes and re-exports, split the same way.
 - **Its own small repo:** both headless repos and the app pin it by revision. If it stayed in the app repo,
   the headless repos would depend on the app.
 
-### The trait
+### Core
 
 ```rust
 pub trait EngineCore: Send {
-    fn info(&self) -> &EngineInfo;  // key, name, mode, controls sheet, data spec, settings schema
-    fn period(&self) -> Duration;   // re-read after every step (Skate 3 slow-mo)
+    fn info(&self) -> &EngineInfo;   // key, name, mode, controls sheet, data spec, settings schema
+    fn period(&self) -> Duration;    // re-read after every step (Skate 3 slow-mo)
     fn set_input(&mut self, touch: &TouchState, held: PadHeld, dt: f32); // the engine maps Touch to its pad
     fn set_view(&mut self, eye_basis: Option<Mat3>);
-    fn set_world(&mut self, w: &ArWorld) -> Applied;                     // Deferred while grinding
-    fn teleport(&mut self, point: Vec3, forward: Vec3);
+    fn set_stage(&mut self, stage: &Stage) -> Applied;  // Applied::Deferred: the engine takes it later
+    fn place_player(&mut self, point: Vec3, forward: Vec3);
     fn step(&mut self) -> Result<(), String>;
-    fn link(&self) -> Option<SkaterLink>;                                // metres
-    fn model(&mut self) -> Option<ModelSource>;                          // once, after boot
-    fn pose(&self, out: &mut Pose) -> bool;
-    fn hud(&mut self, wanted: bool, out: &mut HudFrame) -> bool;         // false: unchanged
-    fn texture(&mut self, id: u32) -> Option<Rgba8>;                     // fetched once per id
+    fn focus(&self) -> Option<Focus>;                   // where the player is, for the app to follow
+    fn models(&mut self) -> Option<Vec<ModelSource>>;   // once, after boot
+    fn pose(&self, model: usize, out: &mut Pose) -> bool;
+    fn hud(&mut self, wanted: bool, out: &mut HudFrame) -> bool; // false: unchanged
+    fn texture(&mut self, id: u32) -> Option<Rgba8>;    // fetched once per id
     fn audio(&mut self, out: &mut AudioFrame);
-    fn drain_events(&mut self, out: &mut Vec<GameEvent>);
+    fn drain_events(&mut self, out: &mut Vec<Event>);
     fn environment(&self) -> Environment;
     fn settings(&self) -> Vec<Setting>;
     fn set_setting(&mut self, key: &str, v: f32);
+
+    /// The skate mode's part, for an engine of that mode. Only the app's skate layer calls it.
+    fn skate(&mut self) -> Option<&mut dyn skate::SkateMode> { None }
 }
 ```
 
 - **Booting:** `EngineFactory::boot(files)` runs on a worker.
 - **One `step()` replaces the staged sim API.** Its hooks (session markers, multiplayer) are gone.
+- **`Stage`** is what every mode stands on, in metres:
+  - the room's triangles;
+  - placed solid triangles (pieces, track geometry);
+  - a revision number.
+- **`Focus`** is a frame and a drawn size. The contact shadow, sound emitters, menu distance checks and room
+  captures follow it.
+- **`Pose`** has **body groups**: named sets of joints, each with its own frame (for example "rider" and
+  "board"). Shadows cast per group, so separate bodies each cast their own.
+- **`Event`** carries only neutral kinds (a sound request, a fault). Each mode adds its own kinds in its
+  module.
+- **The HUD placements** are neutral:
+
+  ```rust
+  Placement = Hand { metres_per_px, offset, anchor, hand: Option<HudHand>, on_left: Option<(Vec2, Vec2)> }
+            | AtBody { group, offset, billboard, min_view_share }   // e.g. THUG2's balance meter at the rider
+            | HeadCorner
+  ```
 
 ### HUD
 
@@ -117,10 +152,26 @@ HudFrame {
                  mul: [f32; 4], add: [f32; 4], vertex_scale: f32, gamma_space: bool }>,
     parts: Vec<{ name, size_px, crop: Rect, empty, placement: Placement }>,
 }
-Placement = Hand { metres_per_px, offset, anchor, hand: Option<HudHand>, on_left: Option<(Vec2, Vec2)> }
-          | AtSkater { arc_over_head | beside, per_skater_height, min_view_share }
-          | HeadCorner
 ```
+
+### The skate mode (`engine_core::skate`)
+
+```rust
+pub trait SkateMode {
+    fn set_park(&mut self, park: &SkatePark) -> Applied; // rails, edges, bowl holes; Deferred while grinding
+    fn skater(&self) -> Option<SkaterLink>;
+    fn trick(&self) -> Option<TrickText>;                // the generic readout when the engine has no HUD
+}
+SkaterLink { rider: Option<Frame>, board: Option<Frame>, on_board: bool, grinding: bool, size: f32 }
+SkateEvent = Pop | Land | Bail | Grind | Trick { .. } | ...
+```
+
+- **`SkatePark`** is the skate annotations over the core stage: grind rails and edges, copings, and where the
+  room's level faces are opened over a sunk bowl. `ArWorld` today is the core stage and this together;
+  here they split.
+- **Placing the player** is core. "On the board" is what a skate engine does with `place_player`.
+- **`Focus`** for a skate engine is the rider, falling back to the board. That rule is skate's mapping onto
+  core.
 
 ### Rider and board are separate
 
@@ -128,30 +179,43 @@ Both engines can separate the skater from the board: off-board walking, bails, a
 
 - **Drawing is fine.** Each engine draws the board as bones in the skater's one skeleton (Skate 3's
   `board_bones` in its render pose; THUG2's skin palette), so a separated board is only bone positions.
-- **What breaks is `SkaterLink`.** Today it has one point, `deck`. Skate 3 fills it from the board's
-  physics body (`skate3_sim::Link::of`), so with the rider walking away the app's "skater" is the board.
-  Everything that follows the skater follows that one point:
+- **What breaks today is `SkaterLink.deck`,** a single point. Skate 3 fills it from the board's physics
+  body (`skate3_sim::Link::of`), so with the rider walking away the app's "skater" is the board.
+- **The app's generic layer reads `SkaterLink.deck` today** and moves to core `Focus` and body groups:
   - the contact shadow (`xr/contact_shadow.rs`);
+  - spawn aiming and placement (`xr/spawn.rs`);
   - the AR collision rebuild and plane captures (`xr/link.rs`, `xr/planes.rs`);
-  - THUG2's sound emitter;
-  - the menus' distance checks (`xr/ui/pages.rs`).
-- **The contract reports both:**
+  - the menus' distance checks (`xr/ui/pages.rs`);
+  - THUG2's sound emitter.
 
-  ```rust
-  SkaterLink { rider: Option<Frame>, board: Option<Frame>, on_board: bool, grinding: bool, size: f32 }
-  ```
+  Only the skate layer (the park builder's rail feeding, the trick readout) keeps reading the skate module.
+- **Both cast contact shadows,** from body groups. Today only the board does: three fixed soft ellipses
+  (deck and trucks, `xr/contact_shadow.rs` `casters`), and the rider casts none.
+  - The board's group keeps that shape.
+  - Every other group casts from its bone segments: each segment (parent to child) becomes a soft ellipse
+    on the surface below, fainter and wider with height.
+  - It stays analytic, with no shadow map (directional shadows cost the headset 13 fps).
+  - This lands with step 6.
+- **For an engine that draws its board as its own model,** `models()` returns a list, each with its own
+  pose. That costs nothing for one-skeleton engines.
 
-  Followers take the rider (falling back to the board). Teleport still puts the rider back on the board.
-- **Both cast contact shadows.** Today only the board does: three fixed soft ellipses (deck and trucks,
-  `xr/contact_shadow.rs` `casters`) placed from `deck`, and the rider casts none.
-  - The board keeps that shadow, cast from the board frame.
-  - The rider's comes from the pose the app already draws: each bone segment (parent to child) becomes a soft
-    ellipse on the surface below, fainter and wider with height. It stays analytic, with no shadow map
-    (directional shadows cost the headset 13 fps).
-  - The engine only says which joints are the board's (`Pose.board_joints`), so they aren't cast twice. This
-    is generic and works for any engine.
-- **For an engine that draws its board as its own model,** `ModelSource` takes a list of models, each with
-  its own pose. That costs nothing for one-skeleton engines.
+### Check: a headless Wipeout against core
+
+Implementing a headless Wipeout uses each core method with no skating concept:
+- `info` says mode `race`;
+- `set_input` maps Touch to thrust, airbrakes and weapons;
+- `set_view` is unused;
+- `set_stage` takes the room and the track pieces' solid geometry;
+- `place_player` puts the ship on the start grid or at a respawn;
+- `step` and `period` run its fixed tick;
+- `focus` is the ship, for its contact shadow and engine sound;
+- `models` and `pose` give the ship, with one body group;
+- `hud` draws speed, lap and position, by the hand;
+- `audio` and `drain_events` give its sounds;
+- `environment` and `settings` (speed class) as data.
+
+What it needs beyond core (the track's spline, checkpoints, AI lines, race state) goes in a `race` module,
+the same way skate's park annotations do. Nothing in core has to change.
 
 ### Model and pose
 
