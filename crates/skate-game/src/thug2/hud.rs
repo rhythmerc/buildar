@@ -235,7 +235,7 @@ pub(super) fn spawn(
         let target = images.add(Image::new_target_texture(size.x as u32, size.y as u32, TextureFormat::Rgba8UnormSrgb, None));
         let camera = commands
             .spawn((
-                crate::xr::hand_hud::EngineHudCamera,
+                engine_api::EngineHudCamera,
                 Camera2d,
                 Projection::Orthographic(OrthographicProjection {
                     scaling_mode: ScalingMode::Fixed { width: size.x, height: size.y },

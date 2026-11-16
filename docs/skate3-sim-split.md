@@ -544,6 +544,10 @@ Steps 4a/4b stay. Step 6 becomes S5. Step 9 becomes S1-S6.
   About 25k lines. The desktop product goes to `skate3-desktop` (step 7).
 - Keep the `src/` layout for `embedded_asset!` paths. `scoring_hud.rs:33,49` uses `env!("CARGO_CRATE_NAME")`.
 - Mirror `thug2.rs`: one `install`, `available()` = `Bundle::open` succeeds.
+- **Pause on `PadHeld::pause`** (wanted; Skate 3 has never done it). THUG2 already pauses while a menu or
+  build mode is open. Skate 3 should do the same: skip `advance`/`tick` and hold its audio while
+  `pause` is set, then resume without a dt spike on the first frame back. While only `held` is set,
+  it keeps getting a neutral pad as it does now.
 - Verify:
   - headset Skate 3 with the APT panel, sound, AR world and teleport;
   - `SK8_ENGINE_SCRIPT` switching;

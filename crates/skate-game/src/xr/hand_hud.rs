@@ -13,7 +13,7 @@ use crate::xr::panel::XrPanel;
 use crate::xr::rig::Rig;
 use bevy::prelude::*;
 use bevy_mod_xr::camera::XrCamera;
-pub(crate) use skate_engine_api::{ABOVE_HAND_M, EngineHudCamera, HandHud};
+pub(crate) use engine_api::{ABOVE_HAND_M, EngineHudCamera, HandHud};
 
 /// Toward the eyes from the grip, real metres (so the controller doesn't cover it).
 const TOWARD_EYES_M: f32 = 0.02;

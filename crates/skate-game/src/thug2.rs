@@ -101,8 +101,8 @@ pub(crate) fn install(app: &mut App, files: &Path) {
         .insert_resource(Tuning::load(&files.join("thug2.json")))
         .insert_resource(TuningFile(files.join("thug2.json")));
     app.world_mut().resource_mut::<crate::xr::ui::UiProviders>().0.push(std::sync::Arc::new(Thug2Pages));
-    app.init_resource::<engines::ParkSettings>();
-    app.world_mut().resource_mut::<engines::ParkSettings>().0.insert(Engine::Thug2, (park_settings, apply_park_settings));
+    app.init_resource::<engines::CourseSettings>();
+    app.world_mut().resource_mut::<engines::CourseSettings>().0.insert(Engine::Thug2, (park_settings, apply_park_settings));
     app.world_mut()
         .resource_mut::<crate::xr::ui::ControlsSheet>()
         .set(Engine::Thug2, CONTROLS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect());
@@ -286,7 +286,7 @@ fn finish_boot(world: &mut World) {
     }
 }
 
-fn read_pad(touch: Res<skate_engine_api::LatestTouch>, held: Res<skate_engine_api::PadHeld>, mut thug2: ResMut<Thug2>) {
+fn read_pad(touch: Res<engine_api::LatestTouch>, held: Res<engine_api::PadHeld>, mut thug2: ResMut<Thug2>) {
     let t = &touch.0;
     thug2.hold = held.pause;
     thug2.pad = if held.held || t.menu { t2::PAD_AT_REST } else { pad(t) };
@@ -1128,7 +1128,7 @@ mod tests {
             .init_resource::<crate::xr::ui::ControlsSheet>()
             .init_resource::<crate::xr::ui::UiProviders>()
             .init_resource::<crate::xr::actions::LatestTouch>()
-            .init_resource::<skate_engine_api::PadHeld>()
+            .init_resource::<engine_api::PadHeld>()
             .init_resource::<crate::xr::build::BuildMode>()
             .init_resource::<crate::xr::ui::UiOwnsControllers>()
             .init_resource::<crate::xr::spawn::PlaceSkater>()

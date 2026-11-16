@@ -8,7 +8,7 @@
 use super::XrFiles;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-pub(crate) use skate_engine_api::HudHand;
+pub(crate) use engine_api::HudHand;
 
 const FILE: &str = "ar-settings.json";
 

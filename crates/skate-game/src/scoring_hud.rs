@@ -695,7 +695,7 @@ mod xr {
         hud.generation = map.generation;
         let camera = commands
             .spawn((
-                crate::xr::hand_hud::EngineHudCamera,
+                engine_api::EngineHudCamera,
                 Camera2d,
                 Projection::Orthographic(OrthographicProjection {
                     scaling_mode: ScalingMode::Fixed { width, height },
@@ -715,12 +715,12 @@ mod xr {
             ))
             .id();
         commands.spawn((
-            crate::xr::hand_hud::HandHud {
+            engine_api::HandHud {
                 // (the trick display, in the area's left part, just over the controller: the area's bottom left a
                 // little left of the grip and up)
                 offset: OFFSET,
                 anchor: Vec2::new(-0.5, -0.5),
-                ..crate::xr::hand_hud::HandHud::above(WIDTH_M, height / width, Some(camera))
+                ..engine_api::HandHud::above(WIDTH_M, height / width, Some(camera))
             },
             Mesh3d(meshes.add(Rectangle::new(1.0, height / width))),
             MeshMaterial3d(materials.add(StandardMaterial {

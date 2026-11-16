@@ -1,6 +1,6 @@
 [package]
-name = "skate-engine-api"
-description = "What the headset app and a skate engine say to each other: the world given, the skater reported, HUDs, input, ownership."
+name = "engine-api"
+description = "What the headset app and an engine say to each other: input, HUD panels, ownership, modes; and each mode's own part (skate: the world ridden, the skater)."
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

@@ -1399,6 +1399,7 @@ mod tests {
             anchors: vec![AnchorRecord { uuid: uuid.into(), offset: [0.0; 3], turn: 0.0, scale: 8.0, placed: 0 }],
             engine: None,
             engine_settings: None,
+            mode: "skate".into(),
         };
         let now = park::now();
         let bowl = vec![piece(1, PieceKind::QuarterPipe, -4.0, 0.0, 0.0, 1.0), piece(2, PieceKind::QuarterPipe, 4.0, 0.0, std::f32::consts::PI, 1.0), piece(3, PieceKind::Rail, 0.0, 3.0, 1.57, 1.0), piece(4, PieceKind::FunBox, 0.0, -3.0, 0.0, 1.0)];
@@ -1503,6 +1504,7 @@ mod tests {
             anchors: Vec::new(),
             engine: engine.map(str::to_string),
             engine_settings: None,
+            mode: "skate".into(),
         };
         let mut parks = Parks::default();
         for (id, engine) in [("t", Some("thug2")), ("k", Some("skate3")), ("old", None)] {
@@ -1562,7 +1564,7 @@ mod tests {
     fn a_park_from_above_shows_its_pieces_and_an_empty_one_nothing() {
         use crate::xr::build::Placed;
         use crate::xr::build::pieces::{Piece, PieceKind};
-        let mut file = ParkFile { version: 2, name: "p".into(), created: 0, opened: 0, pieces: Vec::new(), scale: 8.0, park_scale: 1.0, anchors: Vec::new(), engine: None, engine_settings: None };
+        let mut file = ParkFile { version: 2, name: "p".into(), created: 0, opened: 0, pieces: Vec::new(), scale: 8.0, park_scale: 1.0, anchors: Vec::new(), engine: None, engine_settings: None, mode: "skate".into() };
         let empty = thumbnail(&file, 64, 36);
         assert!(empty.chunks(4).all(|p| p == &empty[0..4]), "nothing on it");
         file.pieces.push(Placed { id: 1, piece: Piece::new(PieceKind::FunBox), position: [0.0; 3], yaw: 0.3, scale: 1.0, hidden: false, no_posts: 0, ends_down: [0.0; 2], finish: None, tint: None, path: None });

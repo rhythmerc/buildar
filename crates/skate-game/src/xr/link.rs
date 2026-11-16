@@ -9,7 +9,7 @@
 //! `crate::clean::sim`.
 use crate::engines::{BeforeSwitch, Engine, EngineSwitched};
 use bevy::prelude::*;
-pub(crate) use skate_engine_api::{ArWorld, PieceSurfaces, SkaterLink, TeleportSkater};
+pub(crate) use engine_api::skate::{ArWorld, PieceSurfaces, SkaterLink, TeleportSkater};
 
 #[cfg(feature = "retail")]
 #[path = "link_retail.rs"]

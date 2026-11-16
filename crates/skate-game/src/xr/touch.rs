@@ -10,7 +10,7 @@
 //! Back (neither leaks through as stick/X input during the chord).
 #[cfg(feature = "retail")]
 pub(crate) use skate_core::input::xbox::XboxState;
-pub(crate) use skate_engine_api::TouchState;
+pub(crate) use engine_api::TouchState;
 
 /// The pad the imported-disc tier's input reads (its own struct in the store build, which has
 /// no imported-disc tier).

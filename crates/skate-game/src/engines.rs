@@ -32,7 +32,7 @@ use bevy::utils::prelude::DebugName;
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-pub(crate) use skate_engine_api::{Availability, BeforeSwitch, Engine, EngineOwned, EngineSet, EngineSwitched, ParkSettings};
+pub(crate) use engine_api::{Availability, BeforeSwitch, CourseSettings, Engine, EngineOwned, EngineSet, EngineSwitched, Mode};
 
 /// The engines the app carries and which one runs.
 #[derive(Resource)]

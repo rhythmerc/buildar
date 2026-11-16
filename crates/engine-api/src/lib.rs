@@ -1,24 +1,63 @@
-//! What the headset app and a skate engine say to each other (docs/engine-packaging-proposal.md).
+//! What the headset app and an engine say to each other (docs/engine-packaging-proposal.md,
+//! docs/buildar-proposal.md).
 //!
-//! The app (`skate-game`) carries the engines and the shared XR layer: the room, the parks, the menus, the
-//! controllers. An engine runs a skater in that world. Between them:
-//! - **To the engine:** the rideable world ([`ArWorld`]), where to put the skater ([`TeleportSkater`]), the
-//!   controllers ([`LatestTouch`]) and whether the shared layer has them ([`PadHeld`]).
-//! - **From the engine:** where its skater is ([`SkaterLink`]), its trick text for the generic readout
-//!   ([`TrickHud`]), its own HUD panels ([`HandHud`], drawn by an [`EngineHudCamera`]), the settings a park keeps
-//!   ([`ParkSettings`]).
+//! The app (`skate-game`) carries the engines and the shared XR layer: the room, the courses, the menus, the
+//! controllers. An engine implements a [`Mode`]: it runs that mode's game in that world. The root of this crate is
+//! what every mode shares:
+//! - **To the engine:** the controllers ([`LatestTouch`]) and whether the shared layer has them ([`PadHeld`]).
+//! - **From the engine:** its own HUD panels ([`HandHud`], drawn by an [`EngineHudCamera`]), the settings a course
+//!   keeps ([`CourseSettings`]).
 //! - **Ownership:** an engine's per-frame systems are those in its [`EngineSet`]; what they spawn is
 //!   [`EngineOwned`], hidden and silenced while another engine runs. [`EngineSwitched`] and [`BeforeSwitch`] mark a
 //!   switch.
+//!
+//! Each mode's own part is a module: [`skate`] (the park and room ridden, the skater, its trick text).
 //!
 //! The registry that runs the engines and switches between them is the app's (`skate-game`'s `engines`).
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-// ---- Engines and ownership ----
+pub mod skate;
 
-/// A skate engine.
+// ---- Modes, engines and ownership ----
+
+/// What kind of game an engine plays, and so what kind of course it is played on and built with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Mode {
+    /// Skating a park: pieces placed in the room, and the room itself ([`skate`]).
+    Skate,
+}
+
+impl Mode {
+    pub const ALL: [Mode; 1] = [Mode::Skate];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Mode::Skate => "Skate",
+        }
+    }
+
+    /// Its name in files (a course's `mode` tag).
+    pub fn key(self) -> &'static str {
+        match self {
+            Mode::Skate => "skate",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Mode> {
+        Mode::ALL.into_iter().find(|m| m.key() == key.trim())
+    }
+
+    /// What its courses are called.
+    pub fn course(self) -> &'static str {
+        match self {
+            Mode::Skate => "park",
+        }
+    }
+}
+
+/// An engine: a game run in the room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Engine {
     /// The clean-room engine (no game data).
@@ -52,6 +91,13 @@ impl Engine {
     pub fn from_key(key: &str) -> Option<Engine> {
         Engine::ALL.into_iter().find(|e| e.key() == key.trim())
     }
+
+    /// The mode it implements.
+    pub fn mode(self) -> Mode {
+        match self {
+            Engine::Sk8 | Engine::Skate3 | Engine::Thug2 => Mode::Skate,
+        }
+    }
 }
 
 /// Whether an engine can run now; `Err` says why not (for the menu).
@@ -79,98 +125,25 @@ pub struct EngineSwitched {
 pub struct BeforeSwitch(pub Vec<fn(&mut World, Engine)>);
 
 /// A park setting's getter and setter.
-pub type ParkSettingHooks = (fn(&World) -> serde_json::Value, fn(&mut World, &serde_json::Value));
+pub type CourseSettingHooks = (fn(&World) -> serde_json::Value, fn(&mut World, &serde_json::Value));
 
-/// What of an engine's settings a park keeps (THUG2's world size and game speed: what the park was built to), and
+/// What of an engine's settings a course keeps (THUG2's world size and game speed: what the park was built to), and
 /// how to put them back: each engine that has any registers them. Saved with the park, applied when it's opened.
 #[derive(Resource, Default)]
-pub struct ParkSettings(pub HashMap<Engine, ParkSettingHooks>);
+pub struct CourseSettings(pub HashMap<Engine, CourseSettingHooks>);
 
-impl ParkSettings {
+impl CourseSettings {
     /// `engine`'s settings now (none: it keeps none).
     pub fn of(world: &World, engine: Engine) -> Option<serde_json::Value> {
-        let (get, _) = *world.get_resource::<ParkSettings>()?.0.get(&engine)?;
+        let (get, _) = *world.get_resource::<CourseSettings>()?.0.get(&engine)?;
         Some(get(world))
     }
 
     /// `engine`'s settings put back as `settings` say.
     pub fn apply(world: &mut World, engine: Engine, settings: &serde_json::Value) {
-        let Some(&(_, set)) = world.get_resource::<ParkSettings>().and_then(|p| p.0.get(&engine)) else { return };
+        let Some(&(_, set)) = world.get_resource::<CourseSettings>().and_then(|p| p.0.get(&engine)) else { return };
         set(world, settings);
     }
-}
-
-// ---- The world given to the engine, and its skater reported back ----
-
-/// One placed piece's collision, world space.
-#[derive(Clone, Default)]
-pub struct PieceSurfaces {
-    pub quads: Vec<[Vec3; 4]>,
-    pub rail_quads: Vec<[Vec3; 4]>,
-    pub edges: Vec<(Vec3, Vec3)>,
-}
-
-/// The rideable AR world in game metres. `revision` changes on every rebuild.
-#[derive(Resource, Default)]
-pub struct ArWorld {
-    pub revision: u64,
-    /// Scene planes and box faces.
-    pub room_quads: Vec<[Vec3; 4]>,
-    /// Room-mesh triangles not covered by a plane or box.
-    pub room_triangles: Vec<[Vec3; 3]>,
-    /// Where the room's level faces are opened over a sunk piece (a bowl):
-    /// the piece, and the rectangle at its rim.
-    pub holes: Vec<(u64, [Vec3; 4])>,
-    /// Grindable furniture edges.
-    pub room_edges: Vec<(Vec3, Vec3)>,
-    pub pieces: Vec<PieceSurfaces>,
-    /// Every grind rail: furniture edges and the pieces' rails and copings.
-    pub rails: Vec<Vec<Vec3>>,
-}
-
-impl ArWorld {
-    /// The real room as triangles (no pieces).
-    pub fn room(&self) -> impl Iterator<Item = [Vec3; 3]> + '_ {
-        self.room_quads
-            .iter()
-            .flat_map(|&[a, b, c, d]| [[a, b, c], [a, c, d]])
-            .chain(self.room_triangles.iter().copied())
-    }
-
-    /// Room and pieces as triangles.
-    pub fn all_triangles(&self) -> impl Iterator<Item = [Vec3; 3]> + '_ {
-        self.room().chain(self.pieces.iter().flat_map(|p| {
-            p.quads
-                .iter()
-                .chain(&p.rail_quads)
-                .flat_map(|&[a, b, c, d]| [[a, b, c], [a, c, d]])
-        }))
-    }
-}
-
-/// Where the skater is, filled each frame by the running engine's adapter.
-#[derive(Resource, Default)]
-pub struct SkaterLink {
-    /// Deck position and nose direction, game metres.
-    pub deck: Option<(Vec3, Vec3)>,
-    /// A grind refers to the current rails: collision waits until it ends.
-    pub grinding: bool,
-    /// How big the skater is drawn against life size (THUG2's world size draws it smaller); 0: life size.
-    pub size: f32,
-}
-
-impl SkaterLink {
-    /// The skater's size against life size (1 unless an engine says otherwise).
-    pub fn size(&self) -> f32 {
-        if self.size > 0.0 { self.size } else { 1.0 }
-    }
-}
-
-/// Put the skater down at `point` (a ground point), facing along `forward`.
-#[derive(Message, Clone, Copy, Debug)]
-pub struct TeleportSkater {
-    pub point: Vec3,
-    pub forward: Vec3,
 }
 
 // ---- Input ----
@@ -213,17 +186,6 @@ pub struct PadHeld {
 }
 
 // ---- HUDs ----
-
-/// What the generic trick readout shows; an engine without a HUD of its own writes it every frame.
-#[derive(Resource, Default, Clone, PartialEq)]
-pub struct TrickHud {
-    /// The trick in progress or just landed.
-    pub name: String,
-    /// Points it scored, if any.
-    pub points: String,
-    /// Score, combo, a new best.
-    pub line: String,
-}
 
 /// The controller a game's own HUD floats by.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -289,18 +251,9 @@ mod tests {
         }
         assert_eq!(Engine::from_key(" thug2\n"), Some(Engine::Thug2));
         assert_eq!(Engine::from_key("tony"), None);
-    }
-
-    #[test]
-    fn a_world_is_its_room_and_pieces_as_triangles() {
-        let quad = [Vec3::ZERO, Vec3::X, Vec3::new(1.0, 0.0, 1.0), Vec3::Z];
-        let world = ArWorld {
-            room_quads: vec![quad],
-            room_triangles: vec![[Vec3::ZERO, Vec3::Y, Vec3::X]],
-            pieces: vec![PieceSurfaces { quads: vec![quad], rail_quads: vec![quad], ..default() }],
-            ..default()
-        };
-        assert_eq!(world.room().count(), 3);
-        assert_eq!(world.all_triangles().count(), 7);
+        for mode in Mode::ALL {
+            assert_eq!(Mode::from_key(mode.key()), Some(mode));
+        }
+        assert_eq!(Mode::from_key("race"), None);
     }
 }

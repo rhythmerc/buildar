@@ -11,7 +11,7 @@ use bevy_mod_openxr::{
     session::OxrSession,
 };
 use bevy_mod_xr::session::{XrSessionCreated, session_available};
-pub(crate) use skate_engine_api::{HostInput, LatestTouch, PadHeld};
+pub(crate) use engine_api::{HostInput, LatestTouch, PadHeld};
 
 const TOUCH: &str = "/interaction_profiles/oculus/touch_controller";
 

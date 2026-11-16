@@ -2390,6 +2390,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-api"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4872,15 +4881,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "skate-engine-api"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "skate-game"
 version = "0.1.0"
 dependencies = [
@@ -4889,6 +4889,7 @@ dependencies = [
  "bevy_mod_openxr",
  "bevy_mod_xr",
  "blake3",
+ "engine-api",
  "gltf",
  "half",
  "image",
@@ -4904,7 +4905,6 @@ dependencies = [
  "skate-audio-formats",
  "skate-core",
  "skate-data",
- "skate-engine-api",
  "skate-lite-sys",
  "skate-mods",
  "skate-net",

@@ -17,7 +17,7 @@
 //! [`Current::pose`] there.
 use super::anchor::Anchors;
 use super::{MAX_PARK_SCALE, MAX_SCALE, MIN_PARK_SCALE, MIN_SCALE, Placed, PlacedPieces};
-use crate::engines::{Engine, Engines, ParkSettings};
+use crate::engines::{CourseSettings, Engine, Engines, Mode};
 use crate::xr::rig::Rig;
 use crate::xr::XrFiles;
 use bevy::prelude::*;
@@ -67,12 +67,26 @@ pub(crate) struct ParkFile {
     /// kept, played with whichever runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
-    /// That engine's settings it was built with (`engines::ParkSettings`: THUG2's world size and game speed).
+    /// That engine's settings it was built with (`engines::CourseSettings`: THUG2's world size and game speed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_settings: Option<serde_json::Value>,
+    /// The mode it is a course of (`Mode::key`: "skate"); a park from before modes were kept is a skate park. Kept
+    /// as written, so a course of a mode this app doesn't know is recognised as such and left alone.
+    #[serde(default = "skate_mode")]
+    pub mode: String,
+}
+
+/// A park's mode tag.
+fn skate_mode() -> String {
+    Mode::Skate.key().to_string()
 }
 
 impl ParkFile {
+    /// The mode it is a course of, if this app knows it.
+    pub(crate) fn mode(&self) -> Option<Mode> {
+        Mode::from_key(&self.mode)
+    }
+
     /// The engine it was built for, if this app knows it.
     pub(crate) fn engine(&self) -> Option<Engine> {
         self.engine.as_deref().and_then(Engine::from_key)
@@ -171,7 +185,8 @@ fn read_all(dir: &Path) -> Vec<(String, ParkFile)> {
         }
         let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_string) else { continue };
         match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice::<ParkFile>(&b).map_err(|e| e.to_string())) {
-            Ok(file) if file.version == VERSION => out.push((id, file)),
+            Ok(file) if file.version == VERSION && file.mode() == Some(Mode::Skate) => out.push((id, file)),
+            Ok(file) if file.version == VERSION => warn!("PARKS ignoring {} (a {:?} course)", path.display(), file.mode),
             Ok(file) => warn!("PARKS ignoring {} (version {})", path.display(), file.version),
             Err(e) => warn!("PARKS ignoring {}: {e}", path.display()),
         }
@@ -233,6 +248,7 @@ fn from_old(old: OldLayout, default_scale: f32, at: u64) -> Option<ParkFile> {
         anchors,
         engine: None,
         engine_settings: None,
+        mode: skate_mode(),
     })
 }
 
@@ -416,7 +432,7 @@ fn save(placed: Res<PlacedPieces>, rig: Res<Rig>, placing: Res<Placing>, mut par
     if parks.current.is_none() && placing.0.is_none() && !placed.items.is_empty() && !placed.busy() && parks.dir.is_some() {
         let (id, at) = (new_id(&parks.list), now());
         let name = next_name(&parks.list, "Park");
-        let file = ParkFile { version: VERSION, name, created: at, opened: at, pieces: in_park(&placed.items, ParkPose::default(), rig.scale), scale: rig.scale, park_scale: placed.park_scale, anchors: Vec::new(), engine: None, engine_settings: None };
+        let file = ParkFile { version: VERSION, name, created: at, opened: at, pieces: in_park(&placed.items, ParkPose::default(), rig.scale), scale: rig.scale, park_scale: placed.park_scale, anchors: Vec::new(), engine: None, engine_settings: None, mode: skate_mode() };
         parks.list.push(ParkEntry { id: id.clone(), file, edits: 0 });
         parks.current = Some(Current { id: id.clone(), pose: ParkPose::default(), anchor: None });
         parks.save(&id);
@@ -518,7 +534,7 @@ fn take_made_anchors(rig: Res<Rig>, mut anchors: ResMut<Anchors>, mut parks: Res
 
 /// The open park keeps the engine it's played with, and that engine's park settings, whenever they change (an
 /// engine switched to, its world size changed). Not while a switch is pending, nor when the park's own engine isn't
-/// installed (played with another for now: it stays the one it was built for).
+/// installed (played with another for now: it stays the one it was built for), nor by an engine of another mode.
 pub(crate) fn tag_engine(world: &mut World) {
     let Some(engine) = world.get_resource::<Engines>().and_then(Engines::settled) else { return };
     if world.resource::<Placing>().0.is_some() {
@@ -526,13 +542,16 @@ pub(crate) fn tag_engine(world: &mut World) {
     }
     let Some(id) = world.resource::<Parks>().current.as_ref().map(|c| c.id.clone()) else { return };
     let Some(file) = world.resource::<Parks>().get(&id).map(|p| p.file.clone()) else { return };
+    if file.mode() != Some(engine.mode()) {
+        return;
+    }
     if let Some(built) = file.engine().filter(|&e| e != engine) {
         if world.resource::<Engines>().available(built, world).is_err() {
             return;
         }
     }
     let key = Some(engine.key().to_string());
-    let settings = ParkSettings::of(world, engine);
+    let settings = CourseSettings::of(world, engine);
     if file.engine == key && file.engine_settings == settings {
         return;
     }
@@ -578,7 +597,7 @@ pub(crate) fn use_its_engine(world: &mut World, id: &str) {
         info!("PARKS {id} was built for {}: switching to it", engine.name());
     }
     if let Some(settings) = &file.engine_settings {
-        ParkSettings::apply(world, engine, settings);
+        CourseSettings::apply(world, engine, settings);
     }
 }
 
@@ -674,7 +693,7 @@ pub(crate) fn new_park(world: &mut World) -> String {
         let id = new_id(&parks.list);
         let name = next_name(&parks.list, "Park");
         let at = now();
-        parks.list.push(ParkEntry { id: id.clone(), file: ParkFile { version: VERSION, name, created: at, opened: at, pieces: Vec::new(), scale, park_scale: 1.0, anchors: Vec::new(), engine: None, engine_settings: None }, edits: 0 });
+        parks.list.push(ParkEntry { id: id.clone(), file: ParkFile { version: VERSION, name, created: at, opened: at, pieces: Vec::new(), scale, park_scale: 1.0, anchors: Vec::new(), engine: None, engine_settings: None, mode: skate_mode() }, edits: 0 });
         id
     };
     let file = world.resource::<Parks>().get(&id).expect("just made").file.clone();
@@ -839,12 +858,22 @@ mod tests {
             anchors: vec![AnchorRecord { uuid: "ab".repeat(16), offset: [0.1, 0.0, -0.2], turn: 0.3, scale: 8.0, placed: 9 }],
             engine: None,
             engine_settings: None,
+            mode: skate_mode(),
         };
         write(&dir, "a1", &file).unwrap();
         std::fs::write(dir.join("junk.json"), b"{").unwrap();
-        let read = read_all(&dir);
-        assert_eq!(read.len(), 1, "the unreadable one is left out");
+        let mut track = serde_json::to_value(&file).unwrap();
+        track["mode"] = "race".into();
+        std::fs::write(dir.join("t1.json"), serde_json::to_vec(&track).unwrap()).unwrap();
+        let mut old = serde_json::to_value(&file).unwrap();
+        old.as_object_mut().unwrap().remove("mode");
+        std::fs::write(dir.join("o1.json"), serde_json::to_vec(&old).unwrap()).unwrap();
+        let mut read = read_all(&dir);
+        read.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(read.len(), 2, "the unreadable one and the course of another mode are left out");
         assert_eq!(read[0], ("a1".to_string(), file.clone()));
+        assert_eq!(read[1], ("o1".to_string(), file.clone()), "a park from before modes is a skate park");
+        assert!(serde_json::to_string(&file).unwrap().contains(r#""mode":"skate""#));
         let _ = std::fs::remove_dir_all(&dir);
         let entry = |name: &str| ParkEntry { id: name.into(), file: ParkFile { name: name.into(), ..file.clone() }, edits: 0 };
         assert_eq!(next_name(&[entry("Park 1")], "Park"), "Park 2");
@@ -861,8 +890,8 @@ mod tests {
         #[derive(Resource)]
         struct Size(f32);
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).insert_resource(Size(2.0)).init_resource::<ParkSettings>().init_resource::<Placing>();
-        app.world_mut().resource_mut::<ParkSettings>().0.insert(
+        app.add_plugins(MinimalPlugins).insert_resource(Size(2.0)).init_resource::<CourseSettings>().init_resource::<Placing>();
+        app.world_mut().resource_mut::<CourseSettings>().0.insert(
             Engine::Thug2,
             (|w: &World| serde_json::json!({ "size": w.resource::<Size>().0 }), |w: &mut World, v: &serde_json::Value| w.resource_mut::<Size>().0 = v["size"].as_f64().unwrap() as f32),
         );
@@ -885,6 +914,7 @@ mod tests {
             anchors: Vec::new(),
             engine: engine.map(str::to_string),
             engine_settings: None,
+            mode: skate_mode(),
         };
         let mut parks = Parks { dir: Some(dir.clone()), ..default() };
         parks.list.push(ParkEntry { id: "old".into(), file: file(None), edits: 0 });
@@ -925,6 +955,7 @@ mod tests {
             anchors: vec![AnchorRecord { uuid: uuid.into(), offset: [0.0; 3], turn: 0.0, scale: 8.0, placed: 0 }],
             engine: None,
             engine_settings: None,
+            mode: skate_mode(),
         };
         let mut parks = Parks::default();
         for (id, f) in [("a", file("Old here", 1, "u1")), ("b", file("New away", 9, "u2")), ("c", file("New here", 5, "u3")), ("d", file("Old away", 2, "u4"))] {

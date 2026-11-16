@@ -59,8 +59,8 @@ pub(crate) fn from_touch(touch: &crate::xr::touch::TouchState) -> Input {
 
 #[cfg(feature = "xr")]
 pub(crate) fn read_touch(
-    touch: Res<skate_engine_api::LatestTouch>,
-    held: Res<skate_engine_api::PadHeld>,
+    touch: Res<engine_api::LatestTouch>,
+    held: Res<engine_api::PadHeld>,
     ui: Res<UiCapture>,
     rig: Option<Res<crate::xr::rig::Rig>>,
     eyes: Query<&Transform, With<bevy_mod_xr::camera::XrCamera>>,

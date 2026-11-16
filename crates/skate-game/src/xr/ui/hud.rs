@@ -14,7 +14,7 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy_mod_xr::camera::XrCamera;
-pub(crate) use skate_engine_api::TrickHud;
+pub(crate) use engine_api::skate::TrickHud;
 
 const WIDTH_PX: u32 = 640;
 const HEIGHT_PX: u32 = 200;
