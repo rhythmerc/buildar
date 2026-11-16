@@ -13,43 +13,20 @@ impl Plugin for RetailLinkPlugin {
     fn build(&self, app: &mut App) {
         use crate::app::SKATE3;
         app.init_resource::<crate::physics::OffboardView>()
-            .init_resource::<crate::input::ExternalPad>()
             .add_systems(Update, (apply_world, teleport, publish_pose, publish_hud).chain().in_set(SKATE3))
             .add_systems(PreUpdate, publish_view.in_set(SKATE3))
-            .add_systems(PreUpdate, hold.after(crate::xr::actions::HostInput).in_set(SKATE3))
-            .add_systems(
-                PreUpdate,
-                pad_from_touch
-                    .after(crate::xr::actions::HostInput)
-                    .before(crate::input::poll_controllers)
-                    .run_if(bevy_mod_openxr::openxr_session_running)
-                    .in_set(SKATE3),
-            );
+            .add_systems(PreUpdate, hold.after(crate::xr::actions::HostInput).in_set(SKATE3));
     }
 }
 
 /// Skate 3 paused while the shared layer has the player busy (a menu or build mode): [`crate::app::Hold`]. (While
-/// only `held` is set - aiming a spawn, placing - it keeps running on a neutral pad: `pad_from_touch`.)
+/// only `held` is set - aiming a spawn, placing - it keeps running on a neutral pad: `crate::input`'s
+/// `pad_from_touch`.)
 fn hold(held: Res<crate::xr::actions::PadHeld>, fixed: Res<Time<Fixed>>, mut hold: ResMut<crate::app::Hold>) {
     if hold.paused() != held.pause {
         info!("Skate 3 {}", if held.pause { "paused" } else { "resumed" });
     }
     hold.set(held.pause, &fixed);
-}
-
-/// The game's pad from the Touch controllers (`touch::touch_to_pad`), neutral while the shared layer has them.
-fn pad_from_touch(
-    touch: Res<crate::xr::actions::LatestTouch>,
-    held: Res<crate::xr::actions::PadHeld>,
-    mut pad: ResMut<crate::input::ExternalPad>,
-) {
-    use crate::xr::touch::{XboxState, touch_to_pad};
-    let state = if held.held {
-        XboxState { buttons: 0, triggers: [0, 0], left: [0, 0], right: [0, 0] }
-    } else {
-        touch_to_pad(&touch.0)
-    };
-    pad.set(state);
 }
 
 /// Off the board the stick is relative to what the player sees: their eyes,

@@ -324,6 +324,21 @@ THUG2's meter pictures (0.55, 0.3, 0.15, 0.2). They belong to the engine: move t
 or with step 5. The Skate 3 multiplier-sound choice is still in the app's Skate 3 adapter (it reads
 app-side `SkaterRuntime`/`skate_audio`); it moves with steps 5 and 7.
 
+**Step 4, as done (2026-11-16):** each engine maps the Touch controllers to its own pad, in its crate.
+- **Core:** `PadHeld { held, pause }` (engine-api's `PadHeld` resource wraps it, `Deref`), and `Control { input,
+  action }`, an engine's controls-sheet row.
+- **Skate 3** (`skate3_engine::input`): `touch_to_pad`, `CONTROLS`, and `ExternalPad`, the slot-0 packet the sim polls,
+  with `set_input(&TouchState, PadHeld)` (neutral while `held`; the menu button keeps the left stick and X).
+  `ExternalPad` and `poll_controllers` are the Skate 3 adapter's (`input.rs`), no longer the XR layer's: the resource
+  is always there (disconnected until a state is set, as before on the desktop), and `pad_from_touch` moved out of
+  `xr/link_retail.rs`.
+- **THUG2** (`thug2_engine::input`): `pad`, `CONTROLS`, and `Input { pad, hold }` with `set_input(&TouchState,
+  PadHeld)` (at rest while `held` or the menu button is down).
+- **The app** keeps `TouchState`, the Bluetooth fold-in (`xr::touch::pad_into_touch`), the held flags, placement, and
+  its own sheet rows (`HOST_CONTROLS`: aiming the skater, the menu, build mode), listed after an engine's. SK8
+  (app-resident, `clean/input.rs`) keeps its whole sheet, the shared rows in it.
+- No `EngineCore` trait yet; the functions have the shapes its methods will take (`dt` unused so far).
+
 ### Risks
 
 - **Quest performance:**

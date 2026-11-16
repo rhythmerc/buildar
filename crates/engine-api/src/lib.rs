@@ -21,7 +21,7 @@ pub mod skate;
 
 /// The Bevy-free contract the engines implement (its own repo): re-exported where the app has always named them.
 pub use engine_core;
-pub use engine_core::{HudHand, Mode, TouchState};
+pub use engine_core::{Control, HudHand, Mode, TouchState};
 
 // ---- Modes, engines and ownership ----
 
@@ -125,14 +125,10 @@ pub struct LatestTouch(pub TouchState);
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct HostInput;
 
-/// Whether the controllers are the shared layer's this frame.
-#[derive(Resource, Default, Clone, Copy, Debug)]
-pub struct PadHeld {
-    /// A menu open, build mode, aiming a spawn, placing the skater or a park: the skater gets a neutral pad.
-    pub held: bool,
-    /// A menu open or build mode (the player is busy elsewhere): an engine may pause its game.
-    pub pause: bool,
-}
+/// Whether the controllers are the shared layer's this frame ([`engine_core::PadHeld`]: `held` while a menu is open,
+/// in build mode, aiming a spawn, placing the skater or a park; `pause` while a menu is open or in build mode).
+#[derive(Resource, Default, Clone, Copy, Debug, Deref, DerefMut)]
+pub struct PadHeld(pub engine_core::PadHeld);
 
 // ---- HUDs ----
 

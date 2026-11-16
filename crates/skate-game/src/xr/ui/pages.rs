@@ -199,7 +199,7 @@ fn pair(a: &str, b: &str) -> Widget {
 }
 
 fn controls_rows(world: &World) -> Vec<Widget> {
-    ControlsSheet::rows(world).iter().map(|(a, b)| pair(a, b)).collect()
+    ControlsSheet::rows(world).iter().map(|c| pair(&c.input, &c.action)).collect()
 }
 
 fn tier_line(engine: Option<Engine>) -> &'static str {

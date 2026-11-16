@@ -2,7 +2,9 @@
 //! as the contract's plain data, over the engine itself (`thug2-sys`). No Bevy.
 //!
 //! A temporary home: this crate and `thug2-sys` move to the thug2-headless repo together
-//! (`docs/game-code-out-plan.md`, step 10). The rest of THUG2's knowledge (pad, units, faces) joins it step by step.
+//! (`docs/game-code-out-plan.md`, step 10). The rest of THUG2's knowledge joins it step by step.
 //!
 //! - [`hud`]: the game's 2D as a [`engine_core::hud::HudFrame`]: which draw is which part, and where each part goes.
+//! - [`input`]: the Touch controllers as the game's pad, and its controls sheet.
 pub mod hud;
+pub mod input;

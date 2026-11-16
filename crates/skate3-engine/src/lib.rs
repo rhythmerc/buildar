@@ -7,4 +7,6 @@
 //!
 //! - [`hud`]: the retail trick display (its movie, read from the player's prepared HUD files) as a
 //!   [`engine_core::hud::HudFrame`].
+//! - [`input`]: the Touch controllers as the Xbox pad the sim reads, and its controls sheet.
 pub mod hud;
+pub mod input;

@@ -107,7 +107,7 @@ pub(crate) fn add_retail_link(app: &mut App) {
     app.add_plugins(link::RetailLinkPlugin);
     app.world_mut()
         .resource_mut::<ui::ControlsSheet>()
-        .set(crate::engines::Engine::Skate3, retail_controls());
+        .set(crate::engines::Engine::Skate3, skate3_engine::input::CONTROLS.to_vec());
 }
 
 impl Plugin for XrPlugin {
@@ -154,27 +154,6 @@ impl Plugin for XrPlugin {
             .add_observer(no_window_surface)
             .add_observer(no_eye_indirect_drawing);
     }
-}
-
-/// The imported-disc tier's controls: the Touch controllers stand in for the
-/// game's pad.
-#[cfg(feature = "retail")]
-fn retail_controls() -> Vec<(String, String)> {
-    [
-        ("Right stick", "flick it: ollies and flip tricks"),
-        ("Left stick", "steer; in the air, spin"),
-        ("A / X", "push / mongo push"),
-        ("B", "brake"),
-        ("Y", "off / on the board"),
-        ("Triggers", "grabs (LT / RT)"),
-        ("Grips", "LB / RB"),
-        ("Stick clicks", "LS / RS"),
-        ("Left grip + trigger", "aim, let go to put the skater there"),
-        ("Left menu (tap)", "this menu"),
-        ("Left menu (hold 1 s)", "build mode"),
-    ]
-    .map(|(a, b)| (a.to_string(), b.to_string()))
-    .into()
 }
 
 fn log_scene_extensions(exts: Option<Res<bevy_mod_openxr::exts::OxrEnabledExtensions>>) {

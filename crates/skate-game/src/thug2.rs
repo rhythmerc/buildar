@@ -13,10 +13,9 @@
 //!   the empty level's own scene.
 //! - Frames: the game steps at its 60 Hz from the headset's frames (several a frame at most), and waits while a menu
 //!   or build mode has the controllers.
-//! - Pad: the Touch controllers as a PlayStation 2 pad ([`CONTROLS`]).
+//! - Pad: the Touch controllers as a PlayStation 2 pad (`thug2_engine::input`).
 use crate::engines::{self, Engine, EngineSet};
 use crate::xr::link::{ArWorld, PieceSurfaces, SkaterLink, TeleportSkater};
-use crate::xr::touch::TouchState;
 use bevy::prelude::*;
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
@@ -37,19 +36,6 @@ const RAMP_UP: f32 = 0.95;
 const VERT_UP: f32 = 0.707;
 /// Where the deck is above the skater's feet, metres.
 const DECK_HEIGHT: f32 = 0.08;
-const PRESSED: f32 = 0.5;
-
-/// The Touch controllers as THUG2's pad.
-const CONTROLS: [(&str, &str); 8] = [
-    ("Either stick", "steer, push (up), trick directions"),
-    ("A / B", "ollie (X) / grind (triangle)"),
-    ("X / Y", "flip trick (square) / grab trick (circle)"),
-    ("Grips", "L1 / R1: spin left / right"),
-    ("Triggers", "L2 / R2: revert, nollie, switch"),
-    ("Left grip + trigger", "aim, let go to put the skater there"),
-    ("Left menu (tap)", "this menu"),
-    ("Left menu (hold 1 s)", "build mode"),
-];
 
 /// Where the game's files are, and where it may write.
 #[derive(Resource, Clone)]
@@ -103,7 +89,7 @@ pub(crate) fn install(app: &mut App, files: &Path) {
     app.world_mut().resource_mut::<engines::CourseSettings>().0.insert(Engine::Thug2, (park_settings, apply_park_settings));
     app.world_mut()
         .resource_mut::<crate::xr::ui::ControlsSheet>()
-        .set(Engine::Thug2, CONTROLS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect());
+        .set(Engine::Thug2, thug2_engine::input::CONTROLS.to_vec());
     crate::engine_hud::install(app);
     engines::add_engine(app, Engine::Thug2, available, |app| {
         app.init_resource::<Thug2>()
@@ -154,9 +140,8 @@ enum Phase {
 #[derive(Resource, Default)]
 struct Thug2 {
     phase: Phase,
-    pad: t2::Pad,
-    /// A menu or build mode has the controllers: the game waits.
-    hold: bool,
+    /// Its pad, and whether it waits (a menu or build mode has the controllers).
+    input: thug2_engine::input::Input,
     accum: f32,
     previous: Option<t2::Skater>,
     current: Option<t2::Skater>,
@@ -281,38 +266,9 @@ fn finish_boot(world: &mut World) {
     }
 }
 
+/// The game's pad from the controllers (`thug2_engine::input`).
 fn read_pad(touch: Res<engine_api::LatestTouch>, held: Res<engine_api::PadHeld>, mut thug2: ResMut<Thug2>) {
-    let t = &touch.0;
-    thug2.hold = held.pause;
-    thug2.pad = if held.held || t.menu { t2::PAD_AT_REST } else { pad(t) };
-}
-
-/// The controllers as the game's pad: sticks 0-255 (0x80 at rest, up and left 0).
-fn pad(t: &TouchState) -> t2::Pad {
-    use t2::buttons::*;
-    let axis = |v: f32| (128.0 + v.clamp(-1.0, 1.0) * 127.0).round() as u8;
-    let mut buttons = 0;
-    for (on, bit) in [
-        // (laid out as a pad's: ollie and grind on the right face buttons, flip and grab on the left's, the grips
-        // the shoulder buttons and the triggers the triggers)
-        (t.a, CROSS),
-        (t.b, TRIANGLE),
-        (t.x, SQUARE),
-        (t.y, CIRCLE),
-        (t.left_grip > PRESSED, L1),
-        (t.right_grip > PRESSED, R1),
-        (t.left_trigger > PRESSED, L2),
-        (t.right_trigger > PRESSED, R2),
-    ] {
-        if on {
-            buttons |= bit;
-        }
-    }
-    // Either stick is the game's direction stick (the pad's left; its right stick does nothing in the game): the
-    // further pushed one, so a thumb can leave its stick for a button (the left one for flip and grab, X / Y).
-    let length = |v: [f32; 2]| v[0] * v[0] + v[1] * v[1];
-    let stick = if length(t.right_stick) > length(t.left_stick) { t.right_stick } else { t.left_stick };
-    t2::Pad { left_x: axis(stick[0]), left_y: axis(-stick[1]), right_x: 0x80, right_y: 0x80, buttons }
+    thug2.input.set_input(&touch.0, **held);
 }
 
 /// THUG2's HUD (`thug2_engine::hud`: its parts and where they go) drawn by the app's HUD renderer. Its parts are
@@ -554,7 +510,7 @@ fn apply_world(world: Res<ArWorld>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2
 fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
     let thug2 = &mut *thug2;
     let Phase::Running(engine) = &mut thug2.phase else { return };
-    if thug2.hold || thug2.world_given.is_none() {
+    if thug2.input.hold || thug2.world_given.is_none() {
         thug2.accum = 0.0;
         return;
     }
@@ -563,7 +519,7 @@ fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
     while thug2.accum >= STEP && steps < MAX_STEPS_PER_FRAME {
         thug2.accum -= STEP;
         steps += 1;
-        match engine.step(&thug2.pad) {
+        match engine.step(&thug2.input.pad) {
             Ok(skater) => {
                 thug2.previous = thug2.current;
                 thug2.current = skater;
@@ -655,14 +611,14 @@ fn play_sounds(
         if let (Some(v), Some(mut sink)) = (now, sink) {
             sink.set_volume(Volume::Linear(v.gain * tuning.volume));
             sink.set_speed(v.speed);
-            match (thug2.hold, sink.is_paused()) {
+            match (thug2.input.hold, sink.is_paused()) {
                 (true, false) => sink.pause(),
                 (false, true) => sink.play(),
                 _ => {}
             }
         }
     }
-    if thug2.hold {
+    if thug2.input.hold {
         return;
     }
     for v in started {
@@ -1276,34 +1232,6 @@ mod tests {
             let v = t.v.map(Vec3::from_array);
             assert!(normal([v[0], v[1], v[2]]).z < 0.0, "facing back down the ramp");
         }
-    }
-
-    #[test]
-    fn the_pad_is_the_games() {
-        let mut t = TouchState::default();
-        assert_eq!(pad(&t), t2::Pad { left_x: 128, left_y: 128, right_x: 128, right_y: 128, buttons: 0 });
-        t.left_stick = [-1.0, 1.0];
-        t.a = true;
-        t.x = true;
-        let p = pad(&t);
-        assert_eq!((p.left_x, p.left_y), (1, 1), "left and up are low");
-        assert_eq!(p.buttons, t2::buttons::CROSS | t2::buttons::SQUARE);
-        // A pad's layout: B grind, Y grab, grips the shoulders, triggers the triggers.
-        let mut u = TouchState { b: true, y: true, left_grip: 1.0, right_trigger: 1.0, ..default() };
-        assert_eq!(pad(&u).buttons, t2::buttons::TRIANGLE | t2::buttons::CIRCLE | t2::buttons::L1 | t2::buttons::R2);
-        u = TouchState { right_grip: 1.0, left_trigger: 1.0, ..default() };
-        assert_eq!(pad(&u).buttons, t2::buttons::R1 | t2::buttons::L2);
-        // The left thumb off its stick for X: the right stick steers.
-        t.left_stick = [0.0, 0.0];
-        t.right_stick = [1.0, -0.2];
-        t.y = true;
-        let p = pad(&t);
-        assert_eq!((p.left_x, p.left_y), (255, 153), "the right stick as the direction");
-        assert_eq!((p.right_x, p.right_y), (128, 128));
-        assert_eq!(p.buttons & t2::buttons::CIRCLE, t2::buttons::CIRCLE);
-        // Both pushed: the further one.
-        t.left_stick = [-0.3, 0.0];
-        assert_eq!(pad(&t).left_x, 255);
     }
 
     /// The HUD mid-grind as the app draws it (the app's HUD renderer), saved as pictures to look at, a part each:
