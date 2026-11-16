@@ -15,47 +15,15 @@
 //!
 //! The registry that runs the engines and switches between them is the app's (`skate-game`'s `engines`).
 use bevy::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub mod skate;
 
+/// The Bevy-free contract the engines implement (its own repo): re-exported where the app has always named them.
+pub use engine_core;
+pub use engine_core::{HudHand, Mode, TouchState};
+
 // ---- Modes, engines and ownership ----
-
-/// What kind of game an engine plays, and so what kind of course it is played on and built with.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Mode {
-    /// Skating a park: pieces placed in the room, and the room itself ([`skate`]).
-    Skate,
-}
-
-impl Mode {
-    pub const ALL: [Mode; 1] = [Mode::Skate];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Mode::Skate => "Skate",
-        }
-    }
-
-    /// Its name in files (a course's `mode` tag).
-    pub fn key(self) -> &'static str {
-        match self {
-            Mode::Skate => "skate",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Mode> {
-        Mode::ALL.into_iter().find(|m| m.key() == key.trim())
-    }
-
-    /// What its courses are called.
-    pub fn course(self) -> &'static str {
-        match self {
-            Mode::Skate => "park",
-        }
-    }
-}
 
 /// An engine: a game run in the room.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -148,25 +116,6 @@ impl CourseSettings {
 
 // ---- Input ----
 
-/// One frame of raw Touch state, OpenXR ranges: sticks -1..1 (+y forward),
-/// triggers and grips 0..1.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct TouchState {
-    pub left_stick: [f32; 2],
-    pub right_stick: [f32; 2],
-    pub left_trigger: f32,
-    pub right_trigger: f32,
-    pub left_grip: f32,
-    pub right_grip: f32,
-    pub a: bool,
-    pub b: bool,
-    pub x: bool,
-    pub y: bool,
-    pub left_stick_click: bool,
-    pub right_stick_click: bool,
-    pub menu: bool,
-}
-
 /// This frame's Touch state (a Bluetooth game pad, when one speaks, folded in).
 #[derive(Resource, Default)]
 pub struct LatestTouch(pub TouchState);
@@ -186,15 +135,6 @@ pub struct PadHeld {
 }
 
 // ---- HUDs ----
-
-/// The controller a game's own HUD floats by.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HudHand {
-    Left,
-    #[default]
-    Right,
-}
 
 /// How far above the controller's grip a panel's middle is by default, real metres.
 pub const ABOVE_HAND_M: f32 = 0.16;
@@ -251,9 +191,5 @@ mod tests {
         }
         assert_eq!(Engine::from_key(" thug2\n"), Some(Engine::Thug2));
         assert_eq!(Engine::from_key("tony"), None);
-        for mode in Mode::ALL {
-            assert_eq!(Mode::from_key(mode.key()), Some(mode));
-        }
-        assert_eq!(Mode::from_key("race"), None);
     }
 }

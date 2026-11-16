@@ -283,6 +283,14 @@ the same way skate's park annotations do. Nothing in core has to change.
 | 10 | `thug2-sys` moves into thug2-headless | S |
 | 11 | Optional: SK8 onto the contract | M |
 
+**Step 1, as done (2026-11-16):** `engine-core` holds `Mode`, `TouchState`, `HudHand` and the HUD types
+(`hud`: frames, draws, parts, placements, shading, blending), checked against both producers (THUG2's
+`Thug2HudDraw`/`Thug2HudVertex` and its parts; Skate 3's `apt_scene::Draw`). A test keeps skate words out
+of the core. `engine-api` re-exports them where the app always named them. Left for the steps that reshape
+them: `ArWorld`, `SkaterLink`, `TeleportSkater` and `TrickHud` (step 5, as the stage and the skate module);
+`PadHeld` (step 4, with input); the `EngineCore` trait itself (added piece by piece as its callers arrive,
+complete by step 8).
+
 ### Risks
 
 - **Quest performance:**

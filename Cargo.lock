@@ -2369,8 +2369,17 @@ name = "engine-api"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "serde",
+ "engine-core",
  "serde_json",
+]
+
+[[package]]
+name = "engine-core"
+version = "0.1.0"
+source = "git+https://github.com/rhythmerc/buildar-engine-core?rev=c1507ef6a1dbd22a4d415137f3b00324f77871b9#c1507ef6a1dbd22a4d415137f3b00324f77871b9"
+dependencies = [
+ "glam",
+ "serde",
 ]
 
 [[package]]
