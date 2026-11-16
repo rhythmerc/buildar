@@ -64,7 +64,6 @@ pub(crate) fn present(
     time: Res<Time<Fixed>>,
     hold: Res<crate::app::Hold>,
     replay: Res<crate::replay::Replay>,
-    customiser: Option<Res<crate::customiser::Customiser>>,
     config: Res<Config>,
     mut cameras: Query<(&mut Camera, &mut Transform, &mut Projection), With<GameplayCamera>>,
 ) {
@@ -92,19 +91,6 @@ pub(crate) fn present(
         }
         if let Projection::Perspective(p) = &mut *projection {
             p.fov = previous.fov + (current.fov - previous.fov) * alpha;
-        }
-        if let Some(customiser) = customiser.as_ref().filter(|c| c.open) {
-            let (height, distance, yaw) = customiser.preview_camera();
-            let center = current.root.translation + Vec3::Y * height;
-            let offset =
-                current.root.rotation * Quat::from_rotation_y(yaw) * Vec3::new(0.0, 0.25, distance);
-            let eye = center + offset;
-            let right = offset.normalize().cross(Vec3::Y).normalize();
-            *transform = Transform::from_translation(eye)
-                .looking_at(center + right * (distance * 0.265625), Vec3::Y);
-            if let Projection::Perspective(p) = &mut *projection {
-                p.fov = 50_f32.to_radians();
-            }
         }
         // In XR the eye cameras are the only views (see `xr::headset_only_rendering`).
         camera.is_active = config.xr.is_none();

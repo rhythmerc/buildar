@@ -5,10 +5,80 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
+/// The player's saved character (`settings/character.json`, beside the asset root), applied to
+/// the skater by [`update`]. The desktop customiser menu that edited it is gone; a saved profile
+/// is still honoured, and without one the stock skater stays.
+#[derive(Resource)]
+pub(crate) struct Profile {
+    pub enabled: bool,
+    pub draft: Value,
+}
+
+/// The retail skater's parts, its saved profile and the profile's gameplay preferences.
+pub(crate) struct CharacterPlugin;
+impl Plugin for CharacterPlugin {
+    fn build(&self, app: &mut App) {
+        crate::customiser_material::register(app);
+        app.add_systems(Startup, setup)
+            .add_systems(PostStartup, load_profile)
+            .add_systems(
+                PreUpdate,
+                preferences
+                    .after(crate::map_transition::MapTransitionSet)
+                    .before(crate::input::poll_controllers)
+                    .in_set(crate::app::SKATE3),
+            )
+            .add_systems(
+                Update,
+                update
+                    .after(crate::graphics_menu::interact)
+                    .before(crate::app::FrameSet::Animation)
+                    .in_set(crate::app::SKATE3),
+            );
+    }
+}
+
+fn load_profile(mut commands: Commands, config: Res<crate::config::Config>, parts: Res<Parts>) {
+    let settings = config
+        .asset_root
+        .parent()
+        .unwrap_or(&config.asset_root)
+        .join("settings/character.json");
+    let saved = std::fs::read(&settings)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|saved| parts.resolve(&saved).ok());
+    let enabled = saved.is_some();
+    let draft = saved.unwrap_or_else(|| {
+        parts
+            .library
+            .defaults
+            .get("male")
+            .cloned()
+            .unwrap_or(serde_json::json!({"selections":{},"morphs":{}}))
+    });
+    commands.insert_resource(Profile { enabled, draft });
+}
+
+fn preferences(
+    profile: Res<Profile>,
+    models: Res<crate::custom_models::CustomModels>,
+    mut physics: ResMut<crate::physics::GamePhysics>,
+    mut skater: ResMut<crate::physics::SkaterRuntime>,
+) {
+    // The profile's gameplay preferences reach the sim through the sim's own mapping.
+    skate3_sim::physics::apply_preferences(&profile.draft, &mut physics, &mut skater.animation);
+    if let Some(style) = models.native_style() {
+        skater.animation.motion.playback_context.pro_skater =
+            skate_core::animation::skeleton_input::name::encode(style.as_bytes());
+        skater.animation.motion.animation.posture.set_profile(0);
+        physics.set_gesture_preferences(None);
+    }
+}
+
 #[derive(Clone, Deserialize)]
 pub(crate) struct Part {
     pub slot: String,
-    pub name: String,
     pub flags: HashMap<String, String>,
     pub materials: Vec<String>,
     pub scene: String,
@@ -20,7 +90,6 @@ impl Part {
 }
 #[derive(Clone, Deserialize)]
 pub(crate) struct Material {
-    pub name: String,
     pub flags: HashMap<String, String>,
     diffuse: String,
     normal: Option<String>,
@@ -40,13 +109,7 @@ impl Material {
     }
 }
 #[derive(Clone, Deserialize)]
-pub(crate) struct Colour {
-    pub name: String,
-    pub rgb: [f32; 3],
-}
-#[derive(Clone, Deserialize)]
 pub(crate) struct Tattoo {
-    pub name: String,
     pub texture: String,
     pub bounds: [f32; 4],
 }
@@ -58,8 +121,6 @@ pub(crate) struct Library {
     pub morphs: Vec<String>,
     #[serde(default)]
     pub tattoos: HashMap<String, Tattoo>,
-    #[serde(default)]
-    pub colours: Vec<Colour>,
 }
 #[derive(Resource, Default)]
 pub(crate) struct Parts {
@@ -624,7 +685,7 @@ pub(crate) fn update(
     mut commands: Commands,
     server: Res<AssetServer>,
     mut parts: ResMut<Parts>,
-    mut state: ResMut<crate::customiser::Customiser>,
+    profile: Res<Profile>,
     mut materials: ResMut<Assets<SkaterMaterial>>,
     root: Query<Entity, With<crate::world::PlayerRoot>>,
     parents: Query<&ChildOf>,
@@ -640,13 +701,13 @@ pub(crate) fn update(
     mut animation: ResMut<crate::animation::AnimationStatus>,
     custom_models: Res<crate::custom_models::CustomModels>,
 ) {
-    if !state.enabled || custom_models.active.is_some() {
+    if !profile.enabled || custom_models.active.is_some() {
         return;
     }
     let Ok(root) = root.single() else {
         return;
     };
-    let preview = state.preview(&parts);
+    let preview = profile.draft.clone();
     let Some(selections) = preview["selections"].as_object() else {
         return;
     };
@@ -661,36 +722,16 @@ pub(crate) fn update(
         .collect();
     // A missing/failed library is not a valid empty outfit. Never hide the
     // fallback skater until a complete replacement can actually be published.
+    // (character assets unavailable: the stock skater stays)
     if desired.is_empty() || parts.resolve(&preview).is_err() {
-        let message = "Character assets are unavailable. Update this copy's character assets; your skater is unchanged.";
-        if state.status != message {
-            state.status = message.into();
-            state.redraw = true;
-        }
         return;
     }
-    if parts.applied == preview && !state.open {
+    if parts.applied == preview {
         return;
     }
-    // Resolve the visible choices ahead of selection, including skin, head,
-    // sleeves, and sock dependencies. No conversion process runs in the game.
-    let precache: HashSet<(String, String)> = state
-        .preload_outfits(&parts)
-        .iter()
-        .flat_map(|p| {
-            p["selections"]
-                .as_object()
-                .into_iter()
-                .flat_map(|s| s.values())
-        })
-        .filter_map(|v| {
-            Some((
-                v["asset_id"].as_str()?.to_owned(),
-                v["material_id"].as_str()?.to_owned(),
-            ))
-        })
-        .chain(desired.iter().cloned())
-        .collect();
+    // Resolve the outfit's parts, including skin, head, sleeves, and sock dependencies. No
+    // conversion process runs in the game.
+    let precache: HashSet<(String, String)> = desired.iter().cloned().collect();
     for (_, mid) in &precache {
         parts.warm(mid, &server, &mut materials);
     }
@@ -729,7 +770,7 @@ pub(crate) fn update(
         } else {
             &part.slot
         };
-        if let Some(tattoo) = state.draft["tattoos"][slot]["id"].as_str() {
+        if let Some(tattoo) = profile.draft["tattoos"][slot]["id"].as_str() {
             if parts
                 .tattoos
                 .get(tattoo)
@@ -776,7 +817,7 @@ pub(crate) fn update(
     for (id, mid) in &desired {
         let entity = parts.instances[id];
         let handle = parts.materials[mid].0.clone();
-        if let Some(updated) = parts.profile_material(id, mid, &state.draft, &materials) {
+        if let Some(updated) = parts.profile_material(id, mid, &profile.draft, &materials) {
             if let Some(material) = materials.get_mut(&handle) {
                 *material = updated;
             }
@@ -808,7 +849,7 @@ pub(crate) fn update(
         .iter()
         .enumerate()
         .map(|(i, n)| {
-            state.draft["morphs"][n]
+            profile.draft["morphs"][n]
                 .as_f64()
                 .unwrap_or(if (2..19).contains(&i) { 0.25 } else { 0. })
                 .clamp(0., 0.5) as f32
@@ -829,8 +870,6 @@ pub(crate) fn update(
     }
     if parts.applied != preview {
         parts.applied = preview;
-        state.status.clear();
-        state.redraw = true;
     }
 }
 
@@ -867,7 +906,7 @@ mod tests {
                     p["selections"][&part.slot] =
                         serde_json::json!({"asset_id":id,"material_id":mid});
                     if let Err(e) = parts.resolve(&p) {
-                        failures.push(format!("{gender} {} {}: {e}", part.slot, part.name));
+                        failures.push(format!("{gender} {} {id}: {e}", part.slot));
                     }
                 }
             }
@@ -894,7 +933,6 @@ mod online_tests {
             "body".into(),
             Part {
                 slot: "Arm".into(),
-                name: "body".into(),
                 flags: HashMap::from([("StampUVConstraintQ3".into(), "0,0,1,1".into())]),
                 materials: vec!["skin".into()],
                 scene: String::new(),
@@ -903,7 +941,6 @@ mod online_tests {
         parts.library.materials.insert(
             "skin".into(),
             Material {
-                name: "skin".into(),
                 flags: HashMap::from([("SkinTone".into(), "fair".into())]),
                 diffuse: String::new(),
                 normal: None,
@@ -919,7 +956,6 @@ mod online_tests {
         parts.library.tattoos.insert(
             "ink".into(),
             Tattoo {
-                name: "ink".into(),
                 texture: String::new(),
                 bounds: [0., 0., 1., 1.],
             },

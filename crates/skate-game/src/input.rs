@@ -23,8 +23,8 @@ impl Default for PublishedTickInput {
     }
 }
 
-/// A pad supplied by something other than XInput (the XR Touch
-/// controllers). When this resource exists it owns controller slot 0.
+/// The pad: the XR Touch controllers (`xr::actions`). When this resource exists it owns
+/// controller slot 0; the other slots are always disconnected.
 #[derive(Resource, Default)]
 pub(crate) struct ExternalPad {
     state: Option<(u16, [u8; 2], [i16; 2], [i16; 2])>,
@@ -57,11 +57,58 @@ impl ExternalPad {
     }
 }
 
+/// Menu navigation from the keyboard's arrows, as pad-style bits (1 up, 2 down, 4 left, 8 right),
+/// with auto-repeat while held. (On the desktop it also read XInput pads; that transport is gone.)
+#[derive(Resource, Default)]
+pub(crate) struct Navigation {
+    pub pressed: u16,
+    previous: u16,
+    held_for: f32,
+    repeat_at: f32,
+}
+
+pub(crate) fn navigation(
+    mut nav: ResMut<Navigation>,
+    time: Res<Time<Real>>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    let mut current = 0;
+    for (key, bit) in [
+        (KeyCode::ArrowUp, 1),
+        (KeyCode::ArrowDown, 2),
+        (KeyCode::ArrowLeft, 4),
+        (KeyCode::ArrowRight, 8),
+    ] {
+        if keys.pressed(key) {
+            current |= bit;
+        }
+    }
+    nav.pressed = current & !nav.previous;
+    if current & 15 != 0 && current & 15 == nav.previous & 15 {
+        nav.held_for += time.delta_secs();
+        if nav.held_for >= nav.repeat_at {
+            nav.pressed |= current & 15;
+            nav.repeat_at += 0.09;
+        }
+    } else {
+        nav.held_for = 0.;
+        nav.repeat_at = 0.35;
+    }
+    nav.previous = current;
+}
+
 pub(crate) struct InputPlugin;
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ControllerInput>()
             .init_resource::<PublishedTickInput>()
+            .init_resource::<Navigation>()
+            .add_systems(
+                PreUpdate,
+                navigation
+                    .before(crate::graphics_menu::MenuInput)
+                    .in_set(crate::app::SKATE3),
+            )
             .add_systems(
                 PreUpdate,
                 poll_controllers
@@ -75,7 +122,6 @@ impl Plugin for InputPlugin {
 pub(crate) fn poll_controllers(
     mut input: ResMut<ControllerInput>,
     external: Option<Res<ExternalPad>>,
-    mut capabilities: Local<[platform::CapabilityCache; 4]>,
 ) {
     let previous = input.status;
     input.collect(std::array::from_fn(|slot| {
@@ -84,7 +130,8 @@ pub(crate) fn poll_controllers(
         {
             external.packet()
         } else {
-            platform::poll_cached(slot, &mut capabilities[slot])
+            // (only the external pad: the desktop's XInput transport is gone)
+            Err(platform::DeviceError::Disconnected)
         }
     }));
     for (index, (&before, &after)) in previous.iter().zip(&input.status).enumerate() {
@@ -93,7 +140,7 @@ pub(crate) fn poll_controllers(
                 ControllerStatus::Ready if index == 0 && external.is_some() => {
                     info!("Controller {index}: XR Touch controllers ready")
                 }
-                ControllerStatus::Ready => info!("Controller {index}: raw XInput ready"),
+                ControllerStatus::Ready => info!("Controller {index}: ready"),
                 ControllerStatus::Unavailable(platform::DeviceError::Disconnected) => {
                     info!("Controller {index}: disconnected");
                 }

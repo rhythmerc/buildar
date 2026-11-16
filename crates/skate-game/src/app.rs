@@ -141,7 +141,7 @@ pub(crate) fn build(
             })
             .build()
             .disable::<bevy::log::LogPlugin>()
-            // Gameplay and menu navigation both use raw XInput. No game system
+            // The pad comes from the headset (input::ExternalPad). No game system
             // consumes Bevy gamepad events/rumble; its second device backend can
             // stall PreUpdate (70.68 ms in the University capture).
             .disable::<bevy::gilrs::GilrsPlugin>();
@@ -232,7 +232,7 @@ fn add_retail(app: &mut App) {
         verification::VerificationPlugin,
         crate::performance::PerformancePlugin,
     ));
-    app.add_plugins(crate::customiser::CustomiserPlugin);
+    app.add_plugins(crate::customiser_parts::CharacterPlugin);
     app.add_plugins(crate::custom_models::CustomModelsPlugin);
     app.add_plugins(crate::skate_audio::SkateAudioPlugin);
     app.add_plugins(crate::scoring_hud::ScoringHudPlugin);

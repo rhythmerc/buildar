@@ -23,8 +23,6 @@ mod fonts;
 #[cfg(feature = "retail")]
 mod custom_models;
 #[cfg(feature = "retail")]
-mod customiser;
-#[cfg(feature = "retail")]
 mod customiser_material;
 #[cfg(feature = "retail")]
 mod customiser_parts;

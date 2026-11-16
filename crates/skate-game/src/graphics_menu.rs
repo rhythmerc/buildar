@@ -257,7 +257,7 @@ fn setup(
             BackgroundColor(Color::srgb(0.035,0.055,0.08)))).with_children(|panel| {
             panel.spawn((Text::new("GAME MENU"),TextFont {font_size:32.,..default()},TextColor(Color::WHITE)));
             panel.spawn((Text::new("GAMEPLAY & GRAPHICS"),TextFont {font_size:16.,..default()},TextColor(Color::srgb(0.4,0.85,0.85))));
-            for i in 0..17 {
+            for i in 0..12 {
                 panel.spawn((Button, MenuRow(i), Node {width:percent(100),min_height:px(26),padding:UiRect::all(px(3)),align_items:AlignItems::Center,border_radius:BorderRadius::all(px(5)),..default()},
                     BackgroundColor(Color::srgb(0.08,0.11,0.15)))).with_children(|row| {
                     row.spawn((MenuLabel(i),Text::new(""),TextFont {font_size:18.,..default()},TextColor(Color::WHITE)));
@@ -304,9 +304,8 @@ fn cycle<T: PartialEq + Copy>(values: &[T], value: T, direction: i32) -> T {
 pub(crate) fn interact(
     mut config: ResMut<crate::config::Config>,
     mut transition: ResMut<crate::map_transition::MapTransition>,
-    mut customiser: ResMut<crate::customiser::Customiser>,
     mut custom_models: ResMut<crate::custom_models::CustomModels>,
-    nav: Res<crate::customiser::Navigation>,
+    nav: Res<crate::input::Navigation>,
     mut physics: ResMut<crate::physics::GamePhysics>,
     keys: Res<ButtonInput<KeyCode>>,
     mut menu: ResMut<Menu>,
@@ -319,7 +318,7 @@ pub(crate) fn interact(
         time.pause();
         return;
     }
-    if customiser.open || custom_models.open {
+    if custom_models.open {
         return;
     }
     if keys.just_pressed(KeyCode::Escape) || nav.pressed & 0x10 != 0 {
@@ -327,7 +326,7 @@ pub(crate) fn interact(
     }
     let mut action = None;
     if menu.open {
-        let rows = if menu.daylight { 4 } else { 17 };
+        let rows = if menu.daylight { 4 } else { 12 };
         if keys.just_pressed(KeyCode::ArrowUp) || nav.pressed & 1 != 0 {
             menu.selected = (menu.selected + rows - 1) % rows;
         }
@@ -376,7 +375,7 @@ pub(crate) fn interact(
                 }
                 _ => {
                     menu.daylight = false;
-                    menu.selected = 16;
+                    menu.selected = 11;
                 }
             }
         } else {
@@ -419,12 +418,8 @@ pub(crate) fn interact(
                 9 => {
                     exit.write(AppExit::Success);
                 }
-                10 => {
-                    custom_models.request_stock();
-                    customiser.begin();
-                }
-                12 => custom_models.begin(),
-                16 => {
+                10 => custom_models.begin(),
+                11 => {
                     menu.daylight = true;
                     menu.selected = 0;
                     menu.status = "Custom maps: change time, cycle speed and ambient light. Retail lighting stays authored.".into();
@@ -513,7 +508,6 @@ fn labels(
     menu: Res<Menu>,
     transition: Res<crate::map_transition::MapTransition>,
     time: Res<Time<Real>>,
-    customiser: Res<crate::customiser::Customiser>,
     custom_models: Res<crate::custom_models::CustomModels>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut root: Single<&mut Node, With<MenuRoot>>,
@@ -525,7 +519,7 @@ fn labels(
     >,
 ) {
     root.display =
-        if menu.open && !customiser.open && !custom_models.open {
+        if menu.open && !custom_models.open {
             Display::Flex
         } else {
             Display::None
@@ -605,9 +599,7 @@ fn labels(
                 }
                 8 => "Resume".into(),
                 9 => "Quit game".into(),
-                10 => "Character customiser".into(),
-                12 => "Custom models".into(),
-                11 | 13 | 14 | 15 => String::new(),
+                10 => "Custom models".into(),
                 _ => "Day & night…".into(),
             }
         };

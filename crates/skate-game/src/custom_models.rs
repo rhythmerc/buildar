@@ -279,7 +279,7 @@ impl Plugin for CustomModelsPlugin {
 fn interact(
     mut state: ResMut<CustomModels>,
     keys: Res<ButtonInput<KeyCode>>,
-    nav: Res<crate::customiser::Navigation>,
+    nav: Res<crate::input::Navigation>,
     buttons: Query<(&Interaction, &Action), Changed<Interaction>>,
     mut wheel: MessageReader<MouseWheel>,
     mut scroll_nodes: Query<(&mut ScrollPosition, &ComputedNode), With<ModelScroll>>,
