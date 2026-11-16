@@ -5,18 +5,6 @@ use bevy::{
     prelude::*,
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
-use skate_core::{
-    math::Vector3,
-    physics::{
-        board_world::{
-            BoardWorld, WorldTriangle,
-            query_metadata::{Bounds, QueryMesh, QueryMetadata, QueryPool},
-        },
-        collision::TriangleFeature,
-        contact::RetailContactMaterial,
-        drive_frames::RetailAffineTransform,
-    },
-};
 use skate_data::skate_map::SkateMap;
 use std::collections::HashMap;
 
@@ -25,7 +13,7 @@ use std::collections::HashMap;
 pub(crate) mod shadow_geometry;
 
 // The collision half is the sim's (skate3-sim); this module draws the map.
-pub(crate) use skate3_sim::skate_world::{collision_world, validate_runtime};
+pub(crate) use skate3_sim::skate_world::validate_runtime;
 
 /// Reuse identical render resources without changing authored triangles.
 fn render_texture_ids(textures: &[skate_data::skate_map::Texture]) -> Vec<u32> {

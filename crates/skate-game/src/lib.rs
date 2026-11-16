@@ -5,8 +5,6 @@ mod android;
 #[cfg(all(feature = "retail", any(target_os = "android", test)))]
 mod clean_pack;
 #[cfg(feature = "retail")]
-use skate3_sim::animation_pose;
-#[cfg(feature = "retail")]
 mod app;
 #[cfg(feature = "retail")]
 use skate3_sim::apt_scene;
@@ -37,8 +35,6 @@ mod customiser_parts;
 use skate3_sim::difficulty;
 #[cfg(feature = "retail")]
 mod fps_overlay;
-#[cfg(feature = "retail")]
-mod graph_host;
 #[cfg(feature = "retail")]
 mod graph_runtime;
 #[cfg(feature = "retail")]
@@ -84,8 +80,6 @@ mod retail_render;
 #[cfg(feature = "retail")]
 mod scoring_hud;
 #[cfg(feature = "retail")]
-use skate3_sim::scoring_runtime;
-#[cfg(feature = "retail")]
 mod session_marker;
 #[cfg(feature = "retail")]
 mod setup;
@@ -98,8 +92,6 @@ mod skate_audio;
 mod stream_pcm;
 #[cfg(feature = "retail")]
 mod skate_world;
-#[cfg(feature = "retail")]
-mod skater_animation;
 #[cfg(feature = "retail")]
 mod teleport_menu;
 #[cfg(feature = "retail")]
@@ -412,7 +404,3 @@ fn run_retail(pump: Option<&mut dyn FnMut()>) -> bevy::app::AppExit {
     drop(_startup);
     app.run()
 }
-
-#[cfg(all(test, feature = "retail"))]
-#[path = "tests/action_host.rs"]
-mod action_host_tests;
