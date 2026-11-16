@@ -4909,6 +4909,7 @@ dependencies = [
  "skate-mods",
  "skate-net",
  "skate-vehicles",
+ "skate3-sim",
  "thug2-sys",
  "tracing-log",
  "wgpu",
@@ -4975,6 +4976,21 @@ dependencies = [
  "rapier3d",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "skate3-sim"
+version = "0.1.0"
+dependencies = [
+ "glam 0.30.10",
+ "serde",
+ "serde_json",
+ "skate-audio-core",
+ "skate-audio-formats",
+ "skate-core",
+ "skate-data",
+ "skate-net",
+ "tracing",
 ]
 
 [[package]]

@@ -598,3 +598,25 @@ Steps 4a/4b stay. Step 6 becomes S5. Step 9 becomes S1-S6.
   while both repos are hot), so build release-only in the distrobox.
 - **No hard blocker found.** None of the vendored Bevy patches touch the sim, and the load path is
   already Bevy-free and `Send`. The engine WIP must be committed first (proposal step 0).
+
+---
+
+## 8. Progress (S1-S4 done, 2026-11-16)
+
+- **Layout:** `crates/skate3/{skate-core,skate-data,skate-audio-core,skate-audio-formats,sim}`. `skate3-sim`
+  is ~90k lines and has no Bevy (`cargo tree -p skate3-sim | grep -i bevy` is empty). Its module paths
+  mirror `skate-game/src`, so `crate::physics::...` resolves the same on both sides.
+- **Shims left in skate-game (S7 removes them):** `lib.rs` `use skate3_sim::{difficulty, hud_runtime,
+  map_library, apt_scene}`; glob re-exports in `physics.rs`, `camera.rs`, `graph_runtime.rs`,
+  `grind_world.rs`, `input.rs`, `skate_world.rs`, `skate_audio.rs`; same-named `Deref` newtypes for the
+  resources (`GamePhysics`, `SkaterRuntime`, `PlayerControls`, `StockGraphs`, `CameraRuntime`,
+  `ControllerInput`, the `AudioObservationCursor`) and the `PlayerAudioObservation` message.
+- **Façade (S4):** `skate3_sim::{Bundle, Sim, SimConfig, PlayerAudio}`. Startup loading is `Bundle::open`
+  + `Sim::load` + `into_parts`; the fixed-tick systems call the stage functions `Sim` is made of
+  (`input::publish`, `physics::controls::sample`, `physics::advance`, `physics::audio_observation::observe`);
+  the audio worker renders with `PlayerAudio::render_block`. `map_transition` still loads the parts itself.
+- **Still entangled:** the sim depends on `skate-net` (network.rs packing, not split yet); `setup.rs`
+  (receipt validation) stays in the app because it reads `customiser_parts`/`android`; `scoring_hud::advance`
+  is not folded into `Sim::advance`; `PlayerAudio` is not `Send` (prepare it on its render thread).
+- **Verified:** same 2420 test names and results as the baseline, and the 137 asset-gated tests give
+  the same per-test outcomes before and after against the converted data (plus the new façade test).

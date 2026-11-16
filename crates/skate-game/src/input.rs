@@ -2,25 +2,24 @@
 use crate::app::SimulationSet;
 use bevy::prelude::*;
 
-mod controllers;
-pub(crate) mod gesture_catalog;
-pub(crate) mod gesture_input;
-pub(crate) mod gesture_mapping;
-mod gesture_mapping_data;
+// The pad history and gesture recognisers are the sim's (skate3-sim); this module is the Bevy side.
+pub(crate) use skate3_sim::input::ControllerStatus;
+#[allow(unused_imports)]
+pub(crate) use skate3_sim::input::{gesture_catalog, gesture_input, gesture_mapping};
 pub(crate) mod platform;
-pub(crate) use controllers::{ControllerInput, ControllerStatus};
 use skate_core::input::tick::TickInput;
+
+/// The sim's [`skate3_sim::input::ControllerInput`] as a Bevy resource (a transitional shim: the
+/// sim has no Bevy, so the `Resource` impl lives on this wrapper).
+#[derive(Resource, Default, Deref, DerefMut)]
+pub(crate) struct ControllerInput(pub skate3_sim::input::ControllerInput);
 
 #[derive(Resource, Clone, Copy, Debug)]
 pub(crate) struct PublishedTickInput(pub TickInput);
 
 impl Default for PublishedTickInput {
     fn default() -> Self {
-        Self(TickInput::new(
-            0,
-            skate_core::input::gameplay_map::GameplayActions::from_values([0.0; 18]),
-            false,
-        ))
+        Self(skate3_sim::input::idle_tick_input())
     }
 }
 
@@ -121,12 +120,6 @@ fn publish_actions(
     mut published: ResMut<PublishedTickInput>,
     menu: Option<Res<crate::graphics_menu::Menu>>,
 ) {
-    if !crate::graphics_menu::gameplay_active(menu) {
-        input.discard_gameplay();
-    }
-    input.publish_actions();
-    published.0 = input.tick_input();
+    let gameplay = crate::graphics_menu::gameplay_active(menu);
+    published.0 = skate3_sim::input::publish(&mut input, gameplay);
 }
-
-#[cfg(test)]
-pub(crate) mod manual_replay;

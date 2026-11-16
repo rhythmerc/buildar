@@ -1,27 +1,20 @@
 //! Normal gameplay camera rendering endpoint. Simulation owns the cadence of
 //! CameraRuntime::advance after its complete physical/animation publication.
-mod collision;
-mod graph;
-mod graph_conditions;
-mod graph_subject;
-mod publication;
-mod runtime;
-mod settings;
-mod shake_data;
-mod shot_data;
-mod stock_names;
-mod subject;
-mod trajectory;
-mod world_query;
 use crate::{app::FrameSet, config::Config};
 use bevy::prelude::*;
-pub(crate) use graph_subject::CameraGraphEnvironment;
-pub(crate) use publication::{
-    CameraAirOutput, CameraAnimationOutput, CameraEventsOutput, CameraGrindOutput,
-    CameraOffboardOutput, CameraPreferences, CameraPublicationInputs, CameraStateOutput,
-    snapshot as publish_camera_subject,
-};
-pub(crate) use runtime::CameraRuntime;
+// The camera graph and runtime are the sim's (skate3-sim); this module draws with its frame.
+#[allow(unused_imports)]
+pub(crate) use skate3_sim::camera::*;
+
+/// The sim's [`skate3_sim::camera::CameraRuntime`] as a Bevy resource (transitional shim).
+#[derive(Resource, Deref, DerefMut)]
+pub(crate) struct CameraRuntime(pub skate3_sim::camera::CameraRuntime);
+
+impl CameraRuntime {
+    pub(crate) fn load(root: &std::path::Path) -> Result<Self, String> {
+        skate3_sim::camera::CameraRuntime::load(root).map(Self)
+    }
+}
 
 #[derive(Component)]
 pub(crate) struct GameplayCamera;

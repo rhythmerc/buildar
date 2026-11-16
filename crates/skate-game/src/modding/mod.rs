@@ -237,7 +237,7 @@ fn apply(world: &mut World, mods: &mut Mods) {
         mods.trainer = None;
     }
     world.resource_mut::<crate::physics::GamePhysics>().trainer =
-        mods.trainer.as_ref().map(|(_, t)| *t).unwrap_or_default();
+        crate::physics::trainer(mods.trainer.as_ref().map(|(_, t)| *t).unwrap_or_default());
     for id in &retired {
         network::retire(world, id);
         vehicles::retire(world, id);
@@ -392,7 +392,7 @@ fn apply_one(world: &mut World, mods: &mut Mods, id: &str, command: Command) -> 
                 return Err("Native trainer controls are already owned by another mod".into());
             }
             mods.trainer = Some((id.to_owned(), tuning));
-            world.resource_mut::<crate::physics::GamePhysics>().trainer = tuning;
+            world.resource_mut::<crate::physics::GamePhysics>().trainer = crate::physics::trainer(tuning);
         }
         Command::Animation { path } => {
             let root = &mods.manager.packages[id].root;

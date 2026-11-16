@@ -5,19 +5,11 @@ mod android;
 #[cfg(all(feature = "retail", any(target_os = "android", test)))]
 mod clean_pack;
 #[cfg(feature = "retail")]
-mod animation_pose;
-#[cfg(feature = "retail")]
 mod app;
 #[cfg(feature = "retail")]
-mod apt_display;
-#[cfg(feature = "retail")]
-mod apt_movie;
-#[cfg(feature = "retail")]
-mod apt_scene;
-#[cfg(feature = "retail")]
-mod apt_text;
-#[cfg(feature = "retail")]
-mod apt_vm;
+use skate3_sim::apt_scene;
+#[cfg(all(feature = "retail", test))]
+use skate3_sim::apt_vm;
 #[cfg(feature = "retail")]
 mod assets;
 mod binaural;
@@ -41,11 +33,9 @@ mod customiser_material;
 #[cfg(feature = "retail")]
 mod customiser_parts;
 #[cfg(feature = "retail")]
-mod difficulty;
+use skate3_sim::difficulty;
 #[cfg(feature = "retail")]
 mod fps_overlay;
-#[cfg(feature = "retail")]
-mod graph_host;
 #[cfg(feature = "retail")]
 mod graph_runtime;
 #[cfg(feature = "retail")]
@@ -53,11 +43,11 @@ mod graphics_menu;
 #[cfg(feature = "retail")]
 mod grind_world;
 #[cfg(feature = "retail")]
-mod hud_runtime;
+use skate3_sim::hud_runtime;
 #[cfg(feature = "retail")]
 mod input;
 #[cfg(feature = "retail")]
-mod map_library;
+use skate3_sim::map_library;
 #[cfg(feature = "retail")]
 mod map_render;
 #[cfg(feature = "retail")]
@@ -87,8 +77,6 @@ mod retail_render;
 #[cfg(feature = "retail")]
 mod scoring_hud;
 #[cfg(feature = "retail")]
-mod scoring_runtime;
-#[cfg(feature = "retail")]
 mod session_marker;
 #[cfg(feature = "retail")]
 mod setup;
@@ -101,8 +89,6 @@ mod skate_audio;
 mod stream_pcm;
 #[cfg(feature = "retail")]
 mod skate_world;
-#[cfg(feature = "retail")]
-mod skater_animation;
 #[cfg(feature = "retail")]
 mod teleport_menu;
 #[cfg(feature = "retail")]
@@ -211,81 +197,25 @@ fn load() -> Result<Loaded, bevy::app::AppExit> {
         config.multiplayer.host.is_some() || config.multiplayer.direct.is_some(),
         config.multiplayer.appearance.is_some()
     );
-    eprintln!("REPORT_META stage=gameplay_configuration");
-    if let Err(error) = skate_data::input_config::StockGameplayConfig::load(&config.asset_root) {
-        eprintln!("{error}");
-        return Err(bevy::app::AppExit::error());
-    }
-    eprintln!("REPORT_META stage=asset_manifest");
-    let manifest = match bevy::log::info_span!("load_manifest")
-        .in_scope(|| skate_data::GameAssets::load(&config.asset_root))
-    {
-        Ok(manifest) => manifest,
+    // The sim reads the bundle and builds itself; each stage is announced as before.
+    let mut stage = |name: &str| eprintln!("REPORT_META stage={name}");
+    let bundle = match skate3_sim::Bundle::open(&config.asset_root, &mut stage) {
+        Ok(bundle) => bundle,
         Err(error) => {
             eprintln!("{error}");
             return Err(bevy::app::AppExit::error());
         }
     };
-    eprintln!("REPORT_META stage=stock_graphs");
-    let graphs = match bevy::log::info_span!("load_graphs")
-        .in_scope(|| graph_runtime::StockGraphs::load(&config.asset_root, &manifest))
-    {
-        Ok(graphs) => graphs,
-        Err(error) => {
-            eprintln!("{error}");
-            return Err(bevy::app::AppExit::error());
-        }
-    };
-    eprintln!("REPORT_META stage=map_validation");
-    if let Some(map) = &config.map {
-        if let Err(error) = skate_world::validate_runtime(map) {
-            eprintln!("{error}");
-            return Err(bevy::app::AppExit::error());
-        }
-    }
-    eprintln!(
-        "SKATE_DIFFICULTY mode={} native_index={}",
-        config.difficulty.key(),
-        config.difficulty as u32
-    );
-    eprintln!("REPORT_META stage=physics_initialization");
-    let mut physics = match bevy::log::info_span!("load_physics").in_scope(|| {
-        physics::GamePhysics::load_with_difficulty(
-            &config.asset_root,
-            config.map.as_ref(),
-            config.difficulty,
-        )
-    }) {
-        Ok(physics) => physics,
-        Err(error) => {
-            eprintln!("{error}");
-            return Err(bevy::app::AppExit::error());
-        }
-    };
-    if config.multiplayer.spawn_offset != 0.0 {
-        let mut spawn =
-            physics.board.part_transforms()[skate_core::physics::board::BodyId::Deck.index()];
-        spawn.translation.x += config.multiplayer.spawn_offset;
-        physics.board.set_transform(spawn);
-    }
-    eprintln!("REPORT_META stage=skater_initialization");
-    let skater = match bevy::log::info_span!("load_skater").in_scope(|| {
-        physics::SkaterRuntime::load(
-            &config.asset_root,
-            &graphs,
-            &physics,
-            config.difficulty.key(),
-        )
-    }) {
-        Ok(skater) => skater,
-        Err(error) => {
-            eprintln!("{error}");
-            return Err(bevy::app::AppExit::error());
-        }
-    };
-    eprintln!("REPORT_META stage=controls_initialization");
-    let controls = match physics::PlayerControls::load(&config.asset_root) {
-        Ok(controls) => controls,
+    let sim = match skate3_sim::Sim::load(
+        &bundle,
+        &skate3_sim::SimConfig {
+            difficulty: config.difficulty,
+            map: config.map.as_ref(),
+            spawn_offset: config.multiplayer.spawn_offset,
+        },
+        &mut stage,
+    ) {
+        Ok(sim) => sim,
         Err(error) => {
             eprintln!("{error}");
             return Err(bevy::app::AppExit::error());
@@ -299,13 +229,15 @@ fn load() -> Result<Loaded, bevy::app::AppExit> {
         eprintln!("SKATE_ASSETS_READY");
         return Err(bevy::app::AppExit::Success);
     }
+    // The app keeps the parts as separate resources (see physics.rs).
+    let parts = sim.into_parts();
     Ok(Loaded {
         config,
-        manifest,
-        graphs,
-        physics,
-        skater,
-        controls,
+        manifest: bundle.into_manifest(),
+        graphs: graph_runtime::StockGraphs(parts.graphs),
+        physics: physics::GamePhysics(parts.physics),
+        skater: physics::SkaterRuntime(parts.skater),
+        controls: physics::PlayerControls(parts.controls),
     })
 }
 
@@ -415,7 +347,3 @@ fn run_retail(pump: Option<&mut dyn FnMut()>) -> bevy::app::AppExit {
     drop(_startup);
     app.run()
 }
-
-#[cfg(all(test, feature = "retail"))]
-#[path = "tests/action_host.rs"]
-mod action_host_tests;

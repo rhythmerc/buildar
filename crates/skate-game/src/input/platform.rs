@@ -1,21 +1,9 @@
 //! Windows device transport. Raw signed axes/trigger bytes reach the TU3
 //! converter without Bevy/gilrs deadzones or normalized-axis reconstruction.
+#[allow(unused_imports)]
 use skate_core::input::xbox::XboxState;
 
-pub(crate) struct DevicePacket {
-    pub number: u32,
-    pub state: XboxState,
-    pub subtype: u8,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DeviceError {
-    Disconnected,
-    State(u32),
-    Capabilities(u32),
-    #[cfg(not(windows))]
-    UnsupportedPlatform,
-}
+pub(crate) use skate3_sim::input::device::{DeviceError, DevicePacket};
 
 /// Device identity is metadata; raw input is still sampled every host frame.
 /// Refresh periodically as well as after errors, so hot swaps cannot leave a

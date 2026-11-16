@@ -37,7 +37,7 @@ dev-dynamic = ["bevy/dynamic_linking"]
 # Skate 3 data, and its importer. The GitHub builds have it; the store build (crates/sk8-quest) is
 # built without it, so none of that code (nor the crates it needs) is in that app.
 retail = [
-    "dep:tracing-log", "dep:skate-core", "dep:skate-data", "dep:skate-audio-formats",
+    "dep:tracing-log", "dep:skate3-sim", "dep:skate-core", "dep:skate-data", "dep:skate-audio-formats",
     "dep:skate-audio-core", "dep:half", "dep:skate-mods", "dep:skate-vehicles", "dep:skate-net",
     "dep:blake3", "dep:image", "dep:zip", "zip/deflate-flate2-zlib-rs",
 ]
@@ -55,6 +55,8 @@ bevy = { workspace = true, features = ["jpeg", "trace", "debug"] }
 tracing-log = { version = "0.2", optional = true }
 # (the controllers' shapes come from the headset as glTF: xr::controller_shapes)
 gltf = { version = "1.4", default-features = false, optional = true }
+# The Bevy-free Skate 3 simulation (crates/skate3/sim).
+skate3-sim = { path = "../skate3/sim", optional = true }
 skate-core = { workspace = true, optional = true }
 skate-data = { workspace = true, optional = true }
 skate-audio-formats = { workspace = true, optional = true }

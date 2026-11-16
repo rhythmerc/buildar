@@ -250,16 +250,7 @@ pub(crate) fn attached_root(v: &Vehicles, peer: u64) -> Option<Transform> {
         })
 }
 
-pub(crate) struct CollisionShape {
-    pub position: [f32; 3],
-    pub rotation: [f32; 4],
-    pub velocity: [f32; 3],
-    pub angular: [f32; 3],
-    pub half: [f32; 3],
-    pub offset: [f32; 3],
-    pub rounding: f32,
-    pub mass: f32,
-}
+pub(crate) use crate::physics::network::CollisionShape;
 pub(crate) fn collision_shapes(v: &Vehicles) -> Vec<CollisionShape> {
     v.simulation
         .vehicles
