@@ -83,6 +83,21 @@ fn apply_world(
         return;
     }
     *applied = Some(world.revision);
+    let (quads, triangles, edges, pieces) = surfaces(&world);
+    if let Err(e) = physics.set_real_surfaces(quads, triangles, edges, pieces) {
+        error!("AR collision rebuild failed: {e}");
+        return;
+    }
+    let rails = rails(&world);
+    if let Err(e) = physics.set_grind_rails(&rails, &mut skater) {
+        error!("AR grind rails rebuild failed: {e}");
+    }
+}
+
+pub(crate) type Surfaces = (Vec<[Vector3; 4]>, Vec<[Vector3; 3]>, Vec<(Vector3, Vector3)>, Vec<PlacedSurfaces>);
+
+/// What `set_real_surfaces` is given for `world`.
+pub(crate) fn surfaces(world: &ArWorld) -> Surfaces {
     let quads = world.room_quads.iter().map(|q| q.map(v)).collect();
     let triangles = world.room_triangles.iter().map(|t| t.map(v)).collect();
     let edges = world.room_edges.iter().map(|&(a, b)| (v(a), v(b))).collect();
@@ -95,14 +110,12 @@ fn apply_world(
             edges: p.edges.iter().map(|&(a, b)| (v(a), v(b))).collect(),
         })
         .collect();
-    if let Err(e) = physics.set_real_surfaces(quads, triangles, edges, pieces) {
-        error!("AR collision rebuild failed: {e}");
-        return;
-    }
-    let rails: Vec<Vec<Vector3>> = world.rails.iter().map(|r| r.iter().map(|&p| v(p)).collect()).collect();
-    if let Err(e) = physics.set_grind_rails(&rails, &mut skater) {
-        error!("AR grind rails rebuild failed: {e}");
-    }
+    (quads, triangles, edges, pieces)
+}
+
+/// What `set_grind_rails` is given for `world`.
+pub(crate) fn rails(world: &ArWorld) -> Vec<Vec<Vector3>> {
+    world.rails.iter().map(|r| r.iter().map(|&p| v(p)).collect()).collect()
 }
 
 fn teleport(mut requests: MessageReader<TeleportSkater>, skater: Option<ResMut<SkaterRuntime>>) {

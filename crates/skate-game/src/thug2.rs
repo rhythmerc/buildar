@@ -365,7 +365,7 @@ fn draw_hud(
 
 /// Our metres as the game's units: `scale` is the world size ([`Tuning::scale`]: how much bigger the room is to the
 /// game than it is to the player).
-fn to_game(p: Vec3, scale: f32) -> [f32; 3] {
+pub(crate) fn to_game(p: Vec3, scale: f32) -> [f32; 3] {
     (p * t2::INCHES_PER_METRE * scale + OFFSET).to_array()
 }
 

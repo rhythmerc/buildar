@@ -171,16 +171,8 @@ pub(crate) fn apply_ar_world(
     }
     *applied = world.revision;
     let mut grid = Grid::default();
-    for t in world.room() {
-        grid.add(t, SURFACE_GROUND);
-    }
-    for p in &world.pieces {
-        for &q in &p.quads {
-            grid.add_quad(q, SURFACE_WOOD);
-        }
-        for &q in &p.rail_quads {
-            grid.add_quad(q, SURFACE_METAL);
-        }
+    for (t, surface) in collision_faces(&world) {
+        grid.add(t, surface);
     }
     sim.set_collision(grid, &world.rails);
     info!(
@@ -189,6 +181,22 @@ pub(crate) fn apply_ar_world(
         world.rails.len(),
         world.revision
     );
+}
+
+/// The AR world's faces as the engine's collision is given them, in order: each triangle and its surface.
+#[cfg(feature = "xr")]
+pub(crate) fn collision_faces(world: &crate::xr::link::ArWorld) -> Vec<([Vec3; 3], i32)> {
+    let mut out: Vec<([Vec3; 3], i32)> = world.room().map(|t| (t, SURFACE_GROUND)).collect();
+    let mut quad = |[a, b, c, d]: [Vec3; 4], surface: i32| out.extend([([a, b, c], surface), ([a, c, d], surface)]);
+    for p in &world.pieces {
+        for &q in &p.quads {
+            quad(q, SURFACE_WOOD);
+        }
+        for &q in &p.rail_quads {
+            quad(q, SURFACE_METAL);
+        }
+    }
+    out
 }
 
 #[cfg(feature = "xr")]

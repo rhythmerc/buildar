@@ -17,6 +17,10 @@ mod retail;
 #[cfg(feature = "retail")]
 pub(crate) use retail::RetailLinkPlugin;
 
+#[cfg(all(test, feature = "retail", feature = "thug2"))]
+#[path = "stage_parity.rs"]
+mod parity;
+
 pub(crate) struct LinkPlugin;
 
 impl Plugin for LinkPlugin {

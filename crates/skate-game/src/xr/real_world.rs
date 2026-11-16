@@ -129,15 +129,10 @@ fn rebuild_collision(
     let holes: Vec<[Vec3; 4]> = sunk.iter().map(|(_, hole)| *hole).collect();
     let (room_quads, room_triangles) = open_over(room_quads, room_triangles, &holes, HOLE_REACH_M * root.scale.x);
     let room_edges: Vec<(Vec3, Vec3)> = real_edges.iter().map(|&(a, b)| (to_world(a), to_world(b))).collect();
-    // Table and furniture tops are grindable ledges.
-    let mut rails: Vec<Vec<Vec3>> = room_edges.iter().map(|&(a, b)| vec![a, b]).collect();
-    let mut pieces = Vec::with_capacity(placed.items.len());
     let mut sound = SurfaceHints::default();
     for item in &placed.items {
         let at = item.world_transform(&root, placed.park_scale);
-        let local = |p: Vec3| at.transform_point(p);
         let geometry = item.geometry();
-        rails.extend(geometry.rails.iter().map(|r| r.iter().map(|&p| local(p)).collect()));
         // Rails, handrails and ramp copings are metal; ramps and boxes are
         // wood unless they are made of concrete or brick; stairs roll like
         // the concrete floor.
@@ -168,24 +163,12 @@ fn rebuild_collision(
                 sound.wood_boxes.push((min, max));
             }
         }
-        pieces.push(PieceSurfaces {
-            quads: geometry.quads.iter().map(|q| q.map(local)).collect(),
-            rail_quads: geometry.rail_quads.iter().map(|q| q.map(local)).collect(),
-            edges: geometry.edges.iter().map(|&(a, b)| (local(a), local(b))).collect(),
-        });
     }
-    let piece_count = pieces.len();
-    let rail_count = rails.len();
     let revision = world.revision + 1;
-    *world = ArWorld {
-        revision,
-        room_quads,
-        room_triangles,
-        holes: sunk,
-        room_edges,
-        pieces,
-        rails,
-    };
+    let pieces = placed.items.iter().map(|item| (item.id, item.world_transform(&root, placed.park_scale), item.geometry()));
+    *world = assemble(revision, room_quads, room_triangles, sunk, room_edges, pieces);
+    let piece_count = world.pieces.len();
+    let rail_count = world.rails.len();
     if let Some(mut hints) = hints {
         *hints = sound;
     }
@@ -199,6 +182,31 @@ fn rebuild_collision(
         settings.mesh.collide,
         started.elapsed().as_secs_f32() * 1000.0
     );
+}
+
+/// The world the engines ride, from the room (world space, opened over the sunk pieces already) and the placed
+/// pieces (id, where, shape).
+pub(crate) fn assemble(
+    revision: u64,
+    room_quads: Vec<[Vec3; 4]>,
+    room_triangles: Vec<[Vec3; 3]>,
+    holes: Vec<(u64, [Vec3; 4])>,
+    room_edges: Vec<(Vec3, Vec3)>,
+    placed: impl Iterator<Item = (u64, Transform, super::build::pieces::PieceGeometry)>,
+) -> ArWorld {
+    // Table and furniture tops are grindable ledges.
+    let mut rails: Vec<Vec<Vec3>> = room_edges.iter().map(|&(a, b)| vec![a, b]).collect();
+    let mut pieces = Vec::new();
+    for (_, at, geometry) in placed {
+        let local = |p: Vec3| at.transform_point(p);
+        rails.extend(geometry.rails.iter().map(|r| r.iter().map(|&p| local(p)).collect()));
+        pieces.push(PieceSurfaces {
+            quads: geometry.quads.iter().map(|q| q.map(local)).collect(),
+            rail_quads: geometry.rail_quads.iter().map(|q| q.map(local)).collect(),
+            edges: geometry.edges.iter().map(|&(a, b)| (local(a), local(b))).collect(),
+        });
+    }
+    ArWorld { revision, room_quads, room_triangles, holes, room_edges, pieces, rails }
 }
 
 /// The height a sunk piece's rim belongs at: the lowest of the level faces
