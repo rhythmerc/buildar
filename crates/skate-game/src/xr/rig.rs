@@ -54,16 +54,14 @@ pub(crate) fn heading(rotation: Quat) -> f32 {
 
 pub(crate) struct RigPlugin(pub XrOptions);
 
+/// Where in the game world the room's floor is put, if not at its origin: inserted before the XR layer by the app
+/// that builds it (Skate 3's: the map's spawn, which every engine then shares). Without it, y = 0.
+#[derive(Resource, Clone, Copy, Debug)]
+pub(crate) struct WorldOrigin(pub Vec3);
+
 impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
-        // The clean tier has no game config: its world floor is y = 0.
-        #[cfg(feature = "retail")]
-        let world_origin = app
-            .world()
-            .get_resource::<crate::config::Config>()
-            .map_or(Vec3::ZERO, spawn_ground);
-        #[cfg(not(feature = "retail"))]
-        let world_origin = Vec3::ZERO;
+        let world_origin = app.world().get_resource::<WorldOrigin>().map_or(Vec3::ZERO, |o| o.0);
         app.insert_resource(Rig {
             scale: self.0.scale,
             world_origin,
@@ -73,15 +71,6 @@ impl Plugin for RigPlugin {
             PostUpdate,
             apply_root.before(bevy::transform::TransformSystems::Propagate),
         );
-    }
-}
-
-#[cfg(feature = "retail")]
-fn spawn_ground(config: &crate::config::Config) -> Vec3 {
-    match &config.map {
-        Some(map) => Vec3::from_array(map.spawn),
-        // The test course's landing-floor height sits on the real floor.
-        None => Vec3::new(0.0, crate::physics::ground::FLOOR_HEIGHT, 0.0),
     }
 }
 

@@ -45,9 +45,9 @@ const TAP_SECONDS: f32 = 0.35;
 const STICK: f32 = 0.6;
 const REPEAT_DELAY: f32 = 0.35;
 const REPEAT_EVERY: f32 = 0.09;
-pub(crate) const UI_FONT: &str = "embedded://skate_game/clean/assets/fonts/Montserrat-Italic.ttf";
+pub(crate) const UI_FONT: &str = crate::fonts::HEADING;
 /// The menus' running text (variable weight).
-pub(crate) const UI_BODY_FONT: &str = "embedded://skate_game/clean/assets/fonts/Inter.ttf";
+pub(crate) const UI_BODY_FONT: &str = crate::fonts::BODY;
 
 pub(crate) type PageId = &'static str;
 
@@ -350,7 +350,7 @@ pub(crate) struct XrUiPlugin;
 
 impl Plugin for XrUiPlugin {
     fn build(&self, app: &mut App) {
-        crate::clean::embed_font(app);
+        crate::fonts::embed(app);
         #[cfg(feature = "retail")]
         app.add_plugins(import::ImportPlugin);
         let mut providers = UiProviders::default();
@@ -1122,7 +1122,7 @@ mod tests {
                 .disable::<bevy::winit::WinitPlugin>()
                 .set(WindowPlugin { primary_window: None, exit_condition: bevy::window::ExitCondition::DontExit, ..default() }),
         );
-        crate::clean::embed_font(&mut app);
+        crate::fonts::embed(&mut app);
         let image = Image::new_target_texture(super::super::panel::WIDTH_PX, super::super::panel::HEIGHT_PX, TextureFormat::Rgba8UnormSrgb, None);
         let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
         let camera = app

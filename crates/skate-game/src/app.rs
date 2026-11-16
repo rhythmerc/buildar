@@ -125,6 +125,12 @@ pub(crate) fn build(
         .insert_resource(skater);
     #[cfg(feature = "xr")]
     if let Some(options) = xr {
+        // (the room's floor at the map's spawn: the test course's landing floor without a map)
+        let origin = match &app.world().resource::<crate::config::Config>().map {
+            Some(map) => Vec3::from_array(map.spawn),
+            None => Vec3::new(0.0, crate::physics::ground::FLOOR_HEIGHT, 0.0),
+        };
+        app.insert_resource(crate::xr::rig::WorldOrigin(origin));
         app.add_plugins(crate::xr::XrPlugin { options, files: xr_files.clone() });
         // In the headset the faithful port is one engine of three: switched to and from while the app runs.
         crate::engines::add_engine_inferred(&mut app, crate::engines::Engine::Skate3, |_| Ok(()), |app| {

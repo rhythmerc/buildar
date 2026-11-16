@@ -34,14 +34,6 @@ pub(crate) struct Options {
     pub files: std::path::PathBuf,
 }
 
-/// The HUD and menu face (Montserrat, OFL), at
-/// `embedded://skate_game/clean/assets/fonts/Montserrat-Italic.ttf`. The
-/// retail tier's headset menu uses it too.
-pub(crate) fn embed_font(app: &mut App) {
-    bevy::asset::embedded_asset!(app, "assets/fonts/Montserrat-Italic.ttf");
-    bevy::asset::embedded_asset!(app, "assets/fonts/Inter.ttf");
-}
-
 /// Whether this launch builds the clean app (no Skate 3 data to load).
 #[cfg(feature = "retail")]
 pub(crate) fn wanted() -> bool {
@@ -149,7 +141,7 @@ fn build(options: Options) -> App {
         focused_mode: bevy::winit::UpdateMode::Continuous,
         unfocused_mode: bevy::winit::UpdateMode::Continuous,
     });
-    embed_font(&mut app);
+    crate::fonts::embed(&mut app);
 
     let xr = options.xr.is_some();
     #[cfg(feature = "xr")]

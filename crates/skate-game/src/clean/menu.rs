@@ -863,8 +863,8 @@ pub(crate) struct HudText;
 pub(crate) struct TrickName;
 #[derive(Component)]
 pub(crate) struct TrickPoints;
-/// The HUD's face: a heavy italic sans (Montserrat, OFL - assets/fonts/OFL.txt).
-const HUD_FONT: &str = "embedded://skate_game/clean/assets/fonts/Montserrat-Italic.ttf";
+/// The HUD's face: a heavy italic sans (Montserrat).
+const HUD_FONT: &str = crate::fonts::HEADING;
 
 /// The trick readout's text, for the headset's corner readout (the desktop
 /// draws it itself).

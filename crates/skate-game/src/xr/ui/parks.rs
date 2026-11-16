@@ -1367,7 +1367,7 @@ mod tests {
                 .disable::<bevy::winit::WinitPlugin>()
                 .set(WindowPlugin { primary_window: None, exit_condition: bevy::window::ExitCondition::DontExit, ..default() }),
         );
-        crate::clean::embed_font(&mut app);
+        crate::fonts::embed(&mut app);
         let image = Image::new_target_texture(crate::xr::panel::WIDTH_PX, crate::xr::panel::HEIGHT_PX, TextureFormat::Rgba8UnormSrgb, None);
         let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
         let camera = app

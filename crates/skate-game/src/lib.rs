@@ -27,6 +27,7 @@ mod reverb;
 #[cfg(feature = "retail")]
 mod camera;
 mod config;
+mod fonts;
 #[cfg(feature = "retail")]
 mod crash_context;
 #[cfg(feature = "retail")]
