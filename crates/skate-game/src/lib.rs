@@ -51,12 +51,6 @@ mod logging;
 #[cfg(feature = "retail")]
 mod map_transition;
 #[cfg(feature = "retail")]
-mod modding;
-#[cfg(feature = "retail")]
-mod multiplayer;
-#[cfg(feature = "retail")]
-mod net_snapshot;
-#[cfg(feature = "retail")]
 mod performance;
 #[cfg(feature = "retail")]
 mod physics;
@@ -182,11 +176,9 @@ fn load() -> Result<Loaded, bevy::app::AppExit> {
         }
     };
     eprintln!(
-        "REPORT_META startup=map_fingerprint:{:016x} difficulty:{} multiplayer_requested:{} custom_appearance:{} renderer:Vulkan",
+        "REPORT_META startup=map_fingerprint:{:016x} difficulty:{} renderer:Vulkan",
         config.map_fingerprint,
         config.difficulty.key(),
-        config.multiplayer.host.is_some() || config.multiplayer.direct.is_some(),
-        config.multiplayer.appearance.is_some()
     );
     // The sim reads the bundle and builds itself; each stage is announced as before.
     let mut stage = |name: &str| eprintln!("REPORT_META stage={name}");
@@ -202,7 +194,7 @@ fn load() -> Result<Loaded, bevy::app::AppExit> {
         &skate3_sim::SimConfig {
             difficulty: config.difficulty,
             map: config.map.as_ref(),
-            spawn_offset: config.multiplayer.spawn_offset,
+            spawn_offset: 0.0,
         },
         &mut stage,
     ) {

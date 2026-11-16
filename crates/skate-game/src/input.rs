@@ -74,29 +74,15 @@ impl Plugin for InputPlugin {
 
 pub(crate) fn poll_controllers(
     mut input: ResMut<ControllerInput>,
-    config: Res<crate::config::Config>,
-    net: Option<Res<crate::multiplayer::Multiplayer>>,
-    windows: Query<&Window>,
     external: Option<Res<ExternalPad>>,
     mut capabilities: Local<[platform::CapabilityCache; 4]>,
 ) {
     let previous = input.status;
-    let focused = windows.iter().any(|w| w.focused);
-    let active = net.is_some_and(|n| n.active());
     input.collect(std::array::from_fn(|slot| {
         if slot == 0
             && let Some(external) = &external
         {
             external.packet()
-        } else if active
-            && ((!focused && config.multiplayer.controller.is_none())
-                || config
-                    .multiplayer
-                    .controller
-                    .is_some_and(|selected| selected as usize != slot))
-        {
-            capabilities[slot].invalidate();
-            Err(platform::DeviceError::Disconnected)
         } else {
             platform::poll_cached(slot, &mut capabilities[slot])
         }

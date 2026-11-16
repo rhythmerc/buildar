@@ -100,8 +100,6 @@ pub(crate) struct Menu {
     status: String,
     maps: Vec<crate::map_library::Entry>,
     selected_map: usize,
-    multiplayer: bool,
-    browser: bool,
     daylight: bool,
 }
 impl Menu {
@@ -288,8 +286,6 @@ fn setup(
         status: String::new(),
         maps,
         selected_map,
-        multiplayer: false,
-        browser: false,
         daylight: false,
     });
 }
@@ -310,10 +306,6 @@ pub(crate) fn interact(
     mut transition: ResMut<crate::map_transition::MapTransition>,
     mut customiser: ResMut<crate::customiser::Customiser>,
     mut custom_models: ResMut<crate::custom_models::CustomModels>,
-    (mut mods, panel): (
-        ResMut<crate::modding::ModMenu>,
-        Res<crate::modding::EnabledPanel>,
-    ),
     nav: Res<crate::customiser::Navigation>,
     mut physics: ResMut<crate::physics::GamePhysics>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -321,71 +313,37 @@ pub(crate) fn interact(
     mut time: ResMut<Time<Virtual>>,
     buttons: Query<(&Interaction, &MenuRow), Changed<Interaction>>,
     mut exit: MessageWriter<AppExit>,
-    mut net: ResMut<crate::multiplayer::Multiplayer>,
-    mut typing: MessageReader<bevy::input::keyboard::KeyboardInput>,
 ) {
     if transition.busy() {
         menu.open = true;
         time.pause();
         return;
     }
-    if mods.open || customiser.open || custom_models.open
-    {
+    if customiser.open || custom_models.open {
         return;
     }
     if keys.just_pressed(KeyCode::Escape) || nav.pressed & 0x10 != 0 {
         menu.open = !menu.open;
     }
     let mut action = None;
-    for event in typing.read() {
-        if !menu.open
-            || !menu.multiplayer
-            || menu.browser
-            || menu.selected != 3
-            || !event.state.is_pressed()
-        {
-            continue;
-        }
-        if event.key_code == KeyCode::Backspace {
-            net.join_code.pop();
-        }
-        if let Some(text) = &event.text {
-            for ch in text.chars().filter(|c| c.is_ascii_hexdigit() || *c == '-') {
-                if net.join_code.len() < 40 {
-                    net.join_code.push(ch);
-                }
-            }
-        }
-    }
     if menu.open {
-        let rows = if menu.daylight {
-            4
-        } else if menu.multiplayer {
-            11
-        } else {
-            17
-        };
-        if !panel.focused {
-            if keys.just_pressed(KeyCode::ArrowUp) || nav.pressed & 1 != 0 {
-                menu.selected = (menu.selected + rows - 1) % rows;
-            }
-            if keys.just_pressed(KeyCode::ArrowDown) || nav.pressed & 2 != 0 {
-                menu.selected = (menu.selected + 1) % rows;
-            }
-            if keys.just_pressed(KeyCode::ArrowLeft) || nav.pressed & 4 != 0 {
-                action = Some((menu.selected, -1));
-            }
-            if keys.just_pressed(KeyCode::ArrowRight)
-                || keys.just_pressed(KeyCode::Enter)
-                || nav.pressed & (8 | 0x1000) != 0
-            {
-                action = Some((menu.selected, 1));
-            }
+        let rows = if menu.daylight { 4 } else { 17 };
+        if keys.just_pressed(KeyCode::ArrowUp) || nav.pressed & 1 != 0 {
+            menu.selected = (menu.selected + rows - 1) % rows;
+        }
+        if keys.just_pressed(KeyCode::ArrowDown) || nav.pressed & 2 != 0 {
+            menu.selected = (menu.selected + 1) % rows;
+        }
+        if keys.just_pressed(KeyCode::ArrowLeft) || nav.pressed & 4 != 0 {
+            action = Some((menu.selected, -1));
+        }
+        if keys.just_pressed(KeyCode::ArrowRight)
+            || keys.just_pressed(KeyCode::Enter)
+            || nav.pressed & (8 | 0x1000) != 0
+        {
+            action = Some((menu.selected, 1));
         }
         for (interaction, row) in &buttons {
-            if panel.dragging() {
-                continue;
-            }
             if *interaction == Interaction::Pressed {
                 menu.selected = row.0;
                 action = Some((row.0, 1));
@@ -421,53 +379,6 @@ pub(crate) fn interact(
                     menu.selected = 16;
                 }
             }
-        } else if menu.browser {
-            match row {
-                0 => net.browse(0),
-                1..=5 => net.join_row(row - 1),
-                6 => {
-                    let page = net.browser_page.saturating_sub(1);
-                    net.browse(page);
-                }
-                7 => {
-                    let page = net.browser_page + 1;
-                    if page * 5 < net.browser_total {
-                        net.browse(page);
-                    }
-                }
-                8 => menu.open = false,
-                9 => {
-                    exit.write(AppExit::Success);
-                }
-                10 => {
-                    menu.browser = false;
-                    menu.selected = 6;
-                }
-                _ => {}
-            }
-        } else if menu.multiplayer {
-            match row {
-                0 => net.local(true),
-                1 => net.local(false),
-                2 => net.steam(true),
-                3 => {}
-                4 => net.steam(false),
-                5 => net.leave(),
-                6 => {
-                    net.browse(0);
-                    menu.browser = true;
-                    menu.selected = 0;
-                }
-                8 => menu.open = false,
-                9 => {
-                    exit.write(AppExit::Success);
-                }
-                10 => {
-                    menu.multiplayer = false;
-                    menu.selected = 11;
-                }
-                _ => {}
-            }
         } else {
             match row {
                 0 => {
@@ -501,13 +412,8 @@ pub(crate) fn interact(
                     menu.status = "Choose Load map to switch".into();
                 }
                 7 => {
-                    if net.active() {
-                        menu.status = "Leave multiplayer before switching maps".into();
-                    } else {
-                        net.leave();
-                        transition.request(menu.maps[menu.selected_map].clone());
-                        menu.status = "Loading map...".into();
-                    }
+                    transition.request(menu.maps[menu.selected_map].clone());
+                    menu.status = "Loading map...".into();
                 }
                 8 => menu.open = false,
                 9 => {
@@ -517,12 +423,7 @@ pub(crate) fn interact(
                     custom_models.request_stock();
                     customiser.begin();
                 }
-                11 => {
-                    menu.multiplayer = true;
-                    menu.selected = 0;
-                }
                 12 => custom_models.begin(),
-                15 => mods.begin(),
                 16 => {
                     menu.daylight = true;
                     menu.selected = 0;
@@ -531,7 +432,7 @@ pub(crate) fn interact(
                 _ => {}
             }
         }
-        if (row < 5 && !menu.multiplayer && !menu.daylight && !day_action)
+        if (row < 5 && !menu.daylight && !day_action)
             || (day_action && row < 3)
         {
             let save = (|| -> Result<(), String> {
@@ -548,7 +449,7 @@ pub(crate) fn interact(
             };
         }
     }
-    if menu.open && !net.active() {
+    if menu.open {
         time.pause();
     } else {
         time.unpause();
@@ -614,8 +515,6 @@ fn labels(
     time: Res<Time<Real>>,
     customiser: Res<crate::customiser::Customiser>,
     custom_models: Res<crate::custom_models::CustomModels>,
-    mods: Res<crate::modding::ModMenu>,
-    net: Res<crate::multiplayer::Multiplayer>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut root: Single<&mut Node, With<MenuRoot>>,
     mut labels: Query<(&MenuLabel, &mut Text), Without<StatusLabel>>,
@@ -626,7 +525,7 @@ fn labels(
     >,
 ) {
     root.display =
-        if menu.open && !mods.open && !customiser.open && !custom_models.open {
+        if menu.open && !customiser.open && !custom_models.open {
             Display::Flex
         } else {
             Display::None
@@ -664,51 +563,6 @@ fn labels(
                 },
                 3 => "Back".into(),
                 _ => String::new(),
-            }
-        } else if menu.browser {
-            match label.0 {
-                0 => "Refresh public Steam lobbies".into(),
-                1..=5 => net
-                    .browser_rows
-                    .get(label.0 - 1)
-                    .map(|r| {
-                        format!(
-                            "{} | {}/{} | #{}{}",
-                            r.map,
-                            r.players,
-                            r.capacity,
-                            r.id % 100000,
-                            if r.compatible {
-                                ""
-                            } else {
-                                " | incompatible physics/protocol"
-                            }
-                        )
-                    })
-                    .unwrap_or_else(|| "--".into()),
-                6 => "Previous page".into(),
-                7 => "Next page".into(),
-                8 => "Resume".into(),
-                9 => "Quit game".into(),
-                _ => "Back to multiplayer".into(),
-            }
-        } else if menu.multiplayer {
-            match label.0 {
-                0 => "Host local test (no Steam)".into(),
-                1 => "Join local test (no Steam)".into(),
-                2 => "Host via Steam / Spacewar".into(),
-                3 => format!(
-                    "Join code: {}{}",
-                    net.join_code,
-                    if menu.selected == 3 { "_" } else { "" }
-                ),
-                4 => "Join via Steam / Spacewar".into(),
-                5 => "Leave multiplayer".into(),
-                6 => "Browse public Steam lobbies".into(),
-                7 => "Solo / local play does not require Steam".into(),
-                8 => "Resume".into(),
-                9 => "Quit game".into(),
-                _ => "Back to gameplay & graphics".into(),
             }
         } else {
             match label.0 {
@@ -753,10 +607,8 @@ fn labels(
                 9 => "Quit game".into(),
                 10 => "Character customiser".into(),
                 12 => "Custom models".into(),
-                13 | 14 => String::new(),
-                15 => "Mods".into(),
-                16 => "Day & night…".into(),
-                _ => "Multiplayer".into(),
+                11 | 13 | 14 | 15 => String::new(),
+                _ => "Day & night…".into(),
             }
         };
     }
@@ -766,23 +618,11 @@ fn labels(
             ["|", "/", "-", "\\"][(time.elapsed_secs() * 4.) as usize % 4],
             transition.label()
         )
-    } else if menu.browser {
-        net.browser_status.clone()
-    } else if menu.multiplayer {
-        format!(
-            "{}{}",
-            net.status,
-            if net.host_code.is_empty() {
-                String::new()
-            } else {
-                format!("\nYour connection code: {}", net.host_code)
-            }
-        )
     } else {
         menu.status.clone()
     };
     for (row, interaction, mut color, mut node) in &mut buttons {
-        node.display = if (menu.daylight && row.0 >= 4) || (menu.multiplayer && row.0 >= 11) {
+        node.display = if menu.daylight && row.0 >= 4 {
             Display::None
         } else {
             Display::Flex
@@ -830,8 +670,6 @@ mod tests {
                 path: PathBuf::new(),
                 supported_msaa: vec![1, 2, 4, 8],
                 status: String::new(),
-                multiplayer: false,
-                browser: false,
                 daylight: false,
                 maps: vec![crate::map_library::Entry {
                     label: "Test world".into(),

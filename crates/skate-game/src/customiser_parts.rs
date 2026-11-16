@@ -499,26 +499,6 @@ impl Parts {
         material.extension = extension;
         Some(material)
     }
-    pub(crate) fn material_ready(&self, mid: &str, server: &AssetServer) -> bool {
-        self.materials.get(mid).is_some_and(|(_, images)| {
-            images
-                .iter()
-                .all(|h| server.is_loaded_with_dependencies(h.id()))
-        })
-    }
-    pub(crate) fn tattoos_ready(&self, profile: &Value, server: &AssetServer) -> bool {
-        profile["tattoos"]
-            .as_object()
-            .into_iter()
-            .flat_map(|v| v.values())
-            .all(|v| {
-                v["id"].as_str().is_none_or(|id| {
-                    self.tattoos
-                        .get(id)
-                        .is_some_and(|h| server.is_loaded_with_dependencies(h.id()))
-                })
-            })
-    }
     pub fn warm(&mut self, id: &str, server: &AssetServer, materials: &mut Assets<SkaterMaterial>) {
         if self.materials.contains_key(id) {
             return;

@@ -70,27 +70,6 @@ struct AudioObservationCursor(skate3_sim::physics::AudioObservationCursor);
 #[derive(Resource, Default)]
 pub(crate) struct OffboardView(pub Option<[[f32; 3]; 3]>);
 
-/// A mod's trainer tuning as the sim's trainer multipliers.
-pub(crate) fn trainer(t: skate_mods::TrainerTuning) -> skate3_sim::physics::Trainer {
-    skate3_sim::physics::Trainer {
-        pop: t.pop,
-        grind_pop: t.grind_pop,
-        push_speed: t.push_speed,
-        push_power: t.push_power,
-        braking: t.braking,
-        steering: t.steering,
-        wobble: t.wobble,
-        offboard_jump: t.offboard_jump,
-        grip: t.grip,
-        turn_power: t.turn_power,
-        manual_drag: t.manual_drag,
-        hold_fakie: t.hold_fakie,
-        endless_flips: t.endless_flips,
-        endless_flip_max: t.endless_flip_max,
-        endless_air_check: t.endless_air_check,
-    }
-}
-
 pub(crate) struct PhysicsPlugin;
 impl Plugin for PhysicsPlugin {
     fn build(&self, app: &mut App) {
@@ -140,7 +119,6 @@ fn sample(
 /// `SimulationSet::Physics`: one sim tick. The sim sets its own cadence (camera slow-mo changes
 /// the clock), so the fixed timestep is reapplied from it after every tick.
 fn advance(
-    vehicles: Res<crate::modding::vehicles::Vehicles>,
     mut physics: ResMut<GamePhysics>,
     mut skater: ResMut<SkaterRuntime>,
     mut controls: ResMut<PlayerControls>,
@@ -151,7 +129,7 @@ fn advance(
     mut exit: MessageWriter<AppExit>,
     mut performance: Option<ResMut<crate::performance::Performance>>,
 ) {
-    if physics.failed || vehicles.occupied() {
+    if physics.failed {
         return;
     }
     let timer = performance.as_ref().map(|_| std::time::Instant::now());

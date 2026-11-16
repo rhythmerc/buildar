@@ -282,13 +282,7 @@ fn bind(
         Option<&RenderLayers>,
     )>,
     parents: Query<&ChildOf>,
-    players: Query<
-        (),
-        Or<(
-            With<crate::world::PlayerRoot>,
-            With<crate::multiplayer::appearance::RemoteCharacter>,
-        )>,
-    >,
+    players: Query<(), With<crate::world::PlayerRoot>>,
     parts: Query<(), With<crate::customiser_parts::PartRoot>>,
     native: Query<&crate::custom_models::NativeModelRoot>,
     imports: Query<(), With<crate::custom_models::CustomModelRoot>>,
@@ -622,7 +616,6 @@ mod tests {
             check_assets: false,
             start_paused: false,
             xr: None,
-            multiplayer: Default::default(),
             map_fingerprint: 0,
         });
         world.insert_resource(crate::retail_render::RetailScene(false));

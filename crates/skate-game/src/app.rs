@@ -98,13 +98,6 @@ pub(crate) fn build(
         .is_some_and(|map| crate::retail_render::RetailScene::for_map(map));
     let mut app = App::new();
     crate::custom_models::register_source(&mut app);
-    app.register_asset_source(
-        "mods",
-        bevy::asset::io::AssetSourceBuilder::platform_default(
-            &crate::modding::package_root().to_string_lossy(),
-            None,
-        ),
-    );
     // Bevy's Android default `AssetReader` only ever reads from inside the
     // APK's bundled `assets/` (via `AssetManager`); it ignores
     // `AssetPlugin::file_path` entirely. The Quest build instead pushes a
@@ -130,11 +123,7 @@ pub(crate) fn build(
             })
             .set(WindowPlugin {
                 primary_window: Some(Window {
-                    title: config
-                        .multiplayer
-                        .title
-                        .clone()
-                        .unwrap_or_else(|| "Skate 3 Rust Engine".into()),
+                    title: "Skate 3 Rust Engine".into(),
                     resolution: (1280, 800).into(),
                     ..default()
                 }),
@@ -245,9 +234,7 @@ fn add_retail(app: &mut App) {
     ));
     app.add_plugins(crate::customiser::CustomiserPlugin);
     app.add_plugins(crate::custom_models::CustomModelsPlugin);
-    app.add_plugins(crate::modding::ModdingPlugin);
     app.add_plugins(crate::skate_audio::SkateAudioPlugin);
-    app.add_plugins(crate::multiplayer::MultiplayerPlugin);
     app.add_plugins(crate::scoring_hud::ScoringHudPlugin);
 }
 

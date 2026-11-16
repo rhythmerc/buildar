@@ -153,7 +153,6 @@ fn axis(value: f32) -> f32 {
 }
 
 fn controls(
-    vehicles: Res<crate::modding::vehicles::Vehicles>,
     mut replay: ResMut<Replay>,
     mut input: ResMut<crate::input::ControllerInput>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -161,19 +160,12 @@ fn controls(
     motion: Res<bevy::input::mouse::AccumulatedMouseMotion>,
     time: Res<Time<Real>>,
     menu: Option<Res<crate::graphics_menu::Menu>>,
-    net: Option<Res<crate::multiplayer::Multiplayer>>,
 ) {
-    if net.is_some_and(|n| n.active()) {
-        if replay.active {
-            replay.exit();
-        }
-        return;
-    }
     let pad = input.raw_input();
     let pressed = pad.buttons & !replay.previous_buttons;
     replay.previous_buttons = pad.buttons;
     let menu_open = !crate::graphics_menu::gameplay_active(menu);
-    if !menu_open && !vehicles.occupied() {
+    if !menu_open {
         if pressed & SELECT != 0 || keys.just_pressed(KeyCode::F6) {
             if replay.active {
                 replay.exit();
