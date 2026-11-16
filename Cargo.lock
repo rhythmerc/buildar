@@ -4989,7 +4989,6 @@ dependencies = [
  "skate-audio-formats",
  "skate-core",
  "skate-data",
- "skate-net",
  "tracing",
 ]
 

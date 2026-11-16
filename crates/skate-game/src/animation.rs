@@ -450,12 +450,12 @@ pub(crate) fn network_visual(world: &mut World) -> skate_net::packed::PoseState 
     let anchors = crate::physics::network::anchors(world.resource::<SkaterRuntime>());
     let basis = render_basis().inverse();
     skate_net::packed::PoseState {
-        root: crate::physics::network::pose(root.to_matrix()),
+        root: crate::net_snapshot::from_matrix(root.to_matrix()),
         bones: anchors
             .into_iter()
             .map(|i| skate_net::Bone {
                 index: i as u16,
-                pose: crate::physics::network::pose(if locals.contains_key(&i) {
+                pose: crate::net_snapshot::from_matrix(if locals.contains_key(&i) {
                     global(i, &locals, 0) * basis
                 } else {
                     native_matrix(world.resource::<SkaterRuntime>().render_pose[i])

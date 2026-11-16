@@ -61,7 +61,7 @@ pub(crate) fn capture(world: &World) -> Vec<(String, String, Car)> {
                                 Vec3::from_array(body.translation().to_array()),
                             );
                             let t = Transform::from_matrix(
-                                body.inverse() * crate::physics::network::matrix(pose.root),
+                                body.inverse() * crate::net_snapshot::matrix(pose.root),
                             );
                             (t.translation.to_array(), t.rotation.to_array())
                         }),
@@ -279,10 +279,10 @@ pub(super) fn skater_proxies(world: &World, v: &mut Vehicles) {
     if !v.occupied() {
         frames.push((
             0,
-            crate::physics::network::capture_body(
+            crate::net_snapshot::body_state(crate::physics::network::capture_body(
                 world.resource::<crate::physics::GamePhysics>(),
                 world.resource::<crate::physics::SkaterRuntime>(),
-            ),
+            )),
         ));
     }
     let mut live = std::collections::BTreeSet::new();

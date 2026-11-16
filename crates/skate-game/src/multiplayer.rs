@@ -642,7 +642,7 @@ fn prepare(
     for remote in net.remotes.values() {
         if remote.body_at.elapsed() < Duration::from_millis(500) {
             proxies.append(
-                &remote.body,
+                &crate::net_snapshot::sim_body_state(&remote.body),
                 &net.schema,
                 &physics,
                 &skater,
@@ -711,7 +711,7 @@ fn send(
     }
     let now = net.started.elapsed().as_millis() as u64;
     if net.last_body.elapsed() >= Duration::from_millis(49) {
-        let mut state = network::capture_body(&physics, &skater);
+        let mut state = crate::net_snapshot::body_state(network::capture_body(&physics, &skater));
         if let Some(pose) = &vehicles.network_pose {
             state.root = pose.root;
         }
@@ -737,7 +737,7 @@ fn send_pose(
         let pose = vehicles
             .network_pose
             .clone()
-            .unwrap_or_else(|| network::capture_pose(&skater, &net.anchors));
+            .unwrap_or_else(|| crate::net_snapshot::pose_state(network::capture_pose(&skater, &net.anchors)));
         if let Some(p) = Packed::pose(&pose) {
             net.lobby.as_mut().unwrap().publish(packed::POSE, p, now);
         }

@@ -392,7 +392,7 @@ fn globals(bones: &[skate_net::Bone], skin: &RemoteSkins) -> Vec<Mat4> {
     let mut result = vec![None; skin.rest.len()];
     for b in bones {
         if let Some(slot) = result.get_mut(b.index as usize) {
-            *slot = Some(network::matrix(b.pose));
+            *slot = Some(crate::net_snapshot::matrix(b.pose));
         }
     }
     fn visit(i: usize, skin: &RemoteSkins, result: &mut [Option<Mat4>]) -> Mat4 {
@@ -443,7 +443,7 @@ fn present(
             }
             if skin.roots.insert(
                 sample.captured,
-                Transform::from_matrix(network::matrix(sample.pose)),
+                Transform::from_matrix(crate::net_snapshot::matrix(sample.pose)),
             ) {
                 skin.positions.insert(sample.captured, sample.pose.p);
                 skin.clock.observe(0, sample.captured, sample.received);

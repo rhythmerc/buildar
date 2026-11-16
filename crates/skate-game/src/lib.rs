@@ -57,6 +57,8 @@ mod modding;
 #[cfg(feature = "retail")]
 mod multiplayer;
 #[cfg(feature = "retail")]
+mod net_snapshot;
+#[cfg(feature = "retail")]
 mod performance;
 #[cfg(feature = "retail")]
 mod physics;
