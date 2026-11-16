@@ -141,8 +141,15 @@ Both engines can separate the skater from the board: off-board walking, bails, a
   SkaterLink { rider: Option<Frame>, board: Option<Frame>, on_board: bool, grinding: bool, size: f32 }
   ```
 
-  Followers take the rider (falling back to the board). The contact shadow draws one per body that is
-  present. Teleport still puts the rider back on the board.
+  Followers take the rider (falling back to the board). Teleport still puts the rider back on the board.
+- **Both cast contact shadows.** Today only the board does: three fixed soft ellipses (deck and trucks,
+  `xr/contact_shadow.rs` `casters`) placed from `deck`, and the rider casts none.
+  - The board keeps that shadow, cast from the board frame.
+  - The rider's comes from the pose the app already draws: each bone segment (parent to child) becomes a soft
+    ellipse on the surface below, fainter and wider with height. It stays analytic, with no shadow map
+    (directional shadows cost the headset 13 fps).
+  - The engine only says which joints are the board's (`Pose.board_joints`), so they aren't cast twice. This
+    is generic and works for any engine.
 - **For an engine that draws its board as its own model,** `ModelSource` takes a list of models, each with
   its own pose. That costs nothing for one-skeleton engines.
 
