@@ -42,8 +42,6 @@ impl Config {
                 Some("--assets") => {
                     config.asset_root = args.next().ok_or("--assets requires a directory")?.into()
                 }
-                // (the only world there is: Skate 3 has no maps)
-                Some("--test-world") => {}
                 Some("--xr") => {
                     if !cfg!(feature = "xr") {
                         return Err("--xr needs a build with the `xr` feature".into());
@@ -73,7 +71,7 @@ impl Config {
                 }
                 _ => {
                     return Err(format!(
-                        "Unknown argument {arg:?}. Usage: skate3rust [--assets DIRECTORY] [--test-world] [--difficulty easy|normal|hardcore] [--check-assets] [--xr [--xr-scale K]]"
+                        "Unknown argument {arg:?}. Usage: skate3rust [--assets DIRECTORY] [--difficulty easy|normal|hardcore] [--check-assets] [--xr [--xr-scale K]]"
                     ));
                 }
             }
