@@ -80,7 +80,8 @@ impl Import {
         self.files.join("assets").join(GAME_JSON).is_file()
     }
 
-    /// The next launch runs the retail tier.
+    /// An import has just finished: the next launch starts on Skate 3 (`clean::add_xr_engines` reads the mark).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn retail_next(&self) -> bool {
         self.files.join(MARKER).exists()
     }

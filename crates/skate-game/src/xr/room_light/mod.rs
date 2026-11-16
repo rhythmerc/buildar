@@ -451,6 +451,7 @@ fn show(
         (&RoomLamp, &mut PointLight, &mut Transform, &mut Visibility),
         (Without<RoomProbe>, Without<RoomSun>),
     >,
+    mut reported: Local<Option<std::time::Instant>>,
 ) {
     let on = light.preview || settings.as_ref().is_some_and(|s| s.room_light);
     let dt = time.delta_secs().min(0.1);
@@ -475,6 +476,26 @@ fn show(
         ambient.brightness = shown_ambient;
     }
 
+    // (`ROOM LIGHT state ...` every few seconds while on: what lights the park, to find out from a log why it went
+    // dark)
+    if on && reported.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(5)) {
+        *reported = Some(std::time::Instant::now());
+        let own: f32 = own_lights.iter().map(|(l, _)| l.illuminance).sum();
+        let suns: Vec<String> = suns.iter().map(|(_, l, _, v)| format!("{:.0} {v:?}", l.illuminance)).collect();
+        let lamps: Vec<String> = lamps.iter().map(|(_, l, _, v)| format!("{:.0} {v:?}", l.intensity)).collect();
+        let probe_state = probe.single().map(|(v, t, vis)| format!("{:.2} {vis:?} at {:.1} size {:.1}", v.intensity, t.translation, t.scale));
+        let exposure = exposures.iter().next().copied().unwrap_or_default().exposure();
+        let made = light.made.as_ref().map(|(c, _)| format!("level {:.3} mean {:.3}", c.level, c.mean));
+        info!(
+            "ROOM LIGHT state mix {:.2} made {made:?} voxels {} points {} camera {:?} exposure {exposure:.2e} own lights {own:.0} ambient {:.0} suns {suns:?} lamps {lamps:?} probe {probe_state:?} cubes max {:.3}",
+            light.mix,
+            light.voxels,
+            light.points.len(),
+            light.camera,
+            ambient.brightness,
+            light.cubes.iter().flatten().map(|c| c.max_element()).fold(0.0, f32::max),
+        );
+    }
     let Ok((mut volume, mut probe_transform, mut probe_visibility)) = probe.single_mut() else { return };
     let (Some((content, grid_light)), Some(grid)) = (light.made.clone(), light.grid) else {
         set_visibility(&mut probe_visibility, false);

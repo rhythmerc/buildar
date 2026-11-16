@@ -43,6 +43,9 @@ retail = [
 ]
 # OpenXR passthrough mode (`--xr`); the Quest build always enables it.
 xr = ["dep:gltf", "dep:bevy_mod_openxr", "dep:bevy_mod_xr", "dep:openxr", "dep:roomtone-sys", "dep:wgpu", "dep:wgpu-hal", "dep:ash"]
+# THUG2's own engine (thug2-sys: thug2-decomp run headless) as a third engine in the headset, on the player's own
+# game files. Builds the engine with CMake from the thug2-headless and thug2-decomp checkouts (crates/thug2-sys).
+thug2 = ["xr", "dep:thug2-sys"]
 # Desktop XR keeps a mirror window beside the headset view.
 xr-window = ["xr", "bevy_mod_openxr/window_support"]
 
@@ -62,6 +65,7 @@ libloading = "0.8"
 serde.workspace = true
 skate-mods = { path = "../skate-mods", optional = true }
 skate-lite-sys = { path = "../skate-lite-sys" }
+thug2-sys = { path = "../thug2-sys", optional = true }
 # Room light estimation for the passthrough mode (xr::room_light).
 roomtone-sys = { path = "../roomtone-sys", optional = true }
 

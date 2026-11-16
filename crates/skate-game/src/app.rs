@@ -112,37 +112,46 @@ pub(crate) fn build(
     #[cfg(feature = "xr")]
     let xr_files = config.asset_root.parent().unwrap_or(&config.asset_root).to_path_buf();
     app.add_plugins(plugins)
-    .insert_resource(bevy::winit::WinitSettings {
-        focused_mode: bevy::winit::UpdateMode::Continuous,
-        unfocused_mode: bevy::winit::UpdateMode::Continuous,
-    })
-    .insert_resource(crate::skate_audio::player::PlayerAudioAssets(
-        config.asset_root.clone(),
-    ))
-    .insert_resource(config)
-    .insert_resource(crate::retail_render::RetailScene(retail_scene))
-    .insert_resource(assets::AssetManifest(manifest))
-    .insert_resource(graphs)
-    .insert_resource(physics)
-    .insert_resource(skater)
-    .configure_sets(
+        .insert_resource(bevy::winit::WinitSettings {
+            focused_mode: bevy::winit::UpdateMode::Continuous,
+            unfocused_mode: bevy::winit::UpdateMode::Continuous,
+        })
+        .insert_resource(crate::skate_audio::player::PlayerAudioAssets(config.asset_root.clone()))
+        .insert_resource(config)
+        .insert_resource(crate::retail_render::RetailScene(retail_scene))
+        .insert_resource(assets::AssetManifest(manifest))
+        .insert_resource(graphs)
+        .insert_resource(physics)
+        .insert_resource(skater);
+    #[cfg(feature = "xr")]
+    if let Some(options) = xr {
+        app.add_plugins(crate::xr::XrPlugin { options, files: xr_files.clone() });
+        // In the headset the faithful port is one engine of three: switched to and from while the app runs.
+        crate::engines::add_engine(&mut app, crate::engines::Engine::Skate3, |_| Ok(()), |app| {
+            add_retail(app);
+            crate::xr::add_retail_link(app);
+        });
+        crate::clean::add_xr_engines(&mut app, &xr_files, crate::engines::Engine::Skate3);
+        return app;
+    }
+    add_retail(&mut app);
+    // SK8_ROOM_LIGHT: the room light on the desktop's test world (see `xr::room_light`).
+    #[cfg(feature = "xr")]
+    if xr.is_none() && let Some(source) = crate::xr::room_light::preview_source() {
+        app.add_plugins(crate::xr::room_light::RoomLightPlugin(source));
+    }
+    app
+}
+
+/// The faithful port's plugins and systems.
+fn add_retail(app: &mut App) {
+    app.configure_sets(
         FixedUpdate,
-        (
-            SimulationSet::Input,
-            SimulationSet::Controls,
-            SimulationSet::Physics,
-        )
-            .chain(),
+        (SimulationSet::Input, SimulationSet::Controls, SimulationSet::Physics).chain(),
     )
     .configure_sets(
         Update,
-        (
-            FrameSet::Assets,
-            FrameSet::Physics,
-            FrameSet::Animation,
-            FrameSet::Verification,
-        )
-            .chain(),
+        (FrameSet::Assets, FrameSet::Physics, FrameSet::Animation, FrameSet::Verification).chain(),
     )
     .add_plugins(crate::fps_overlay::FpsOverlayPlugin)
     .add_plugins((
@@ -162,31 +171,14 @@ pub(crate) fn build(
         verification::VerificationPlugin,
         crate::performance::PerformancePlugin,
     ));
-    app.add_plugins((
-        crate::session_marker::SessionMarkerPlugin,
-        crate::customiser::CustomiserPlugin,
-    ));
+    app.add_plugins((crate::session_marker::SessionMarkerPlugin, crate::customiser::CustomiserPlugin));
     app.add_plugins(crate::custom_models::CustomModelsPlugin);
     app.add_plugins(crate::modding::ModdingPlugin);
     app.add_plugins(crate::skate_audio::SkateAudioPlugin);
-    crate::teleport_menu::install(&mut app);
+    crate::teleport_menu::install(app);
     app.add_plugins(crate::updater::UpdaterPlugin);
     app.add_plugins(crate::multiplayer::MultiplayerPlugin);
     app.add_plugins(crate::scoring_hud::ScoringHudPlugin);
     app.add_systems(Last, crate::crash_context::sample);
-    #[cfg(feature = "xr")]
-    if let Some(options) = xr {
-        app.add_plugins(crate::xr::XrPlugin {
-            options,
-            files: xr_files,
-            retail: true,
-        });
-    }
-    // SK8_ROOM_LIGHT: the room light on the desktop's test world (see `xr::room_light`).
-    #[cfg(feature = "xr")]
-    if xr.is_none() && let Some(source) = crate::xr::room_light::preview_source() {
-        app.add_plugins(crate::xr::room_light::RoomLightPlugin(source));
-    }
-    crate::profiling::install(&mut app);
-    app
+    crate::profiling::install(app);
 }

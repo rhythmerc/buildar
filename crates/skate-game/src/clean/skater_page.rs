@@ -126,6 +126,10 @@ impl UiProvider for CleanPages {
     fn start_items(&self, _world: &World) -> Vec<Widget> {
         vec![Widget::link("Skater", SKATER), Widget::button("sk8", "Advanced tuning (SK8 menu)")]
     }
+
+    fn engine(&self) -> Option<crate::engines::Engine> {
+        Some(crate::engines::Engine::Sk8)
+    }
 }
 
 #[cfg(test)]

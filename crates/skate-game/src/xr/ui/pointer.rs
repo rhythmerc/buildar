@@ -36,6 +36,11 @@ pub(crate) struct UiPointer {
 const BAR_GRAB_PX: f32 = 24.0;
 
 impl UiPointer {
+    /// The panel pixel under the laser.
+    pub(crate) fn px(&self) -> Option<Vec2> {
+        self.px
+    }
+
     /// The laser is on (or just beside) widget `index`'s slider bar: a
     /// click there starts a drag; a click on the label doesn't move it.
     pub(crate) fn over_bar(&self, first: usize, index: usize) -> bool {

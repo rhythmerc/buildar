@@ -19,12 +19,14 @@ pub(crate) mod hud;
 #[cfg(feature = "retail")]
 pub(crate) mod import;
 pub(crate) mod pages;
+pub(crate) mod parks;
 mod sound_lab;
 mod pointer;
 
 use super::actions::LatestTouch;
 use super::build::BuildMode;
 use super::panel::XrPanel;
+use crate::engines::{Engine, Engines};
 use bevy::prelude::*;
 use std::sync::Arc;
 
@@ -44,6 +46,8 @@ const STICK: f32 = 0.6;
 const REPEAT_DELAY: f32 = 0.35;
 const REPEAT_EVERY: f32 = 0.09;
 pub(crate) const UI_FONT: &str = "embedded://skate_game/clean/assets/fonts/Montserrat-Italic.ttf";
+/// The menus' running text (variable weight).
+pub(crate) const UI_BODY_FONT: &str = "embedded://skate_game/clean/assets/fonts/Inter.ttf";
 
 pub(crate) type PageId = &'static str;
 
@@ -153,6 +157,8 @@ pub(crate) enum Outcome {
     /// Replace the current page (intro steps).
     Replace(PageId),
     Back,
+    /// Back to the bottom page (the parks).
+    Home,
     Close,
     Say(String),
     /// Hand the panel to another menu (see [`XrUi::external`]).
@@ -169,14 +175,38 @@ pub(crate) trait UiProvider: Send + Sync + 'static {
     fn start_items(&self, _world: &World) -> Vec<Widget> {
         Vec::new()
     }
+    /// The engine whose pages these are (shown only while it runs); none: every engine's.
+    fn engine(&self) -> Option<Engine> {
+        None
+    }
 }
 
 #[derive(Resource, Default, Clone)]
 pub(crate) struct UiProviders(pub Vec<Arc<dyn UiProvider>>);
 
-/// The controls list shown under "Controls" (each tier sets its own).
+impl UiProviders {
+    /// The providers whose pages show now: the shared ones and the running engine's.
+    pub(crate) fn active(world: &World) -> Vec<Arc<dyn UiProvider>> {
+        let running = world.get_resource::<Engines>().and_then(Engines::current);
+        world.resource::<UiProviders>().0.iter().filter(|p| p.engine().is_none_or(|e| Some(e) == running)).cloned().collect()
+    }
+}
+
+/// The controls list shown under "Controls", each engine's own.
 #[derive(Resource, Clone, Default)]
-pub(crate) struct ControlsSheet(pub Vec<(String, String)>);
+pub(crate) struct ControlsSheet(pub std::collections::HashMap<Engine, Vec<(String, String)>>);
+
+impl ControlsSheet {
+    pub(crate) fn set(&mut self, engine: Engine, rows: Vec<(String, String)>) {
+        self.0.insert(engine, rows);
+    }
+
+    /// The running engine's.
+    pub(crate) fn rows(world: &World) -> Vec<(String, String)> {
+        let running = world.get_resource::<Engines>().and_then(Engines::current);
+        running.and_then(|e| world.resource::<ControlsSheet>().0.get(&e).cloned()).unwrap_or_default()
+    }
+}
 
 /// Set while a headset menu owns the controllers (the skater gets neutral
 /// input).
@@ -206,11 +236,16 @@ pub(crate) struct XrUi {
 }
 
 impl XrUi {
+    /// Opens on `page`, over the parks (and, for a settings page, over the
+    /// settings' start page).
     fn show(&mut self, page: PageId) {
         self.open = true;
         self.external = None;
-        self.stack = vec![pages::START];
-        if page != pages::START {
+        self.stack = vec![pages::PARKS];
+        if page != pages::PARKS {
+            if page != pages::START && page != pages::INTRO {
+                self.stack.push(pages::START);
+            }
             self.stack.push(page);
         }
         self.cursor = 0;
@@ -224,8 +259,51 @@ impl XrUi {
         self.graph_drag = false;
     }
 
+    /// The parks screen is what the menu shows.
+    pub(crate) fn on_parks(&self) -> bool {
+        self.open && self.external.is_none() && self.stack.last() == Some(&pages::PARKS)
+    }
+
     pub(crate) fn say(&mut self, text: impl Into<String>) {
         self.status = (text.into(), 3.0);
+    }
+
+    /// What the menu does after something on it acted.
+    fn apply(&mut self, outcome: Outcome) {
+        match outcome {
+            Outcome::Stay => {}
+            Outcome::Open(p) => {
+                self.stack.push(p);
+                self.cursor = 0;
+                self.first = 0;
+            }
+            Outcome::Replace(p) => {
+                self.stack.pop();
+                self.stack.push(p);
+                self.cursor = 0;
+                self.first = 0;
+            }
+            Outcome::Back => {
+                if self.stack.len() > 1 {
+                    self.stack.pop();
+                    self.cursor = 0;
+                    self.first = 0;
+                } else {
+                    self.close();
+                }
+            }
+            Outcome::Home => {
+                self.stack.truncate(1);
+                self.cursor = 0;
+                self.first = 0;
+            }
+            Outcome::Close => self.close(),
+            Outcome::Say(text) => self.say(text),
+            Outcome::External(what) => {
+                self.open = false;
+                self.external = Some(what);
+            }
+        }
     }
 }
 
@@ -261,21 +339,18 @@ struct Nav {
     select: bool,
     back: bool,
     fast: bool,
+    /// The right grip was pressed (more on what is chosen).
+    more: bool,
 }
 
 #[derive(Resource, Default)]
 struct UiNav(Nav);
 
-pub(crate) struct XrUiPlugin {
-    /// The imported-disc tier (it has no clean tier to embed the font).
-    pub retail: bool,
-}
+pub(crate) struct XrUiPlugin;
 
 impl Plugin for XrUiPlugin {
     fn build(&self, app: &mut App) {
-        if self.retail {
-            crate::clean::embed_font(app);
-        }
+        crate::clean::embed_font(app);
         #[cfg(feature = "retail")]
         app.add_plugins(import::ImportPlugin);
         let mut providers = UiProviders::default();
@@ -288,10 +363,11 @@ impl Plugin for XrUiPlugin {
             .init_resource::<UiOwnsControllers>()
             .init_resource::<pointer::UiPointer>()
             .add_plugins(hud::HudPlugin)
-            .add_systems(Startup, (spawn_ui, pointer::spawn_beam))
+            .init_resource::<parks::ParksScreen>()
+            .add_systems(Startup, (spawn_ui, parks::spawn, pointer::spawn_beam))
             .add_systems(
                 Update,
-                (touch_nav, pointer::aim, frame, draw, draw_graph, pointer::draw_beam)
+                (touch_nav, pointer::aim, frame, draw, draw_graph, parks::draw, pointer::draw_beam)
                     .chain()
                     .in_set(UiSet),
             );
@@ -365,6 +441,7 @@ fn touch_nav(
         n.select = t.a && !p.a;
         n.back = t.b && !p.b;
         n.fast = t.left_trigger > 0.5;
+        n.more = t.right_grip > 0.6 && p.right_grip <= 0.6;
     }
     state.previous = t;
     nav.0 = n;
@@ -421,17 +498,17 @@ fn frame(world: &mut World) {
     let nav = world.resource::<UiNav>().0;
     let point = world.resource::<pointer::UiPointer>().clone();
     let dt = world.resource::<Time<Real>>().delta_secs();
-    let providers = world.resource::<UiProviders>().0.clone();
+    let providers = UiProviders::active(world);
     let building = world.resource::<BuildMode>().active;
     let onboarded = world.resource::<super::ar_settings::ArSettings>().onboarding_done;
     {
-        // Open at launch: the intro the first time, else the start page
+        // Open at launch: the intro the first time, else the parks
         // (the scripted demo, SK8_DEMO, starts skating).
         let mut ui = world.resource_mut::<XrUi>();
         if !ui.started {
             ui.started = true;
             if std::env::var_os("SK8_DEMO").is_none() {
-                ui.request = Some(if onboarded { pages::START } else { pages::INTRO });
+                ui.request = Some(if onboarded { pages::PARKS } else { pages::INTRO });
             }
         }
     }
@@ -449,7 +526,7 @@ fn frame(world: &mut World) {
             if ui.open || ui.external.is_some() {
                 ui.close();
             } else {
-                ui.show(if onboarded { pages::START } else { pages::INTRO });
+                ui.show(if onboarded { pages::PARKS } else { pages::INTRO });
             }
         } else if building && ui.open {
             // Holding the menu button for build mode closes the menu.
@@ -479,7 +556,14 @@ fn frame(world: &mut World) {
         return;
     }
 
-    let id = *world.resource::<XrUi>().stack.last().unwrap_or(&pages::START);
+    let id = *world.resource::<XrUi>().stack.last().unwrap_or(&pages::PARKS);
+    if id == pages::PARKS {
+        let outcome = parks::frame(world, nav, &point);
+        let mut ui = world.resource_mut::<XrUi>();
+        ui.apply(outcome);
+        ui.view = View::default();
+        return;
+    }
     let page = find_page(&providers, id, world);
     let mut outcome = Outcome::Stay;
     let mut acted: Option<(&'static str, Act)> = None;
@@ -554,42 +638,14 @@ fn frame(world: &mut World) {
     }
     {
         let mut ui = world.resource_mut::<XrUi>();
-        match outcome {
-            Outcome::Stay => {}
-            Outcome::Open(p) => {
-                ui.stack.push(p);
-                ui.cursor = 0;
-                ui.first = 0;
-            }
-            Outcome::Replace(p) => {
-                ui.stack.pop();
-                ui.stack.push(p);
-                ui.cursor = 0;
-                ui.first = 0;
-            }
-            Outcome::Back => {
-                if ui.stack.len() > 1 {
-                    ui.stack.pop();
-                    ui.cursor = 0;
-                    ui.first = 0;
-                } else {
-                    ui.close();
-                }
-            }
-            Outcome::Close => ui.close(),
-            Outcome::Say(text) => ui.say(text),
-            Outcome::External(what) => {
-                ui.open = false;
-                ui.external = Some(what);
-            }
-        }
-        if !ui.open {
+        ui.apply(outcome);
+        if !ui.open || ui.on_parks() {
             ui.view = View::default();
             return;
         }
     }
     // Draw the page as it is now (values changed by this frame's press).
-    let id = *world.resource::<XrUi>().stack.last().unwrap_or(&pages::START);
+    let id = *world.resource::<XrUi>().stack.last().unwrap_or(&pages::PARKS);
     let page = find_page(&providers, id, world);
     let trail = {
         let ui = world.resource::<XrUi>();
@@ -650,7 +706,7 @@ fn row_view(w: &Widget, selected: bool) -> RowView {
 // ---------------------------------------------------------------- view
 
 #[derive(Component)]
-struct UiRoot;
+pub(crate) struct UiRoot;
 #[derive(Component)]
 struct UiTitle;
 #[derive(Component)]
@@ -865,7 +921,7 @@ fn draw(
     mut fills: Query<(&UiBarFill, &mut Node), (Without<UiRoot>, Without<UiRow>, Without<UiBar>)>,
 ) {
     let Ok(mut node) = root.single_mut() else { return };
-    let display = if ui.open && ui.external.is_none() { Display::Flex } else { Display::None };
+    let display = if ui.open && ui.external.is_none() && !ui.on_parks() { Display::Flex } else { Display::None };
     if node.display != display {
         node.display = display;
     }

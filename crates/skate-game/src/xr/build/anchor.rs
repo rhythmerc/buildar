@@ -1,20 +1,19 @@
-//! The park's place in the room: a spatial anchor (`XR_FB_spatial_entity`),
+//! Where the parks are in the room: spatial anchors (`XR_FB_spatial_entity`),
 //! which the headset keeps fixed to the real room.
 //!
 //! The pieces' poses are in the tracking (STAGE) space, and that space is
 //! not the same from one session to the next: its floor is found a few
 //! centimetres higher or lower, and it moves altogether when the boundary
-//! is redrawn or re-centred. So the layout is saved with an anchor, made in
-//! the middle of the park and stored on the headset, and with where that
-//! anchor was in the tracking space when the poses were written. When the
-//! anchor is found somewhere else (the next session, or after a re-centre),
-//! every piece is moved the same way, and stays where it was in the room.
+//! is redrawn or re-centred. So each park keeps the anchors it was put by
+//! ([`super::parks::AnchorRecord`]), and where its frame is from each.
 //!
-//! A layout from before this has no anchor: its pieces stay where the
-//! tracking space puts them, and an anchor is made for it then. The same if
-//! the headset no longer has the anchor (its room data was cleared).
-use super::{Placed, PlacedPieces};
-use crate::xr::link::SkaterLink;
+//! Once a session, when the room has been read, the headset is asked for
+//! every anchor of every park at once. The ones it finds are in this room:
+//! their parks open where they were. Each one found is located every frame,
+//! so the open park can move with its anchor ([`super::parks`]). An anchor is
+//! made (and stored on the headset) for the open park when it has none here,
+//! and anchors of a park deleted, or forgotten here, are erased.
+use super::parks::Parks;
 use crate::xr::planes::{cvt, enable_locatable};
 use bevy::prelude::*;
 use bevy_mod_openxr::{
@@ -27,69 +26,128 @@ use bevy_mod_openxr::{
 use bevy_mod_openxr::spaces::OxrSpaceExt;
 use bevy_mod_xr::spaces::XrPrimaryReferenceSpace;
 use openxr::sys::{self, Handle as _};
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::ptr;
 
-/// The anchor moved this far (m), or turned this far, since the pieces were
-/// last put by it: they are put by it again. (Under it: tracking noise.)
-const MOVED_M: f32 = 0.01;
-const TURNED_RAD: f32 = 0.5 * std::f32::consts::PI / 180.0;
-/// The first time it is found in a session, any difference counts.
-const FIRST_M: f32 = 0.001;
-const FIRST_RAD: f32 = 0.0005;
 /// Between tries at making an anchor, s.
 const RETRY_SECONDS: f32 = 10.0;
 
-/// What the layout file says of the anchor: which one, and where it was in
-/// the tracking space when the pieces' poses were written.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub(crate) struct AnchorRecord {
-    /// The anchor's UUID, 32 hex digits.
-    pub uuid: String,
-    pub position: [f32; 3],
-    /// Its turn about +Y.
-    pub yaw: f32,
+#[derive(Default, Clone, Copy, PartialEq, Debug)]
+enum Search {
+    /// Not asked yet this session.
+    #[default]
+    NotYet,
+    Running(sys::AsyncRequestIdFB),
+    Done,
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Debug)]
-enum Step {
-    /// Nothing asked of the headset.
-    #[default]
-    Idle,
-    Finding(sys::AsyncRequestIdFB),
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum MakeStep {
     Making(sys::AsyncRequestIdFB),
     MakingStorable(sys::AsyncRequestIdFB),
     Storing(sys::AsyncRequestIdFB),
 }
 
-#[derive(Resource, Default)]
-pub(crate) struct ParkAnchor {
-    /// As loaded, and as the next save writes it.
-    pub record: Option<AnchorRecord>,
-    step: Step,
+/// An anchor being made for a park, at a tracking-space point (turned 0).
+#[derive(Clone, Debug)]
+struct Making {
+    park: String,
+    at: Vec3,
+    step: MakeStep,
     space: Option<sys::Space>,
     uuid: Option<[u8; 16]>,
-    /// The headset has it stored: it can be found again.
-    stored: bool,
-    /// The saved anchor was asked for (once a session).
-    sought: bool,
-    /// The pieces were put by it this session.
-    aligned: bool,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct Anchors {
+    /// The headset can keep anchors (none: not known yet).
+    supported: Option<bool>,
+    search: Search,
+    /// The anchors found (or made) this session, by UUID.
+    spaces: HashMap<String, sys::Space>,
+    /// Where each is in the tracking space, and its turn, when last tracked.
+    located: HashMap<String, (Vec3, f32)>,
+    /// A park that wants an anchor, and where.
+    wanted: Option<(String, Vec3)>,
+    making: Option<Making>,
+    /// Made and stored: (park, UUID, where, turn), for the parks to take.
+    made: Vec<(String, String, Vec3, f32)>,
+    /// To be erased from the headset.
+    erasing: Vec<String>,
     wait: f32,
+    /// Found but not (yet) located, said in the log once.
+    unlocated_said: std::collections::HashSet<String>,
+}
+
+impl Anchors {
+    /// Where anchor `uuid` is in this room, if it is here.
+    pub(crate) fn located(&self, uuid: &str) -> Option<(Vec3, f32)> {
+        self.located.get(uuid).copied()
+    }
+
+    /// The headset may still find more of the parks' anchors.
+    pub(crate) fn searching(&self) -> bool {
+        self.supported != Some(false) && self.search != Search::Done
+    }
+
+    /// A new anchor can be asked for now.
+    pub(crate) fn can_make(&self) -> bool {
+        self.supported == Some(true) && self.search == Search::Done && self.wanted.is_none() && self.making.is_none() && self.wait <= 0.0
+    }
+
+    /// An anchor for `park` at `at` (tracking space), turned as the space is.
+    pub(crate) fn make(&mut self, park: String, at: Vec3) {
+        self.wanted = Some((park, at));
+    }
+
+    /// The anchors made since this was last asked.
+    pub(crate) fn take_made(&mut self) -> Vec<(String, String, Vec3, f32)> {
+        std::mem::take(&mut self.made)
+    }
+
+    /// Anchor `uuid` erased from the headset (if it was found here; else it
+    /// is only forgotten).
+    pub(crate) fn erase(&mut self, uuid: &str) {
+        self.located.remove(uuid);
+        if !self.erasing.iter().any(|u| u == uuid) {
+            self.erasing.push(uuid.to_string());
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn found_for_test(&mut self, uuids: &[&str]) {
+        self.supported = Some(true);
+        self.search = Search::Done;
+        for u in uuids {
+            self.located.insert(u.to_string(), (Vec3::ZERO, 0.0));
+        }
+    }
 }
 
 pub(super) struct AnchorPlugin;
 
 impl Plugin for AnchorPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ParkAnchor>()
+        app.init_resource::<Anchors>()
             .add_oxr_event_handler(on_event)
-            .add_systems(PreUpdate, (ask, follow).chain().run_if(openxr_session_running).run_if(enabled));
+            .add_systems(PreUpdate, supported)
+            .add_systems(PreUpdate, (ask, locate).chain().after(supported).run_if(openxr_session_running).run_if(enabled));
     }
 }
 
 fn enabled(exts: Option<Res<OxrEnabledExtensions>>) -> bool {
     exts.is_some_and(|e| e.fb_spatial_entity && e.fb_spatial_entity_query && e.fb_spatial_entity_storage)
+}
+
+/// Whether the headset keeps anchors (without them every park is put by hand).
+fn supported(exts: Option<Res<OxrEnabledExtensions>>, mut anchors: ResMut<Anchors>) {
+    if anchors.supported.is_none() {
+        let yes = enabled(exts);
+        anchors.supported = Some(yes);
+        if !yes {
+            info!("PARK ANCHOR the headset keeps no anchors here: every park is put down by hand");
+        }
+    }
 }
 
 fn hex(uuid: &[u8; 16]) -> String {
@@ -107,63 +165,66 @@ fn unhex(text: &str) -> Option<[u8; 16]> {
     Some(uuid)
 }
 
-/// The pieces moved as the anchor did, from where the record has it to
-/// `position` and `yaw`.
-pub(crate) fn realign(items: &mut [Placed], from: &AnchorRecord, position: Vec3, yaw: f32) {
-    let turn = yaw - from.yaw;
-    let rotation = Quat::from_rotation_y(turn);
-    for item in items {
-        let offset = Vec3::from_array(item.position) - Vec3::from_array(from.position);
-        item.position = (position + rotation * offset).to_array();
-        item.yaw += turn;
-    }
-}
-
-fn wrapped(angle: f32) -> f32 {
-    (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
-}
-
-/// Asks the headset for the saved anchor, or for a new one when there are
-/// pieces and none to go by.
+/// Asks the headset for the parks' anchors, makes the one wanted, erases
+/// the ones let go.
+#[allow(clippy::too_many_arguments)]
 fn ask(
     instance: Res<OxrInstance>,
     session: Res<OxrSession>,
     primary: Res<XrPrimaryReferenceSpace>,
     frame: Option<Res<OxrFrameState>>,
-    placed: Res<PlacedPieces>,
+    parks: Res<Parks>,
     time: Res<Time<Real>>,
     mut scene: ResMut<crate::xr::planes::SceneQuery>,
-    mut anchor: ResMut<ParkAnchor>,
+    mut anchors: ResMut<Anchors>,
 ) {
     // One query at a time with the headset: the room's wait while the
-    // anchor is looked for, and the anchor's until the room has been read.
-    scene.bypass_change_detection().hold(matches!(anchor.step, Step::Finding(_)));
-    if anchor.step != Step::Idle || anchor.space.is_some() {
-        return;
+    // anchors are looked for, and the anchors' until the room has been read.
+    scene.bypass_change_detection().hold(matches!(anchors.search, Search::Running(_)));
+    if anchors.wait > 0.0 {
+        anchors.wait -= time.delta_secs();
     }
-    if !scene.settled() {
-        return;
+    // Erasing needs nothing else to wait.
+    for uuid in std::mem::take(&mut anchors.erasing) {
+        let Some(space) = anchors.spaces.remove(&uuid) else { continue };
+        let Some(fp) = instance.exts().fb_spatial_entity_storage.as_ref() else { continue };
+        let info = sys::SpaceEraseInfoFB { ty: sys::SpaceEraseInfoFB::TYPE, next: ptr::null(), space, location: sys::SpaceStorageLocationFB::LOCAL };
+        let mut request = sys::AsyncRequestIdFB::from_raw(0);
+        match cvt(unsafe { (fp.erase_space)(session.as_raw(), &info, &mut request) }) {
+            Ok(_) => info!("PARK ANCHOR erasing {uuid}"),
+            Err(e) => warn!("PARK ANCHOR can't erase {uuid}: {e:?}"),
+        }
     }
-    if anchor.wait > 0.0 {
-        anchor.wait -= time.delta_secs();
-        return;
-    }
-    let saved = anchor.record.as_ref().and_then(|r| unhex(&r.uuid));
-    if let (Some(uuid), false) = (saved, anchor.sought) {
-        anchor.sought = true;
+    if anchors.search == Search::NotYet {
+        // (the parks are read at startup; the room first)
+        if parks.revision == 0 || !scene.settled() {
+            return;
+        }
+        let mut uuids: Vec<sys::UuidEXT> = parks.list.iter().flat_map(|p| p.file.anchors.iter()).filter_map(|r| unhex(&r.uuid)).map(|data| sys::UuidEXT { data }).collect();
+        uuids.sort_by_key(|u| u.data);
+        uuids.dedup_by_key(|u| u.data);
+        if uuids.is_empty() {
+            anchors.search = Search::Done;
+            return;
+        }
         let Some(fp) = instance.exts().fb_spatial_entity_query.as_ref() else { return };
-        let mut uuids = [sys::UuidEXT { data: uuid }];
+        // (in the headset's own storage, where they were saved - Meta's sample chains this to the IDs)
+        let local = sys::SpaceStorageLocationFilterInfoFB {
+            ty: sys::SpaceStorageLocationFilterInfoFB::TYPE,
+            next: ptr::null(),
+            location: sys::SpaceStorageLocationFB::LOCAL,
+        };
         let filter = sys::SpaceUuidFilterInfoFB {
             ty: sys::SpaceUuidFilterInfoFB::TYPE,
-            next: ptr::null(),
-            uuid_count: 1,
+            next: (&local as *const sys::SpaceStorageLocationFilterInfoFB).cast(),
+            uuid_count: uuids.len() as u32,
             uuids: uuids.as_mut_ptr(),
         };
         let info = sys::SpaceQueryInfoFB {
             ty: sys::SpaceQueryInfoFB::TYPE,
             next: ptr::null(),
             query_action: sys::SpaceQueryActionFB::LOAD,
-            max_result_count: 1,
+            max_result_count: uuids.len() as u32,
             timeout: sys::Duration::NONE,
             filter: (&filter as *const sys::SpaceUuidFilterInfoFB).cast(),
             exclude_filter: ptr::null(),
@@ -171,51 +232,44 @@ fn ask(
         let mut request = sys::AsyncRequestIdFB::from_raw(0);
         match cvt(unsafe { (fp.query_spaces)(session.as_raw(), (&info as *const sys::SpaceQueryInfoFB).cast(), &mut request) }) {
             Ok(_) => {
-                info!("PARK ANCHOR looking for {}", hex(&uuid));
-                anchor.step = Step::Finding(request);
+                info!("PARK ANCHOR looking for {} anchors of {} parks", uuids.len(), parks.list.len());
+                anchors.search = Search::Running(request);
             }
             Err(e) => {
-                warn!("PARK ANCHOR the saved anchor can't be looked for ({e:?}): the pieces stay by the tracking space");
-                anchor.record = None;
+                warn!("PARK ANCHOR the parks' anchors can't be looked for ({e:?}): every park is put down by hand");
+                anchors.search = Search::Done;
             }
         }
         return;
     }
-    if saved.is_some() && anchor.record.is_some() {
-        // (looked for and not found: `on_event` has dropped the record by now)
+    if anchors.making.is_some() || matches!(anchors.search, Search::Running(_)) {
         return;
     }
-    // None to go by: one for the park as it stands, in the middle of it.
-    let Some(frame) = frame else { return };
-    if placed.items.is_empty() || placed.busy() {
+    let Some((park, at)) = anchors.wanted.take() else { return };
+    let (Some(frame), Some(fp)) = (frame, instance.exts().fb_spatial_entity.as_ref()) else {
+        anchors.wanted = Some((park, at));
         return;
-    }
-    let Some(fp) = instance.exts().fb_spatial_entity.as_ref() else { return };
-    let count = placed.items.len() as f32;
-    let middle = placed.items.iter().map(|i| Vec3::from_array(i.position)).sum::<Vec3>() / count;
-    let lowest = placed.items.iter().map(|i| i.position[1]).fold(f32::MAX, f32::min);
+    };
     let info = sys::SpatialAnchorCreateInfoFB {
         ty: sys::SpatialAnchorCreateInfoFB::TYPE,
         next: ptr::null(),
         space: primary.as_raw_openxr_space(),
-        pose_in_space: sys::Posef {
-            orientation: sys::Quaternionf { x: 0.0, y: 0.0, z: 0.0, w: 1.0 },
-            position: sys::Vector3f { x: middle.x, y: lowest, z: middle.z },
-        },
+        pose_in_space: sys::Posef { orientation: sys::Quaternionf { x: 0.0, y: 0.0, z: 0.0, w: 1.0 }, position: sys::Vector3f { x: at.x, y: at.y, z: at.z } },
         time: frame.predicted_display_time,
     };
     let mut request = sys::AsyncRequestIdFB::from_raw(0);
     match cvt(unsafe { (fp.create_spatial_anchor)(session.as_raw(), &info, &mut request) }) {
-        Ok(_) => anchor.step = Step::Making(request),
+        Ok(_) => anchors.making = Some(Making { park, at, step: MakeStep::Making(request), space: None, uuid: None }),
         Err(e) => {
             warn!("PARK ANCHOR can't be made ({e:?}), trying again later");
-            anchor.wait = RETRY_SECONDS;
+            anchors.wait = RETRY_SECONDS;
         }
     }
 }
 
-fn store(instance: &OxrInstance, session: &OxrSession, anchor: &mut ParkAnchor) {
-    let (Some(fp), Some(space)) = (instance.exts().fb_spatial_entity_storage.as_ref(), anchor.space) else { return };
+fn store(instance: &OxrInstance, session: &OxrSession, anchors: &mut Anchors) {
+    let Some(making) = anchors.making.as_mut() else { return };
+    let (Some(fp), Some(space)) = (instance.exts().fb_spatial_entity_storage.as_ref(), making.space) else { return };
     let info = sys::SpaceSaveInfoFB {
         ty: sys::SpaceSaveInfoFB::TYPE,
         next: ptr::null(),
@@ -225,58 +279,62 @@ fn store(instance: &OxrInstance, session: &OxrSession, anchor: &mut ParkAnchor) 
     };
     let mut request = sys::AsyncRequestIdFB::from_raw(0);
     match cvt(unsafe { (fp.save_space)(session.as_raw(), &info, &mut request) }) {
-        Ok(_) => anchor.step = Step::Storing(request),
+        Ok(_) => making.step = MakeStep::Storing(request),
         Err(e) => {
-            warn!("PARK ANCHOR can't be stored ({e:?}): the pieces stay by the tracking space");
-            anchor.step = Step::Idle;
+            warn!("PARK ANCHOR can't be stored ({e:?}), trying again later");
+            give_up(anchors);
         }
     }
 }
 
-fn on_event(event: OxrEventIn, instance: Res<OxrInstance>, session: Option<Res<OxrSession>>, mut anchor: ResMut<ParkAnchor>) {
+/// The anchor being made failed: another is made later.
+fn give_up(anchors: &mut Anchors) {
+    anchors.making = None;
+    anchors.wait = RETRY_SECONDS;
+}
+
+fn on_event(event: OxrEventIn, instance: Res<OxrInstance>, session: Option<Res<OxrSession>>, mut anchors: ResMut<Anchors>) {
     let Some(session) = session else { return };
+    let making = anchors.making.as_ref().map(|m| m.step);
     match *event {
-        openxr::Event::SpaceQueryResultsAvailableFB(e) if anchor.step == Step::Finding(e.request_id()) => {
+        openxr::Event::SpaceQueryResultsAvailableFB(e) if anchors.search == Search::Running(e.request_id()) => {
             let Some(fp) = instance.exts().fb_spatial_entity_query.as_ref() else { return };
-            let mut found = [sys::SpaceQueryResultFB { space: sys::Space::NULL, uuid: sys::UuidEXT { data: [0; 16] } }];
-            let mut results = sys::SpaceQueryResultsFB {
-                ty: sys::SpaceQueryResultsFB::TYPE,
-                next: ptr::null_mut(),
-                result_capacity_input: 1,
-                result_count_output: 0,
-                results: found.as_mut_ptr(),
-            };
+            // How many, then all of them.
+            let mut results = sys::SpaceQueryResultsFB { ty: sys::SpaceQueryResultsFB::TYPE, next: ptr::null_mut(), result_capacity_input: 0, result_count_output: 0, results: ptr::null_mut() };
+            if let Err(err) = cvt(unsafe { (fp.retrieve_space_query_results)(session.as_raw(), e.request_id(), &mut results) }) {
+                warn!("PARK ANCHOR xrRetrieveSpaceQueryResultsFB: {err:?}");
+                return;
+            }
+            let mut found = vec![sys::SpaceQueryResultFB { space: sys::Space::NULL, uuid: sys::UuidEXT { data: [0; 16] } }; results.result_count_output as usize];
+            results.result_capacity_input = found.len() as u32;
+            results.results = found.as_mut_ptr();
             match cvt(unsafe { (fp.retrieve_space_query_results)(session.as_raw(), e.request_id(), &mut results) }) {
-                Ok(_) if results.result_count_output >= 1 && found[0].space != sys::Space::NULL => {
-                    enable_locatable(&instance, found[0].space);
-                    anchor.space = Some(found[0].space);
-                    anchor.uuid = Some(found[0].uuid.data);
-                    anchor.stored = true;
+                Ok(_) => {
+                    info!("PARK ANCHOR the search returned {} anchors", results.result_count_output);
+                    for result in found.iter().take(results.result_count_output as usize).filter(|r| r.space != sys::Space::NULL) {
+                        enable_locatable(&instance, result.space);
+                        anchors.spaces.insert(hex(&result.uuid.data), result.space);
+                    }
                 }
-                Ok(_) => {}
                 Err(err) => warn!("PARK ANCHOR xrRetrieveSpaceQueryResultsFB: {err:?}"),
             }
         }
-        openxr::Event::SpaceQueryCompleteFB(e) if anchor.step == Step::Finding(e.request_id()) => {
-            anchor.step = Step::Idle;
-            if anchor.space.is_some() {
-                info!("PARK ANCHOR found");
-            } else {
-                warn!("PARK ANCHOR the saved anchor is gone ({:?}): the pieces stay by the tracking space, with a new anchor", e.result());
-                anchor.record = None;
-            }
+        openxr::Event::SpaceQueryCompleteFB(e) if anchors.search == Search::Running(e.request_id()) => {
+            anchors.search = Search::Done;
+            info!("PARK ANCHOR search done: {} found in this room ({:?})", anchors.spaces.len(), e.result());
         }
-        openxr::Event::SpatialAnchorCreateCompleteFB(e) if anchor.step == Step::Making(e.request_id()) => {
+        openxr::Event::SpatialAnchorCreateCompleteFB(e) if making == Some(MakeStep::Making(e.request_id())) => {
             if let Err(err) = cvt(e.result()) {
                 warn!("PARK ANCHOR wasn't made ({err:?}), trying again later");
-                anchor.step = Step::Idle;
-                anchor.wait = RETRY_SECONDS;
+                give_up(&mut anchors);
                 return;
             }
-            anchor.space = Some(e.space());
-            anchor.uuid = Some(e.uuid().data);
-            info!("PARK ANCHOR made: {}", hex(&e.uuid().data));
             enable_locatable(&instance, e.space());
+            if let Some(m) = anchors.making.as_mut() {
+                m.space = Some(e.space());
+                m.uuid = Some(e.uuid().data);
+            }
+            info!("PARK ANCHOR made: {}", hex(&e.uuid().data));
             // It has to be storable before it can be stored.
             let Some(fp) = instance.exts().fb_spatial_entity.as_ref() else { return };
             let info = sys::SpaceComponentStatusSetInfoFB {
@@ -288,102 +346,75 @@ fn on_event(event: OxrEventIn, instance: Res<OxrInstance>, session: Option<Res<O
             };
             let mut request = sys::AsyncRequestIdFB::from_raw(0);
             match unsafe { (fp.set_space_component_status)(e.space(), &info, &mut request) } {
-                sys::Result::ERROR_SPACE_COMPONENT_STATUS_ALREADY_SET_FB => store(&instance, &session, &mut anchor),
+                sys::Result::ERROR_SPACE_COMPONENT_STATUS_ALREADY_SET_FB => store(&instance, &session, &mut anchors),
                 result => match cvt(result) {
-                    Ok(_) => anchor.step = Step::MakingStorable(request),
+                    Ok(_) => {
+                        if let Some(m) = anchors.making.as_mut() {
+                            m.step = MakeStep::MakingStorable(request);
+                        }
+                    }
                     Err(err) => {
-                        warn!("PARK ANCHOR can't be made storable ({err:?}): the pieces stay by the tracking space");
-                        anchor.step = Step::Idle;
+                        warn!("PARK ANCHOR can't be made storable ({err:?}), trying again later");
+                        give_up(&mut anchors);
                     }
                 },
             }
         }
-        openxr::Event::SpaceSetStatusCompleteFB(e) if anchor.step == Step::MakingStorable(e.request_id()) => {
+        openxr::Event::SpaceSetStatusCompleteFB(e) if making == Some(MakeStep::MakingStorable(e.request_id())) => {
             if let Err(err) = cvt(e.result()) {
-                warn!("PARK ANCHOR wasn't made storable ({err:?}): the pieces stay by the tracking space");
-                anchor.step = Step::Idle;
+                warn!("PARK ANCHOR wasn't made storable ({err:?}), trying again later");
+                give_up(&mut anchors);
                 return;
             }
-            store(&instance, &session, &mut anchor);
+            store(&instance, &session, &mut anchors);
         }
-        openxr::Event::SpaceSaveCompleteFB(e) if anchor.step == Step::Storing(e.request_id()) => {
-            anchor.step = Step::Idle;
-            match cvt(e.result()) {
-                Ok(_) => {
-                    info!("PARK ANCHOR stored on the headset");
-                    anchor.stored = true;
+        openxr::Event::SpaceSaveCompleteFB(e) if making == Some(MakeStep::Storing(e.request_id())) => {
+            let Some(m) = anchors.making.take() else { return };
+            match (cvt(e.result()), m.space, m.uuid) {
+                (Ok(_), Some(space), Some(uuid)) => {
+                    let name = hex(&uuid);
+                    info!("PARK ANCHOR {name} stored on the headset for park {}", m.park);
+                    anchors.spaces.insert(name.clone(), space);
+                    anchors.located.insert(name.clone(), (m.at, 0.0));
+                    anchors.made.push((m.park, name, m.at, 0.0));
                 }
-                Err(err) => warn!("PARK ANCHOR wasn't stored ({err:?}): the pieces stay by the tracking space"),
+                (result, ..) => {
+                    warn!("PARK ANCHOR wasn't stored ({result:?}), trying again later");
+                    anchors.wait = RETRY_SECONDS;
+                }
             }
         }
         _ => {}
     }
 }
 
-/// Finds the anchor in the tracking space and keeps the pieces by it.
-fn follow(
-    instance: Res<OxrInstance>,
-    primary: Res<XrPrimaryReferenceSpace>,
-    frame: Option<Res<OxrFrameState>>,
-    link: Res<SkaterLink>,
-    mut placed: ResMut<PlacedPieces>,
-    mut anchor: ResMut<ParkAnchor>,
-) {
-    let (Some(space), Some(uuid), true, Some(frame)) = (anchor.space, anchor.uuid, anchor.stored, frame) else { return };
-    // (pieces are not moved under a hand or a grind)
-    if placed.busy() || link.grinding {
-        return;
-    }
-    let mut location = sys::SpaceLocation {
-        ty: sys::SpaceLocation::TYPE,
-        next: ptr::null_mut(),
-        location_flags: sys::SpaceLocationFlags::EMPTY,
-        pose: sys::Posef::IDENTITY,
-    };
-    let located = cvt(unsafe { (instance.fp().locate_space)(space, primary.as_raw_openxr_space(), frame.predicted_display_time, &mut location) });
+/// Where every anchor found is in the tracking space now (while it is tracked).
+fn locate(instance: Res<OxrInstance>, primary: Res<XrPrimaryReferenceSpace>, frame: Option<Res<OxrFrameState>>, mut anchors: ResMut<Anchors>) {
+    let Some(frame) = frame else { return };
     let needed = sys::SpaceLocationFlags::POSITION_VALID
         | sys::SpaceLocationFlags::ORIENTATION_VALID
         | sys::SpaceLocationFlags::POSITION_TRACKED
         | sys::SpaceLocationFlags::ORIENTATION_TRACKED;
-    if located.is_err() || !location.location_flags.contains(needed) {
-        return;
-    }
-    let (p, o) = (location.pose.position, location.pose.orientation);
-    let position = Vec3::new(p.x, p.y, p.z);
-    let along = Quat::from_xyzw(o.x, o.y, o.z, o.w).normalize() * Vec3::X;
-    let yaw = f32::atan2(-along.z, along.x);
-    if !position.is_finite() || !yaw.is_finite() {
-        return;
-    }
-    let name = hex(&uuid);
-    let now = AnchorRecord { uuid: name.clone(), position: position.to_array(), yaw };
-    match anchor.record.clone().filter(|r| r.uuid == name) {
-        // A new anchor: the poses as they stand are by it.
-        None => {
-            info!("PARK ANCHOR at {position:.3?}, turned {:.1} deg: saved with the layout", yaw.to_degrees());
-            anchor.record = Some(now);
-            anchor.aligned = true;
-            placed.revision += 1;
-        }
-        Some(from) => {
-            let moved = position.distance(Vec3::from_array(from.position));
-            let turned = wrapped(yaw - from.yaw).abs();
-            let (far, round) = if anchor.aligned { (MOVED_M, TURNED_RAD) } else { (FIRST_M, FIRST_RAD) };
-            anchor.aligned = true;
-            if moved < far && turned < round {
-                return;
+    let spaces: Vec<(String, sys::Space)> = anchors.spaces.iter().map(|(u, s)| (u.clone(), *s)).collect();
+    for (uuid, space) in spaces {
+        let mut location = sys::SpaceLocation { ty: sys::SpaceLocation::TYPE, next: ptr::null_mut(), location_flags: sys::SpaceLocationFlags::EMPTY, pose: sys::Posef::IDENTITY };
+        let located = cvt(unsafe { (instance.fp().locate_space)(space, primary.as_raw_openxr_space(), frame.predicted_display_time, &mut location) });
+        if located.is_err() || !location.location_flags.contains(needed) {
+            // (said once an anchor: found on the headset, but not where it is)
+            if !anchors.located.contains_key(&uuid) && anchors.unlocated_said.insert(uuid.clone()) {
+                info!("PARK ANCHOR {uuid} found but not located yet: {located:?}, flags {:?}", location.location_flags);
             }
-            let rise = position.y - from.position[1];
-            info!(
-                "PARK ANCHOR moved {:.1} cm ({:+.1} cm up) and turned {:.2} deg in the tracking space: {} pieces moved with it",
-                moved * 100.0,
-                rise * 100.0,
-                wrapped(yaw - from.yaw).to_degrees(),
-                placed.items.len()
-            );
-            realign(&mut placed.items, &from, position, yaw);
-            anchor.record = Some(now);
-            placed.revision += 1;
+            continue;
+        }
+        let (p, o) = (location.pose.position, location.pose.orientation);
+        let position = Vec3::new(p.x, p.y, p.z);
+        let along = Quat::from_xyzw(o.x, o.y, o.z, o.w).normalize() * Vec3::X;
+        let yaw = f32::atan2(-along.z, along.x);
+        if position.is_finite() && yaw.is_finite() {
+            if !anchors.located.contains_key(&uuid) {
+                info!("PARK ANCHOR {uuid} is here, at {position:.3?}");
+            }
+            anchors.located.insert(uuid, (position, yaw));
         }
     }
 }
@@ -391,36 +422,25 @@ fn follow(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xr::build::pieces::{Piece, PieceKind};
-
-    fn piece(position: [f32; 3], yaw: f32) -> Placed {
-        Placed { id: 1, piece: Piece::new(PieceKind::Kicker), position, yaw, scale: 1.0, hidden: false, no_posts: 0, ends_down: [0.0; 2], finish: None, tint: None, path: None }
-    }
-
-    #[test]
-    fn pieces_keep_their_place_by_the_anchor() {
-        let from = AnchorRecord { uuid: hex(&[7; 16]), position: [1.0, 0.03, -2.0], yaw: 0.3 };
-        // A piece a metre along the anchor's X and 40 cm up, turned as the anchor is.
-        let along = Quat::from_rotation_y(0.3) * Vec3::X;
-        let mut items = vec![piece((Vec3::from_array(from.position) + along + Vec3::Y * 0.4).to_array(), 0.3)];
-        // The tracking space's floor 3 cm lower, and the space moved and turned.
-        let (position, yaw) = (Vec3::new(-0.5, 0.0, 0.7), 1.4);
-        realign(&mut items, &from, position, yaw);
-        let expected = position + Quat::from_rotation_y(1.4) * Vec3::X + Vec3::Y * 0.4;
-        assert!(Vec3::from_array(items[0].position).distance(expected) < 1e-5, "{:?} vs {expected:?}", items[0].position);
-        assert!((items[0].yaw - 1.4).abs() < 1e-6);
-        // Not moved: nothing changes.
-        let before = items.clone();
-        let here = AnchorRecord { uuid: from.uuid.clone(), position: position.to_array(), yaw };
-        realign(&mut items, &here, position, yaw);
-        assert!(Vec3::from_array(items[0].position).distance(Vec3::from_array(before[0].position)) < 1e-6);
-    }
 
     #[test]
     fn a_uuid_reads_back() {
         let uuid = [0x00, 0x1f, 0xa0, 0xff, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
         assert_eq!(unhex(&hex(&uuid)), Some(uuid));
         assert_eq!(unhex("nope"), None);
-        assert!((wrapped(std::f32::consts::TAU + 0.1) - 0.1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_search_and_making_wait_their_turn() {
+        let mut anchors = Anchors::default();
+        assert!(anchors.searching() && !anchors.can_make(), "not known yet");
+        anchors.supported = Some(false);
+        assert!(!anchors.searching() && !anchors.can_make(), "a headset without anchors: nothing to wait for");
+        anchors.found_for_test(&["a"]);
+        assert!(anchors.can_make() && anchors.located("a").is_some() && anchors.located("b").is_none());
+        anchors.make("park".into(), Vec3::ONE);
+        assert!(!anchors.can_make(), "one at a time");
+        anchors.erase("a");
+        assert!(anchors.located("a").is_none());
     }
 }

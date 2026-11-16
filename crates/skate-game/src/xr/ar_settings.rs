@@ -44,6 +44,16 @@ fn one() -> f32 {
     1.0
 }
 
+/// The controller a game's own HUD floats by.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum HudHand {
+    Left,
+    /// (the left one has THUG2's balance meter)
+    #[default]
+    Right,
+}
+
 #[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ArSettings {
     #[serde(default)]
@@ -65,9 +75,16 @@ pub(crate) struct ArSettings {
     /// Free-roam floor height above STAGE y = 0, real metres.
     #[serde(default)]
     pub floor_offset: f32,
-    /// The trick / points readout in the corner while skating.
+    /// The trick / points readout while skating: SK8's in the corner, Skate 3's and THUG2's own HUDs by a
+    /// controller.
     #[serde(default = "yes")]
     pub hud: bool,
+    /// Soft shadows under the board and round the park pieces (`xr::contact_shadow`).
+    #[serde(default = "yes")]
+    pub contact_shadows: bool,
+    /// Which controller the games' own HUDs float by (`xr::hand_hud`).
+    #[serde(default)]
+    pub hud_hand: HudHand,
     /// The skater and the park lit by the real room (`xr::room_light`),
     /// which uses the headset's passthrough camera: off until asked for.
     #[serde(default)]
@@ -118,6 +135,8 @@ impl Default for ArSettings {
             mesh: Layer::default(),
             floor_offset: 0.0,
             hud: true,
+            hud_hand: HudHand::default(),
+            contact_shadows: true,
             room_light: false,
             room_light_strength: 1.0,
             build_hints: true,

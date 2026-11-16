@@ -38,7 +38,7 @@ pub(crate) fn asset_root() -> Result<PathBuf, String> {
         .get()
         .ok_or("Android app handle not set; start through bevy_main")?;
     let open = || app.asset_manager().open(c"core.pack");
-    if open().is_none() || files.join("use-retail-data").exists() {
+    if open().is_none() || files.join("use-retail-data").exists() || pushed.join("private/game.json").is_file() {
         if !pushed.join("private/game.json").is_file() {
             eprintln!(
                 "SKATE_ANDROID no game data: convert your own Skate 3 disc with the desktop engine and push it with scripts/quest/push-assets.sh (expected {})",

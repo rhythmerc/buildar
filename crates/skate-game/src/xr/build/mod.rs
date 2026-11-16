@@ -31,10 +31,12 @@
 //! so they stay on the same real table, and are saved between launches
 //! ([`layout`]). Their collision and grind rails are built by
 //! `xr::real_world`.
-mod anchor;
+pub(crate) mod anchor;
 mod dress;
-mod layout;
+pub(crate) mod pool;
+pub(crate) mod pool_shadow;
 mod legend;
+pub(crate) mod parks;
 pub(crate) mod pieces;
 mod snap;
 
@@ -108,11 +110,21 @@ const MAX_FINISHES: usize = 4;
 const HANDLE_DOT_M: f32 = 0.012;
 /// How near the pointer's ray a drawn piece's handle is taken, real metres.
 const HANDLE_REACH_M: f32 = 0.05;
+/// How near the pointer's ray a piece's shape is taken when the ray itself misses every piece (a thin rail is
+/// hard to hit), real metres.
+const PICK_REACH_M: f32 = 0.06;
+/// A piece whose base is this much further above what is under it than its join explains is up in the air: the
+/// grip holds it in the hand (6DOF) instead of moving it along the surface pointed at, real metres.
+const AIR_GAP_M: f32 = 0.05;
 /// How near an edge (a piece's, or a table's when it is raised to its height, or an
 /// outline's first point) a point being drawn takes it, real metres.
 const DRAW_SNAP_M: f32 = 0.08;
 /// How fast the stick raises a point, real metres a second.
 const RISE_RATE: f32 = 0.25;
+/// How fast the stick banks a ramp's point, radians a second.
+const BANK_RATE: f32 = 40.0 * std::f32::consts::PI / 180.0;
+/// A ramp's bank goes in steps this big, radians (so level is easy to find again).
+const BANK_STEP: f32 = 5.0 * std::f32::consts::PI / 180.0;
 /// A pad's height until the stick changes it, its own metres.
 const PAD_HEIGHT_M: f32 = 0.5;
 
@@ -349,6 +361,18 @@ ends_down: [0.0; 2],
         id
     }
 
+    /// Another park's pieces in place of these (nothing to undo back to).
+    pub(crate) fn replace(&mut self, items: Vec<Placed>) {
+        self.items = items;
+        self.history.clear();
+        self.dragging = None;
+        self.resizing = None;
+        self.shaping = false;
+        self.selected = None;
+        self.pointed = None;
+        self.revision += 1;
+    }
+
     pub(crate) fn get_mut(&mut self, id: u64) -> Option<&mut Placed> {
         self.items.iter_mut().find(|p| p.id == id)
     }
@@ -411,9 +435,11 @@ struct BuildState {
     floating: bool,
     /// How far the stick raised the point being placed or moved this frame, m.
     rise: f32,
-    /// The height the stick has put the ramp's point being moved at (the
-    /// piece's own metres), whether or not it is shown level with a table.
-    raised: Option<f32>,
+    /// How far the stick banked the ramp's point being placed or moved this frame, radians.
+    tilt: f32,
+    /// The bank the stick has run the next drawn ramp point (or the one held) up
+    /// to, before it is put in steps of [`BANK_STEP`].
+    bank: f32,
     /// The handle of the selected drawn piece the pointer is on, and the one held.
     handle: Option<Grab>,
     handle_drag: Option<Grab>,
@@ -427,6 +453,8 @@ struct BuildState {
     /// The park was resized: once collision is rebuilt, drop the skater onto
     /// whatever is now under this real (tracking) spot.
     drop_after_rebuild: Option<(Vec3, Vec3, u64)>,
+    /// A park is being put down (`parks::Placing`): its ray shows.
+    placing: bool,
     /// Unsnapped size (or scale, or width) of the selected piece while a
     /// stick changes it.
     resize_size: f32,
@@ -441,6 +469,12 @@ struct BuildState {
     /// and its turn then. It keeps that far from the pointer, so it doesn't
     /// jump to it.
     carry: Option<(Vec3, f32)>,
+    /// A hold in the hand (a drawn piece's handle, or a piece up in the air): the right controller's pose
+    /// (tracking space) when it took hold, and the point it took hold of. What is held moves from where it was
+    /// as the controller moves from there ([`follow`]); a held piece also turns where it is as the controller turns.
+    held: Option<(Transform, Vec3)>,
+    /// How far the controller has turned (about up) a piece held in the hand since it took hold.
+    twist: f32,
     /// Parts of a colour step the stick has run up (hue, lightness).
     tint_owed: Vec2,
     previous: Buttons,
@@ -468,7 +502,8 @@ impl Default for BuildState {
             level: None,
             floating: false,
             rise: 0.0,
-            raised: None,
+            tilt: 0.0,
+            bank: 0.0,
             handle: None,
             handle_drag: None,
             menu_hold: None,
@@ -477,11 +512,14 @@ impl Default for BuildState {
             rescale_from: None,
             park_rescale: false,
             drop_after_rebuild: None,
+            placing: false,
             resize_size: 1.0,
             edit: Edit::Turn,
             scale: 1.0,
             grip_hold: None,
             carry: None,
+            held: None,
+            twist: 0.0,
             tint_owed: Vec2::ZERO,
             previous: Buttons::default(),
         }
@@ -539,14 +577,16 @@ impl Plugin for BuildPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "occluder.wgsl");
         app.add_plugins(MaterialPlugin::<Occluder>::default())
+            .add_plugins(pool_shadow::PoolShadowPlugin)
+            .init_resource::<pool::PoolAssets>()
             .init_resource::<BuildMode>()
             .init_resource::<PlacedPieces>()
             .init_resource::<BuildState>()
             .init_resource::<PieceAssets>()
-            .add_systems(Startup, (layout::load, spawn_visuals))
+            .add_systems(Startup, spawn_visuals)
             .add_systems(
                 PreUpdate,
-                (toggle_build, build_controls)
+                (toggle_build, place_park, build_controls)
                     .chain()
                     .after(TouchRead)
                     .before(crate::input::poll_controllers)
@@ -554,8 +594,9 @@ impl Plugin for BuildPlugin {
             )
             .add_plugins(legend::LegendPlugin)
             .add_plugins(anchor::AnchorPlugin)
+            .add_plugins(parks::ParksPlugin)
             .add_systems(Update, no_posts_over_gaps.before(sync_pieces))
-            .add_systems(Update, (sync_pieces, show_build, show_edit, show_drawn, describe, layout::save, drop_after_park_scale));
+            .add_systems(Update, (sync_pieces, show_build, show_edit, show_drawn, describe, drop_after_park_scale));
     }
 }
 
@@ -676,6 +717,10 @@ fn build_controls(
     if !mode.active {
         state.ray = None;
         state.ghost = None;
+        // (build mode always starts with the pointer, not a piece held in the hand)
+        state.free = false;
+        state.held = None;
+        state.carry = None;
         state.draft.clear();
         state.pending = None;
         state.handle = None;
@@ -783,13 +828,27 @@ fn build_controls(
     }
     let hit = cast(&world, &placed, &root, origin, direction);
     let to_tracking = root.compute_affine().inverse();
-    placed.pointed = hit.and_then(|h| h.piece);
+    // (the ray on no piece: the piece it passes nearest, within reach, short of what it does hit)
+    placed.pointed = hit.and_then(|h| h.piece).or_else(|| {
+        let before = hit.map_or(MAX_RANGE, |h| (h.point - origin).length());
+        near_ray(&placed, &root, origin, direction, PICK_REACH_M * root.scale.x, before)
+    });
     let valid = hit.filter(|h| h.normal.y >= MIN_UP);
     // Where a piece goes: on the surface pointed at, or (free placement) in the hand.
     if placed.dragging.is_none() {
         state.carry = None;
+        if state.handle_drag.is_none() {
+            state.held = None;
+            state.twist = 0.0;
+        }
     }
-    state.ghost = if state.free {
+    let held_piece = state.held.filter(|_| placed.dragging.is_some() && state.handle_drag.is_none());
+    state.ghost = if let Some(held) = held_piece {
+        // (a piece up in the air: where the hand has taken it, turned as the hand has turned)
+        let (at, twist) = follow(&held, controller);
+        state.twist = twist;
+        Some((at, root.transform_point(at)))
+    } else if state.free {
         let held = controller.transform_point(Vec3::NEG_Z * FREE_REACH_M);
         Some((held, root.transform_point(held)))
     } else {
@@ -838,6 +897,8 @@ fn build_controls(
     // (a held handle takes the stick: it raises the point)
     let edit = edit.filter(|_| state.handle_drag.is_none());
     state.rise = if !more && ry.abs() > STICK_DEADZONE && ry.abs() > rx.abs() { ry * RISE_RATE * dt } else { 0.0 };
+    // (and across, it banks a ramp's point: pushed right, it rolls right, its left side up)
+    state.tilt = if !more && rx.abs() > STICK_DEADZONE && rx.abs() > ry.abs() { rx * BANK_RATE * dt } else { 0.0 };
     // The turn eases in from the deadzone, so a light push is a fine adjustment.
     let push = ((rx.abs() - STICK_DEADZONE) / (1.0 - STICK_DEADZONE)).clamp(0.0, 1.0);
     let turn = -rx.signum() * push * push * TURN_RATE * dt;
@@ -860,7 +921,10 @@ fn build_controls(
     };
     let flicked = (now.finish_flick != 0 && now.finish_flick != previous.finish_flick).then_some(now.finish_flick as i32);
     let reset_tint = more && pressed(now.click, previous.click);
-    match placed.selected.filter(|_| placed.dragging.is_none()) {
+    // (a piece being moved is edited by the sticks as it is carried: its turn is the carry's, which puts it down
+    // turned; the move already made the undo step)
+    let carrying = placed.dragging.is_some();
+    match placed.selected {
         Some(id) => {
             let kind = placed.items.iter().find(|p| p.id == id).map(|p| p.piece.kind);
             let edit = edit
@@ -870,7 +934,9 @@ fn build_controls(
                 // Collision and the save wait until the stick is let go.
                 let started = placed.resizing.is_none();
                 if started {
-                    placed.checkpoint();
+                    if !carrying {
+                        placed.checkpoint();
+                    }
                     placed.resizing = Some(id);
                 }
                 if started || state.edit != edit {
@@ -887,8 +953,12 @@ fn build_controls(
                     state.resize_size = (state.resize_size * factor).clamp(lo, hi);
                 }
                 let value = state.resize_size;
+                if carrying && edit == Edit::Turn {
+                    state.yaw += turn;
+                }
                 if let Some(item) = placed.get_mut(id) {
                     match edit {
+                        Edit::Turn if carrying => {}
                         Edit::Turn => item.yaw += turn,
                         Edit::Scale => {
                             // (its base stays on the surface it reaches down to)
@@ -965,9 +1035,9 @@ fn build_controls(
                 Shape::Plane { .. } => None,
             }),
             position,
-            state.yaw,
+            state.yaw + state.twist,
         ),
-        None => state.yaw,
+        None => state.yaw + state.twist,
     };
     // Beside another piece of its kind, it sits flush against it; at an edge
     // of any other, edge to edge at that edge's height.
@@ -975,7 +1045,7 @@ fn build_controls(
     state.join = None;
     // In the hand (free placement) it joins what the hand is near, at that
     // height, and stays in the air there.
-    let held = state.free;
+    let held = state.free || held_piece.is_some();
     if let Some((position, _)) = state.ghost {
         let metres = placed.park_scale / root.scale.x;
         let moving = match placed.dragging {
@@ -1078,11 +1148,24 @@ ends_down: [0.0; 2],
         placed.checkpoint();
         placed.shaping = true;
         state.handle_drag = state.handle;
-        state.raised = None;
+        // (held in the hand: the handle moves as the controller does, in every direction)
+        let item = placed.selected.and_then(|id| placed.items.iter().find(|p| p.id == id));
+        let at = item.zip(state.handle).and_then(|(item, handle)| item.handles(metres).into_iter().find(|(h, _)| *h == handle));
+        state.held = at.map(|(_, at)| (*controller, at));
+        // (the stick banks a ramp's point on from its own bank)
+        state.bank = item
+            .zip(state.handle)
+            .and_then(|(item, handle)| match handle {
+                Grab::Node(i) if item.piece.kind == PieceKind::Deck => item.path.as_ref()?.nodes.get(i).map(|n| n.bank),
+                _ => None,
+            })
+            .unwrap_or(0.0);
     } else if pressed(now.grip, previous.grip) {
         if let Some(id) = placed.pointed.filter(|&id| Some(id) != placed.selected) {
             finish_edit(&mut placed);
             placed.selected = Some(id);
+            // (editing is with the pointer: free placement would put the piece where the hand is)
+            state.free = false;
             info!("BUILD selected piece {id}");
         }
         state.grip_hold = placed.selected.map(|_| 0.0);
@@ -1092,38 +1175,48 @@ ends_down: [0.0; 2],
     }
     if let (Some(handle), Some(id)) = (state.handle_drag, placed.selected) {
         if now.grip {
-            let to = cast_past(&world, &placed, &root, origin, direction, Some(id))
-                .filter(|h| h.normal.y >= MIN_UP)
-                .map(|h| to_tracking.transform_point3(h.point));
-            let rise = state.rise;
+            let pieces_edges: Vec<snap::Edge> = placed.items.iter().filter(|p| p.id != id).flat_map(|p| p.edges(metres)).filter(|e| e.width > 0.0).collect();
+            // Where the hand has taken the handle (tracking space), and the surface under it (this piece aside).
+            let target = state.held.map(|held| follow(&held, controller).0);
+            let floor = target
+                .and_then(|t| cast_past(&world, &placed, &root, root.transform_point(t + Vec3::Y * 0.05), root.rotation * Vec3::NEG_Y, Some(id)))
+                .map(|h| to_tracking.transform_point3(h.point).y);
             state.join = None;
-            if let Some(item) = placed.get_mut(id) {
+            if let (Some(item), Some(target)) = (placed.get_mut(id), target) {
                 let k = metres * item.scale;
-                let to = to.map(|p| item.to_local(metres, p));
-                // A ramp's point goes up and down from where the stick has put it, not from a
-                // table's height it was put level with: pushing on lets it go again.
+                // (a rail's handles are on its top, above its points)
+                let up = if item.piece.kind == PieceKind::RailPath { Vec3::Y * drawn::RAIL_TOP } else { Vec3::ZERO };
+                let to = item.to_local(metres, target) - up;
+                let floor = floor.map(|y| item.to_local(metres, target.with_y(y)).y);
                 let ramp = match handle {
                     Grab::Node(i) if item.piece.kind == PieceKind::Deck => Some(i),
                     _ => None,
                 };
-                if let (Some(raised), Some(node)) = (state.raised, ramp.and_then(|i| item.path.as_mut()?.nodes.get_mut(i))) {
-                    node.at[1] = raised;
+                shape(item, handle, to, floor);
+                if let Some(node) = ramp.and_then(|i| item.path.as_mut()?.nodes.get_mut(i)) {
+                    state.bank = (state.bank + state.tilt).clamp(-drawn::MAX_BANK, drawn::MAX_BANK);
+                    node.bank = banked(state.bank);
+                    // Moved, it is square to nothing until it is put on an edge again.
+                    node.square = None;
                 }
-                shape(item, handle, to, rise / k);
                 if let Some(node) = ramp.and_then(|i| item.path.as_ref()?.nodes.get(i).copied()) {
-                    state.raised = Some(node.at[1]);
                     let (at, base) = (item.from_local(metres, Vec3::from_array(node.at)), item.position[1] + node.base * k);
-                    if let Some((on, edge)) = level_with_room(&world, &to_tracking, at, base) {
+                    let yaw = item.yaw;
+                    let snapped = ramp_on_edge(&world, &to_tracking, &pieces_edges, at, base);
+                    if let Some((on, square, edge)) = snapped {
                         let on = item.to_local(metres, on).to_array();
                         if let Some(node) = ramp.and_then(|i| item.path.as_mut()?.nodes.get_mut(i)) {
                             node.at = on;
+                            node.base = node.base.min(on[1]);
+                            // (the piece's own turn: the edge's direction as the piece sees it)
+                            node.square = square.map(|d| (Quat::from_rotation_y(-yaw) * Vec3::new(d.x, 0.0, d.y)).xz().to_array());
                         }
                         state.join = Some(edge);
                     }
                 }
             }
         } else {
-            state.raised = None;
+            state.held = None;
             state.handle_drag = None;
             placed.shaping = false;
             placed.revision += 1;
@@ -1139,13 +1232,27 @@ ends_down: [0.0; 2],
             placed.dragging = Some(id);
             if let Some(item) = placed.items.iter().find(|p| p.id == id) {
                 state.yaw = item.yaw;
-                // Where the pointer is on the ground with the piece out of its way.
-                let under = Some(()).filter(|_| !state.free).and_then(|_| cast(&world, &placed, &root, origin, direction)).filter(|h| h.normal.y >= MIN_UP);
-                state.carry = under.map(|h| ((Vec3::from_array(item.position) - to_tracking.transform_point3(h.point)).with_y(0.0), item.yaw));
+                state.twist = 0.0;
+                let position = Vec3::from_array(item.position);
+                // Up in the air (further above what is under it than a join leaves it): held in the hand.
+                let below = cast_past(&world, &placed, &root, root.transform_point(position + Vec3::Y * 0.02), root.rotation * Vec3::NEG_Y, Some(id))
+                    .map(|h| to_tracking.transform_point3(h.point).y);
+                let k = metres * item.scale;
+                let in_air = below.is_none_or(|y| position.y - y > item.piece.lift.max(0.0) * k + AIR_GAP_M);
+                if in_air {
+                    state.held = Some((*controller, position));
+                    state.carry = None;
+                } else {
+                    // Where the pointer is on the ground with the piece out of its way.
+                    let under = Some(()).filter(|_| !state.free).and_then(|_| cast(&world, &placed, &root, origin, direction)).filter(|h| h.normal.y >= MIN_UP);
+                    state.carry = under.map(|h| ((position - to_tracking.transform_point3(h.point)).with_y(0.0), item.yaw));
+                }
                 // (this frame too: it stays where it is)
-                state.ghost = state.ghost.filter(|_| state.carry.is_none()).or(Some((Vec3::from_array(item.position), root.transform_point(Vec3::from_array(item.position)))));
+                state.ghost = Some((position, root.transform_point(position)));
+                state.placed_yaw = item.yaw;
+                state.lift = item.piece.lift;
+                info!("BUILD picked up piece {id}{}", if in_air { " (in the hand)" } else { "" });
             }
-            info!("BUILD picked up piece {id}");
         }
     }
     if let Some(id) = placed.dragging {
@@ -1223,6 +1330,7 @@ ends_down: [0.0; 2],
     if drawing && !state.draft.is_empty() && pressed(now.b, previous.b) {
         state.draft.pop();
         state.level = state.draft.last().map(|n| n.at[1]);
+        state.bank = state.draft.last().map_or(0.0, |n| n.bank);
         return;
     }
     // B removes the piece the pointer is on, selected or not; pointing at
@@ -1302,26 +1410,32 @@ ends_down: [0.0; 2],
                     }
                     node.at[1] = y;
                     // A ramp's point raised to about a table's height beside it is put level with
-                    // the table, on its edge, so the ramp runs on off it without a step. (The
-                    // stick's height stays the stick's: pushing on lets it go again.)
+                    // the table, on its edge, so the ramp runs on off it without a step; on another
+                    // piece's edge, it starts or ends there. On an edge, the ramp crosses it square
+                    // there whatever the next points do. (The stick's height stays the stick's:
+                    // pushing on lets it go again.)
                     if kind == PieceKind::Deck {
-                        if let Some((on, edge)) = level_with_room(&world, &to_tracking, Vec3::from_array(node.at), node.base) {
+                        state.bank = (state.bank + state.tilt).clamp(-drawn::MAX_BANK, drawn::MAX_BANK);
+                        node.bank = banked(state.bank);
+                        let edges: Vec<snap::Edge> = placed.items.iter().flat_map(|p| p.edges(metres)).filter(|e| e.width > 0.0).collect();
+                        if let Some((on, square, edge)) = ramp_on_edge(&world, &to_tracking, &edges, Vec3::from_array(node.at), node.base) {
                             node.at = on.to_array();
+                            node.base = node.base.min(on.y);
+                            node.square = square.map(|d| d.to_array());
                             state.join = Some(edge);
                         }
                     }
-                    // On another piece's edge (a rail's end for a rail), it starts or ends there.
-                    let rail = kind == PieceKind::RailPath;
+                    // A rail's end on another rail's end starts or ends there.
                     let edge = placed
                         .items
                         .iter()
                         .flat_map(|p| p.edges(metres))
-                        .filter(|e| (e.width == 0.0) == rail)
+                        .filter(|e| e.width == 0.0 && kind == PieceKind::RailPath)
                         .map(|e| (e.at.xz().distance(at.xz()), e))
                         .filter(|(d, _)| *d < DRAW_SNAP_M)
                         .min_by(|a, b| a.0.total_cmp(&b.0));
                     if let Some((_, edge)) = edge {
-                        let y = edge.at.y - if rail { drawn::RAIL_TOP * metres } else { 0.0 };
+                        let y = edge.at.y - drawn::RAIL_TOP * metres;
                         node.at = [edge.at.x, y, edge.at.z];
                         node.base = node.base.min(y);
                         state.join = Some((edge.at, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) * edge.out, edge.width));
@@ -1357,6 +1471,7 @@ ends_down: [0.0; 2],
             info!("BUILD drew a {} of {} points as piece {id}", kind.noun(), state.draft.len());
             state.draft.clear();
             state.level = None;
+            state.bank = 0.0;
         }
         return;
     }
@@ -1398,11 +1513,22 @@ fn describe(
     state: Res<BuildState>,
     placed: Res<PlacedPieces>,
     touch: Res<LatestTouch>,
+    placing: Res<parks::Placing>,
+    rig: Res<Rig>,
     mut legend: ResMut<legend::Legend>,
 ) {
     use legend::Row;
     let mut next = legend::Legend::default();
-    if mode.active {
+    if let Some(job) = &placing.0 {
+        let size = if rig.scale <= 1.01 { "life size".to_string() } else { format!("skater 1/{:.0} life size", rig.scale) };
+        next.right = vec![
+            Row::new("Pointer", if job.at.is_some() { "on the floor, a table or a shelf" } else { "point at the floor or a table" }),
+            Row::new("Stick ↔", "turn the park"),
+            Row::new("Stick ↕", format!("bigger / smaller ({size})")),
+            Row::new("Trigger / A", if job.edit { "put it here and build" } else { "put it here and skate" }),
+            Row::new("B", "cancel"),
+        ];
+    } else if mode.active {
         let chosen = PieceKind::ALL[state.selected];
         let editing = placed.selected.and_then(|id| placed.items.iter().find(|p| p.id == id));
         // What the sticks change: the selected piece, or the next one.
@@ -1413,7 +1539,14 @@ fn describe(
         let lower = |k: PieceKind| k.noun();
         let pointed = placed.pointed.and_then(|id| placed.items.iter().find(|p| p.id == id));
         if placed.dragging.is_some() {
-            next.right = vec![Row::new("Stick ↔", "turn it"), Row::new("Grip", "let go to put it down")];
+            next.right = vec![
+                Row::new("Stick ↔", "turn it"),
+                Row::new("Stick ↕", "make it bigger / smaller"),
+                Row::new("Grip", "let go to put it down"),
+            ];
+            if state.held.is_some() {
+                next.right.insert(0, Row::new("Controller", "it moves and turns with your hand"));
+            }
         } else if touch.0.left_grip > PRESS {
             // The second set, while the left grip is held.
             if kind.sized() {
@@ -1454,14 +1587,20 @@ fn describe(
                 (Some(Grab::Node(i)), Some(path)) if state.handle_drag.is_some() => {
                     let mut rows = vec![Row::new("Grip", if state.join.is_some() { "let go to leave it on that edge" } else { "let go to leave it there" })];
                     match item.piece.kind {
-                        PieceKind::Pool => {}
-                        PieceKind::Pad => rows.push(Row::new("Stick ↕", "raise / lower the pad")),
-                        _ => rows.push(Row::new("Stick ↕", "raise / lower this point")),
+                        PieceKind::Pool => rows.push(Row::new("Controller", "move this point (the lip stays level)")),
+                        PieceKind::Pad => rows.push(Row::new("Controller", "move this point; up / down raises the pad")),
+                        PieceKind::Deck => {
+                            rows.push(Row::new("Controller", "move this point, any way"));
+                            rows.push(Row::new("Stick ↔", bank_name(path.nodes.get(i).map_or(0.0, |n| n.bank))));
+                        }
+                        _ => rows.push(Row::new("Controller", "move this point, any way")),
                     }
                     let _ = (i, path);
                     rows
                 }
-                (Some(Grab::Bend(_)), Some(_)) if state.handle_drag.is_some() => vec![Row::new("Grip", "let go to leave it there")],
+                (Some(Grab::Bend(_)), Some(_)) if state.handle_drag.is_some() => {
+                    vec![Row::new("Controller", "bend this stretch"), Row::new("Grip", "let go to leave it there")]
+                }
                 (Some(Grab::Node(i)), Some(path)) => {
                     let mut rows = vec![
                         Row::new("Grip (hold)", "move this point"),
@@ -1534,6 +1673,10 @@ fn describe(
                 match chosen {
                     PieceKind::Pool => {}
                     PieceKind::Pad => next.right.push(Row::new("Stick ↕", "raise / lower the pad")),
+                    PieceKind::Deck => {
+                        next.right.push(Row::new("Stick ↕", "raise / lower the next point"));
+                        next.right.push(Row::new("Stick ↔", bank_name(banked(state.bank))));
+                    }
                     _ => next.right.push(Row::new("Stick ↕", "raise / lower the next point")),
                 }
                 if enough {
@@ -1595,7 +1738,10 @@ fn draft_path(draft: &[drawn::Node], pending: Option<drawn::Node>, origin: Vec3,
     let nodes = draft
         .iter()
         .chain(pending.iter())
-        .map(|n| drawn::Node::new((Vec3::from_array(n.at) - origin) / metres, (n.base - origin.y) / metres))
+        .map(|n| drawn::Node {
+            bend: n.bend.map(|b| b / metres),
+            ..drawn::Node { corner: n.corner, square: n.square, bank: n.bank, ..drawn::Node::new((Vec3::from_array(n.at) - origin) / metres, (n.base - origin.y) / metres) }
+        })
         .collect();
     drawn::Path { nodes, ..default() }
 }
@@ -1611,37 +1757,70 @@ fn level_with_room(world: &ArWorld, to_tracking: &bevy::math::Affine3A, point: V
     Some((level.at, ((a + b) * 0.5, (b - a).normalize_or(Vec3::X), a.distance(b))))
 }
 
-/// Moves a handle of a drawn piece: a point to `to` (the piece's own
-/// metres; none: the pointer is on nothing) and up by `rise`, or a bend so
-/// its stretch's middle is at `to`.
-fn shape(item: &mut Placed, handle: Grab, to: Option<Vec3>, rise: f32) {
+/// What the stick does to a ramp's point banked `bank`, for the legend.
+fn bank_name(bank: f32) -> String {
+    let degrees = bank.to_degrees().round() as i32;
+    match degrees {
+        0 => "bank it (level now)".to_string(),
+        d if d > 0 => format!("bank it (now {d}°, left side up)"),
+        d => format!("bank it (now {}°, right side up)", -d),
+    }
+}
+
+/// A ramp's bank as it is kept: in steps of [`BANK_STEP`].
+fn banked(bank: f32) -> f32 {
+    (bank / BANK_STEP).round() * BANK_STEP
+}
+
+/// A ramp's point (tracking space, raised from a surface at height `base`)
+/// put on an edge: level with a table beside it ([`level_with_room`]), or
+/// else on another piece's edge among `edges` (a ramp's or platform's). Where
+/// it goes, the direction (x, z) the ramp crosses the edge in there when it
+/// is on the edge (not only over a table's top), and the edge as
+/// [`BuildState::join`] marks it.
+fn ramp_on_edge(world: &ArWorld, to_tracking: &bevy::math::Affine3A, edges: &[snap::Edge], point: Vec3, base: f32) -> Option<(Vec3, Option<Vec2>, (Vec3, Vec3, f32))> {
+    if let Some((on, edge)) = level_with_room(world, to_tracking, point, base) {
+        let (middle, along, width) = edge;
+        let (a, b) = (middle - along * width * 0.5, middle + along * width * 0.5);
+        let ab = (b - a).xz();
+        let nearest = a.xz() + ab * ((on.xz() - a.xz()).dot(ab) / ab.length_squared().max(1e-12)).clamp(0.0, 1.0);
+        let square = (nearest.distance(on.xz()) < 1e-3).then(|| Vec2::new(ab.y, -ab.x).normalize_or(Vec2::X));
+        return Some((on, square, edge));
+    }
+    let (_, edge) = edges.iter().map(|e| (e.at.xz().distance(point.xz()), e)).filter(|(d, _)| *d < DRAW_SNAP_M).min_by(|a, b| a.0.total_cmp(&b.0))?;
+    Some((edge.at, Some(edge.out.xz().normalize_or(Vec2::X)), (edge.at, Quat::from_rotation_y(std::f32::consts::FRAC_PI_2) * edge.out, edge.width)))
+}
+
+/// Moves a handle of a drawn piece to where the hand has it, `to` (the piece's own metres): a point there, its
+/// base on `floor` (the height of what is under it, none: nothing is), never below it; or a bend so its
+/// stretch's middle is there.
+fn shape(item: &mut Placed, handle: Grab, to: Vec3, floor: Option<f32>) {
     let kind = item.piece.kind;
     let Some(path) = item.path.as_mut() else { return };
     match handle {
         Grab::Node(i) => {
             let Some(node) = path.nodes.get_mut(i) else { return };
-            if let Some(to) = to {
-                node.at[0] = to.x;
-                node.at[2] = to.z;
-                if kind != PieceKind::Pool {
-                    node.base = to.y;
-                }
+            node.at[0] = to.x;
+            node.at[2] = to.z;
+            if kind != PieceKind::Pool {
+                node.base = floor.unwrap_or(node.base.min(to.y));
             }
             match kind {
                 // (level with the surface its first point is on)
                 PieceKind::Pool => {}
+                // (level: the hand raises all of it)
                 PieceKind::Pad => {
                     let floor = path.nodes.iter().map(|n| n.base).fold(f32::MAX, f32::min);
-                    let top = (path.nodes[i].at[1] + rise).max(floor + 0.02);
+                    let top = to.y.max(floor + 0.02);
                     for n in &mut path.nodes {
                         n.at[1] = top;
                     }
                 }
-                _ => node.at[1] = (node.at[1] + rise).max(node.base),
+                _ => node.at[1] = to.y.max(node.base),
             }
         }
         Grab::Bend(i) => {
-            if let (Some(to), true) = (to, i < path.stretches(kind.closed())) {
+            if i < path.stretches(kind.closed()) {
                 let straight = path.straight_middle(i, kind.closed());
                 path.nodes[i].bend = [to.x - straight.x, to.z - straight.z];
             }
@@ -1672,8 +1851,148 @@ fn reshape(item: &mut Placed, handle: Grab, b: bool, click: bool, trigger: bool)
     true
 }
 
+/// Where a hold in the hand ([`BuildState::held`]) has taken its point, with the controller now at `now`
+/// (tracking space): moved from where it was taken exactly as far as the controller has moved (turning the
+/// controller doesn't swing it). And how far the controller has turned about up since (a held piece turns that
+/// much where it is).
+fn follow(held: &(Transform, Vec3), now: &Transform) -> (Vec3, f32) {
+    let (from, point) = held;
+    let turned = now.rotation * from.rotation.inverse();
+    (*point + (now.translation - from.translation), turned.to_euler(EulerRot::YXZ).0)
+}
+
+/// The piece whose shape passes nearest the ray (world space), within `reach` of it and no further along it
+/// than `before` (and the reach): a thin piece pointed just beside.
+fn near_ray(placed: &PlacedPieces, root: &Transform, origin: Vec3, direction: Vec3, reach: f32, before: f32) -> Option<u64> {
+    let mut best: Option<(f32, u64)> = None;
+    for item in placed.items.iter().filter(|p| Some(p.id) != placed.dragging) {
+        let at = item.world_transform(root, placed.park_scale);
+        for q in item.geometry().all_quads() {
+            let q = q.map(|p| at.transform_point(p));
+            for i in 0..4 {
+                let (off, along) = ray_segment(origin, direction, q[i], q[(i + 1) % 4]);
+                if along > 0.0 && along <= before + reach && off < reach && best.is_none_or(|(d, _)| off < d) {
+                    best = Some((off, item.id));
+                }
+            }
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
+/// How near the ray (from `origin` along the unit `direction`) comes to the segment a..b, and how far along the
+/// ray that is.
+fn ray_segment(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3) -> (f32, f32) {
+    let (d, r) = (b - a, origin - a);
+    let (e, f, c, k) = (d.dot(d), d.dot(r), direction.dot(r), direction.dot(d));
+    let (s, t) = if e < 1e-12 {
+        ((-c).max(0.0), 0.0)
+    } else {
+        let denom = e - k * k;
+        let s = if denom > 1e-12 { ((k * f - c * e) / denom).max(0.0) } else { 0.0 };
+        let t = (k * s + f) / e;
+        if t < 0.0 {
+            ((-c).max(0.0), 0.0)
+        } else if t > 1.0 {
+            ((k - c).max(0.0), 1.0)
+        } else {
+            (s, t)
+        }
+    };
+    ((origin + direction * s - (a + d * t)).length(), s)
+}
+
 pub(crate) fn snap_scale(scale: f32) -> f32 {
     ((scale / SIZE_STEP).round() * SIZE_STEP).clamp(MIN_PIECE_SCALE, MAX_PIECE_SCALE)
+}
+
+/// Drop the skater onto whatever is at `at` (tracking space), facing
+/// `forward`, once the collision for `revision` has been made.
+pub(crate) fn drop_skater_after_rebuild(world: &mut World, at: Vec3, forward: Vec3, revision: u64) {
+    world.resource_mut::<BuildState>().drop_after_rebuild = Some((at, forward, revision));
+}
+
+/// A park being put down ([`parks::Placing`]): it follows the pointer on the
+/// room's level surfaces (floor, table, shelf: its floor goes on what is
+/// pointed at); the stick turns it and makes it bigger or smaller (the
+/// skater too: the world scale). The trigger or A puts it there, B lets it go.
+fn place_park(world: &mut World, mut previous: Local<Option<(bool, bool)>>) {
+    let Some(job) = world.resource::<parks::Placing>().0.clone() else {
+        *previous = None;
+        world.resource_mut::<BuildState>().placing = false;
+        return;
+    };
+    // A menu opened over it lets it go.
+    let ui = world.resource::<crate::xr::ui::XrUi>();
+    if ui.open || ui.external.is_some() {
+        parks::cancel_placing(world);
+        return;
+    }
+    let touch = world.resource::<LatestTouch>().0;
+    let dt = world.resource::<Time<Real>>().delta_secs();
+    world.resource_mut::<BuildMode>().active = false;
+    world.resource_mut::<ExternalPad>().set(XboxState { buttons: 0, triggers: [0, 0], left: [0, 0], right: [0, 0] });
+    let put = touch.a || touch.right_trigger > PRESS;
+    // (the press that chose the park is not the one that puts it)
+    let Some((was_put, was_b)) = previous.replace((put, touch.b)) else { return };
+    if touch.b && !was_b {
+        parks::cancel_placing(world);
+        world.resource_mut::<crate::xr::ui::XrUi>().request = Some(crate::xr::ui::pages::PARKS);
+        return;
+    }
+    let mut job = job;
+    let [rx, ry] = touch.right_stick;
+    if rx.abs() > STICK_DEADZONE && rx.abs() > ry.abs() {
+        let push = ((rx.abs() - STICK_DEADZONE) / (1.0 - STICK_DEADZONE)).clamp(0.0, 1.0);
+        job.yaw -= rx.signum() * push * push * TURN_RATE * dt;
+        job.turned = true;
+    }
+    if ry.abs() > STICK_DEADZONE && ry.abs() > rx.abs() {
+        // (up: a bigger park, and skater, in the room: fewer game metres to the real one)
+        job.scale = (job.scale * (-ry * SCALE_RATE * dt).exp()).clamp(MIN_SCALE, MAX_SCALE);
+    }
+    world.resource_mut::<Rig>().scale = job.scale;
+    let Some(root) = world.resource::<Rig>().root_transform() else { return };
+    let controller = {
+        let mut hands = world.query::<(&Hand, &Transform)>();
+        hands.iter(world).find(|(hand, _)| matches!(hand, Hand::Right)).map(|(_, t)| *t)
+    };
+    let Some(controller) = controller else { return };
+    if !job.turned {
+        // Facing away from the player until it is turned.
+        job.yaw = heading(controller.rotation);
+    }
+    let origin = root.transform_point(controller.translation);
+    let direction = (root.rotation * (controller.rotation * Vec3::NEG_Z)).normalize();
+    // The room only: the park's own pieces are what is being moved.
+    let mut best: Option<(f32, Vec3)> = None;
+    for [a, b, c] in world.resource::<ArWorld>().room() {
+        if let Some(t) = ray_triangle(origin, direction, a, b, c).filter(|&t| t <= MAX_RANGE && best.is_none_or(|(d, _)| t < d)) {
+            best = Some((t, (b - a).cross(c - a).normalize_or_zero()));
+        }
+    }
+    let to_tracking = root.compute_affine().inverse();
+    let hit = best.filter(|(_, n)| n.y.abs() >= MIN_UP).map(|(t, _)| origin + direction * t);
+    world.resource_mut::<BuildState>().placing = true;
+    world.resource_mut::<BuildState>().ray = Some(match (hit, best) {
+        (Some(point), _) => (origin, point, true),
+        (None, Some((t, _))) => (origin, origin + direction * t, false),
+        (None, None) => (origin, origin + direction * MISS_LENGTH, false),
+    });
+    if let Some(point) = hit {
+        job.at = Some(to_tracking.transform_point3(point));
+    }
+    if let Some(at) = job.at {
+        let items = parks::in_room(&job.pieces, job.pose(at), job.scale);
+        world.resource_mut::<PlacedPieces>().items = items;
+    }
+    world.resource_mut::<parks::Placing>().0 = Some(job.clone());
+    if put && !was_put && job.at.is_some() {
+        world.resource_mut::<BuildState>().placing = false;
+        if parks::finish_placing(world) == Some(true) {
+            world.resource_mut::<BuildMode>().active = true;
+        }
+    }
 }
 
 /// The scale stick was let go: put the skater back on the same real spot at
@@ -1724,7 +2043,8 @@ fn drop_after_park_scale(
         *seen = world.revision;
         return;
     };
-    if placed.revision != revision || world.revision == *seen {
+    // (later edits, such as posts left out over a gap, rebuild it too)
+    if placed.revision < revision || world.revision == *seen {
         return;
     }
     state.drop_after_rebuild = None;
@@ -1856,7 +2176,8 @@ impl PieceAssets {
         let look = finish.look();
         // Wood is pale, as the plywood a ramp is built of: the photograph's grain, in birch's colour.
         let plywood = finish == Finish::Wood && tint.is_none();
-        let neutral = tint.is_some() || plywood;
+        let plaster = finish == Finish::Plaster && tint.is_none();
+        let neutral = tint.is_some() || plywood || finish == Finish::Plaster;
         let texture = look.texture.map(|(bytes, _)| {
             self.textures
                 .entry((finish, neutral))
@@ -1869,6 +2190,7 @@ impl PieceAssets {
             Some(tint) if texture.is_some() => (tint.color().to_linear() * (1.0 / NEUTRAL_LEVEL)).into(),
             Some(tint) => tint.color(),
             None if plywood => (PLYWOOD.to_linear() * (1.0 / NEUTRAL_LEVEL)).into(),
+            None if plaster => (PLASTER.to_linear() * (1.0 / NEUTRAL_LEVEL)).into(),
             None => look.color.unwrap_or(kind.color()),
         };
         let material = materials.add(StandardMaterial {
@@ -1892,6 +2214,8 @@ impl PieceAssets {
 
 /// Birch plywood: the colour of everything in wood, until the player gives it another.
 const PLYWOOD: Color = Color::srgb(0.8, 0.69, 0.52);
+/// A pool's painted plaster.
+const PLASTER: Color = Color::srgb(0.6, 0.8, 0.9);
 
 /// How a finish is drawn.
 struct Look {
@@ -1923,6 +2247,8 @@ impl Finish {
             Finish::Concrete => photo(park_texture!("concrete"), 3.0, 0.9),
             // (its bricks bigger than life: at a miniature's size real ones are specks)
             Finish::Brick => photo(park_texture!("brick"), 2.0, 0.9),
+            // (the concrete's grain under a pool's pale blue, `PLASTER`)
+            Finish::Plaster => photo(park_texture!("concrete"), 3.0, 0.8),
             // (no reflections to show in a room, so only a little metal in it)
             Finish::Steel => Look { texture: None, color: Some(Color::srgb(0.62, 0.64, 0.67)), roughness: 0.35, metallic: 0.25 },
             Finish::Paint => Look { texture: None, color: None, roughness: 0.85, metallic: 0.0 },
@@ -2044,10 +2370,10 @@ fn piece_mesh(geometry: &PieceGeometry, finish: Finish) -> Mesh {
         bevy::mesh::PrimitiveTopology::TriangleList,
         bevy::asset::RenderAssetUsages::default(),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh
+    // (a pool's inside shaded by how much of the sky each point of it sees through its mouth)
+    let mesh = if geometry.mouth.is_empty() { mesh } else { mesh.with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, pool::sky_shades(geometry, &positions, &normals)) };
+    mesh.with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions).with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
 }
 
 /// A sunk piece's outside, drawn as nothing but depth (see `occluder.wgsl`): the piece's own
@@ -2218,6 +2544,8 @@ fn sync_pieces(
     mut images: ResMut<Assets<Image>>,
     mut occluders: ResMut<Assets<Occluder>>,
     mut visuals: Query<(Entity, &PlacedVisual, &mut Transform, &mut Visibility)>,
+    shadows: Option<Res<crate::xr::contact_shadow::ShadowAssets>>,
+    (mut pools, mut pool_shadows): (ResMut<pool::PoolAssets>, ResMut<Assets<pool_shadow::PoolShadow>>),
 ) {
     let Some(root) = rig.root_transform() else {
         return;
@@ -2270,6 +2598,23 @@ fn sync_pieces(
         if let Some(detail) = Some(()).filter(|_| !item.hidden && item.path.is_none()).and_then(|_| detail_mesh(&item.geometry(), item.piece.kind, item.finish())) {
             commands.spawn((Mesh3d(meshes.add(detail)), MeshMaterial3d(assets.detail(&mut materials)), Transform::default(), ChildOf(visual)));
         }
+        // Its contact shadow on the floor (`xr::contact_shadow`: shown while it stands on the room).
+        for (ring, middle) in shadows.as_ref().filter(|_| !item.hidden).map_or_else(Vec::new, |_| crate::xr::contact_shadow::piece_ring(&item.geometry(), item.piece.kind)) {
+            let Some(shadows) = shadows.as_ref() else { break };
+            commands.spawn((
+                crate::xr::contact_shadow::PieceRing(middle),
+                Mesh3d(meshes.add(ring)),
+                MeshMaterial3d(shadows.ring.clone()),
+                Transform::default(),
+                Visibility::Hidden,
+                ChildOf(visual),
+            ));
+        }
+        // A pool's coping, tiles, drain, its rim's shadow and the floor darkened round it (`pool`).
+        if item.piece.kind.sunk() && !item.hidden {
+            let ring = shadows.as_ref().map(|s| s.ring.clone());
+            pools.dress(&mut commands, visual, &item.geometry(), item.finish(), mesh.clone(), ring, &mut meshes, &mut materials, &mut images, &mut pool_shadows);
+        }
         if item.piece.kind.sunk() && !item.hidden {
             let occluder = assets.occluder.get_or_insert_with(|| occluders.add(Occluder::default())).clone();
             commands.spawn((Mesh3d(mesh), MeshMaterial3d(occluder), Transform::default(), ChildOf(visual)));
@@ -2306,7 +2651,7 @@ fn show_build(
     };
     let root = rig.root_transform();
     // Ray.
-    match state.ray.filter(|_| mode.active) {
+    match state.ray.filter(|_| mode.active || state.placing) {
         Some((start, end, _)) => {
             let length = start.distance(end).max(1e-3);
             *ray_tf = Transform {
@@ -2691,6 +3036,147 @@ mod tests {
         }
     }
 
+    /// A plaster bowl and a drawn concrete pool sunk into a carpet-coloured floor, dressed (coping, tiles, drain, the
+    /// rim's shadow from a low light, the sky's shade), as the headset draws them (no shadow maps):
+    /// `SK8_POOL_SHOT=/path/pools.png cargo test ... a_picture_of_the_pools -- --ignored` (`SK8_PIECE_VIEW=x,y,z`).
+    #[test]
+    #[ignore = "needs a GPU; writes a picture"]
+    fn a_picture_of_the_pools() {
+        use bevy::camera::RenderTarget;
+        use bevy::render::render_resource::TextureFormat;
+        use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+        let Some(path) = std::env::var_os("SK8_POOL_SHOT") else { return };
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .build()
+                .disable::<bevy::winit::WinitPlugin>()
+                .set(WindowPlugin { primary_window: None, exit_condition: bevy::window::ExitCondition::DontExit, ..default() }),
+        );
+        app.add_plugins(pool_shadow::PoolShadowPlugin).init_resource::<PieceAssets>().init_resource::<pool::PoolAssets>();
+        let image = Image::new_target_texture(1600, 1000, TextureFormat::Rgba8UnormSrgb, None);
+        let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let target = image.clone();
+        app.add_systems(
+            Startup,
+            move |mut commands: Commands,
+                  mut assets: ResMut<PieceAssets>,
+                  mut pools: ResMut<pool::PoolAssets>,
+                  mut meshes: ResMut<Assets<Mesh>>,
+                  mut materials: ResMut<Assets<StandardMaterial>>,
+                  mut images: ResMut<Assets<Image>>,
+                  mut shadows: ResMut<Assets<pool_shadow::PoolShadow>>| {
+                let view: Vec<f32> = std::env::var("SK8_PIECE_VIEW").ok().map(|v| v.split(',').filter_map(|n| n.parse().ok()).collect()).unwrap_or_default();
+                let eye = if view.len() == 3 { Vec3::new(view[0], view[1], view[2]) } else { Vec3::new(0.5, 7.0, 7.5) };
+                commands.spawn((
+                    Camera3d::default(),
+                    // (a carpet-coloured background: the real floor, as passthrough shows it round a pool)
+                    Camera { clear_color: ClearColorConfig::Custom(Color::srgb(0.45, 0.38, 0.31)), ..default() },
+                    RenderTarget::Image(target.clone().into()),
+                    AmbientLight { brightness: 700.0, ..default() },
+                    Transform::from_translation(eye).looking_at(Vec3::new(0.0, -0.8, 0.0), Vec3::Y),
+                ));
+                // (`SK8_POOL_LIGHT=x,y,z`: where the light is, shining at the middle)
+                let light: Vec<f32> = std::env::var("SK8_POOL_LIGHT").ok().map(|v| v.split(',').filter_map(|n| n.parse().ok()).collect()).unwrap_or_default();
+                let light = if light.len() == 3 { Vec3::new(light[0], light[1], light[2]) } else { Vec3::new(-6.0, 6.0, 3.0) };
+                commands.spawn((DirectionalLight { illuminance: 7000.0, ..default() }, Transform::from_translation(light).looking_at(Vec3::ZERO, Vec3::Y)));
+                let bowl = Piece::new(PieceKind::Bowl);
+                let drawn = pieces::drawn::Path::sample_of(PieceKind::Pool);
+                for (geometry, kind, finish, at) in [
+                    (bowl.geometry(), PieceKind::Bowl, Finish::Plaster, Vec3::new(-3.6, 0.0, 0.0)),
+                    (drawn.geometry(Piece::new(PieceKind::Pool)), PieceKind::Pool, Finish::Concrete, Vec3::new(3.8, 0.0, 0.0)),
+                ] {
+                    let mesh = meshes.add(piece_mesh(&geometry, finish));
+                    let visual = commands
+                        .spawn((Mesh3d(mesh.clone()), MeshMaterial3d(assets.solid(kind, finish, None, &mut materials, &mut images)), Transform::from_translation(at)))
+                        .id();
+                    pools.dress(&mut commands, visual, &geometry, finish, mesh, None, &mut meshes, &mut materials, &mut images, &mut shadows);
+                }
+            },
+        );
+        app.finish();
+        app.cleanup();
+        for _ in 0..40 {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.world_mut().spawn(Screenshot::image(image)).observe(save_to_disk(std::path::PathBuf::from(path)));
+        for _ in 0..40 {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// A placed piece from a park file (`SK8_PIECE_JSON`: one piece's JSON) as the headset draws it, with its contact
+    /// ring, on a floor: `SK8_PIECE_JSON=piece.json SK8_PLACED_SHOT=/path/piece.png cargo test ... a_picture_of_a_placed_piece
+    /// -- --ignored` (`SK8_PIECE_VIEW=x,y,z`; `SK8_NO_RING=1` without its ring).
+    #[test]
+    #[ignore = "needs a GPU; writes a picture"]
+    fn a_picture_of_a_placed_piece() {
+        use bevy::camera::RenderTarget;
+        use bevy::render::render_resource::TextureFormat;
+        use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+        let (Some(path), Some(json)) = (std::env::var_os("SK8_PLACED_SHOT"), std::env::var_os("SK8_PIECE_JSON")) else { return };
+        let item: Placed = serde_json::from_slice(&std::fs::read(json).expect("the piece")).expect("a placed piece");
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .build()
+                .disable::<bevy::winit::WinitPlugin>()
+                .set(WindowPlugin { primary_window: None, exit_condition: bevy::window::ExitCondition::DontExit, ..default() }),
+        );
+        let floor = [Vec3::new(-40.0, 0.0, -40.0), Vec3::new(40.0, 0.0, -40.0), Vec3::new(40.0, 0.0, 40.0), Vec3::new(-40.0, 0.0, 40.0)];
+        app.add_plugins(crate::xr::contact_shadow::ContactShadowPlugin)
+            .init_resource::<PieceAssets>()
+            .insert_resource(crate::xr::ar_settings::ArSettings::default())
+            .insert_resource(ArWorld { revision: 1, room_quads: vec![floor], ..default() })
+            .insert_resource(Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: Some((Vec3::ZERO, 0.0)) })
+            .init_resource::<crate::xr::link::SkaterLink>();
+        let image = Image::new_target_texture(1600, 1000, TextureFormat::Rgba8UnormSrgb, None);
+        let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        app.finish();
+        app.cleanup();
+        app.update();
+        {
+            let world = app.world_mut();
+            let geometry = item.geometry();
+            let (lo, hi) = geometry.footprint();
+            let middle = Vec3::new((lo.x + hi.x) / 2.0, 0.0, (lo.y + hi.y) / 2.0);
+            let view: Vec<f32> = std::env::var("SK8_PIECE_VIEW").ok().map(|v| v.split(',').filter_map(|n| n.parse().ok()).collect()).unwrap_or_default();
+            let eye = if view.len() == 3 { Vec3::new(view[0], view[1], view[2]) } else { middle + Vec3::new(4.0, 18.0, 12.0) };
+            world.spawn((
+                Camera3d::default(),
+                Camera { clear_color: ClearColorConfig::Custom(Color::srgb(0.45, 0.38, 0.31)), ..default() },
+                RenderTarget::Image(image.clone().into()),
+                AmbientLight { brightness: 700.0, ..default() },
+                Transform::from_translation(eye).looking_at(middle, Vec3::Y),
+            ));
+            world.spawn((DirectionalLight { illuminance: 7000.0, ..default() }, Transform::from_xyz(-6.0, 9.0, 3.0).looking_at(Vec3::ZERO, Vec3::Y)));
+            let mesh = world.resource_mut::<Assets<Mesh>>().add(piece_mesh(&geometry, item.finish()));
+            let material = world.resource_scope(|world, mut assets: Mut<PieceAssets>| {
+                world.resource_scope(|world, mut materials: Mut<Assets<StandardMaterial>>| {
+                    let mut images = world.resource_mut::<Assets<Image>>();
+                    assets.solid(item.piece.kind, item.finish(), item.tint, &mut materials, &mut images)
+                })
+            });
+            let visual = world.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::default())).id();
+            for (ring, middle) in if std::env::var_os("SK8_NO_RING").is_none() { crate::xr::contact_shadow::piece_ring(&geometry, item.piece.kind) } else { Vec::new() } {
+                let ring = world.resource_mut::<Assets<Mesh>>().add(ring);
+                let material = world.resource::<crate::xr::contact_shadow::ShadowAssets>().ring.clone();
+                world.spawn((crate::xr::contact_shadow::PieceRing(middle), Mesh3d(ring), MeshMaterial3d(material), Transform::default(), Visibility::Hidden, ChildOf(visual)));
+            }
+        }
+        for _ in 0..30 {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.world_mut().spawn(Screenshot::image(image)).observe(save_to_disk(std::path::PathBuf::from(path)));
+        for _ in 0..30 {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
     /// Build mode run by hand: a 40 m floor, the right controller 1.5 m over its middle.
     struct Bench {
         world: World,
@@ -2716,6 +3202,19 @@ mod tests {
             let mut schedule = Schedule::default();
             schedule.add_systems(build_controls);
             Self { world, schedule }
+        }
+
+        /// The controller to `at`, turned to `rotation`.
+        fn move_hand(&mut self, at: Vec3, rotation: Quat) {
+            let mut hands = self.world.query::<(&Hand, &mut Transform)>();
+            for (_, mut hand) in hands.iter_mut(&mut self.world) {
+                *hand = Transform { translation: at, rotation, ..default() };
+            }
+        }
+
+        /// A piece of `kind` put straight in, at `at`.
+        fn put(&mut self, kind: PieceKind, at: Vec3) -> u64 {
+            self.world.resource_mut::<PlacedPieces>().insert(Piece::new(kind), at, 0.0, 1.0)
         }
 
         /// Point the controller at `at`.
@@ -2861,27 +3360,138 @@ mod tests {
         bench.aim(high);
         bench.hold(2, |t| t.right_grip = 1.0);
         assert_eq!(bench.state().handle_drag, Some(Grab::Node(0)));
-        // Over the floor 5 cm out from the desk, raised to a little under its top.
+        // Carried in the hand (the controller moved, not pointed) over the floor 5 cm out from the desk, a little
+        // under its top.
         let point = |bench: &Bench| {
             let item = &bench.placed().items[0];
             Vec3::from_array(item.position) + Vec3::from_array(item.path.as_ref().unwrap().nodes[0].at)
         };
-        bench.aim(Vec3::new(0.2, 0.0, -2.95));
-        bench.hold(rising(0.68 - high.y), |t| {
-            t.right_grip = 1.0;
-            t.right_stick = [0.0, 1.0];
-        });
+        let hand = Transform::from_xyz(0.0, 1.5, 0.0).looking_at(high, Vec3::Y);
+        bench.move_hand(hand.translation + (Vec3::new(0.2, 0.68, -2.95) - high), hand.rotation);
+        bench.hold(2, |t| t.right_grip = 1.0);
         assert!(point(&bench).distance(Vec3::new(0.2, 0.7, -3.0)) < 1e-4, "{}", point(&bench));
         assert!(bench.state().join.is_some());
         // Raised on, it is let go; left there.
-        bench.hold(rising(0.09), |t| {
-            t.right_grip = 1.0;
-            t.right_stick = [0.0, 1.0];
-        });
+        bench.move_hand(hand.translation + (Vec3::new(0.2, 0.77, -2.95) - high), hand.rotation);
+        bench.hold(2, |t| t.right_grip = 1.0);
         bench.hold(3, |_| {});
         let at = point(&bench);
         assert!((at.y - 0.77).abs() < 0.005 && (at.z + 2.95).abs() < 1e-4, "{at}");
         assert_eq!((bench.state().handle_drag, bench.placed().items[0].piece), (None, item.piece), "its width as it was");
+    }
+
+    /// A point taken 3 m away stays where it is when taken, goes as far as the controller is pushed, and isn't
+    /// swung round by the controller turning.
+    #[test]
+    fn a_held_point_moves_as_the_controller_does_from_where_it_was() {
+        let from = Transform::from_xyz(0.0, 1.5, 0.0).looking_at(Vec3::new(0.0, 0.0, -3.0), Vec3::Y);
+        let point = Vec3::new(0.0, 0.0, -3.0);
+        let held = (from, point);
+        assert!(follow(&held, &from).0.distance(point) < 1e-6, "no jump");
+        let pushed = Transform { translation: from.translation + Vec3::new(0.0, 0.0, -0.2), ..from };
+        assert!(follow(&held, &pushed).0.distance(point + Vec3::new(0.0, 0.0, -0.2)) < 1e-6);
+        let turned = Transform { rotation: Quat::from_rotation_y(0.4) * from.rotation, ..from };
+        let (at, twist) = follow(&held, &turned);
+        assert!(at.distance(point) < 1e-6 && (twist - 0.4).abs() < 1e-5, "{at} {twist}");
+    }
+
+    /// A rail is pointed at with the ray a few centimetres off it; well clear of it, it is not.
+    #[test]
+    fn a_rail_is_pointed_at_from_beside_it() {
+        let mut bench = Bench::new(PieceKind::Platform);
+        let id = bench.put(PieceKind::Rail, Vec3::new(0.0, 0.0, -2.0));
+        let top = {
+            let item = &bench.placed().items[0];
+            let at = item.world_transform(&Transform::IDENTITY, 1.0);
+            let geometry = item.geometry();
+            geometry.all_quads().flatten().map(|&p| at.transform_point(p)).max_by(|a, b| a.y.total_cmp(&b.y)).unwrap()
+        };
+        // (just over its top, on to the floor behind it)
+        bench.aim(top + Vec3::Y * 0.035);
+        bench.hold(2, |_| {});
+        assert_eq!(bench.placed().pointed, Some(id));
+        bench.aim(top + Vec3::Y * 0.25);
+        bench.hold(2, |_| {});
+        assert_eq!(bench.placed().pointed, None);
+    }
+
+    /// A piece up in the air is carried in the hand: it moves and turns as the controller does, the stick
+    /// scales it on the way, and it is left where the hand lets go.
+    #[test]
+    fn a_piece_in_the_air_moves_and_turns_with_the_hand() {
+        let mut bench = Bench::new(PieceKind::Platform);
+        let start = Vec3::new(0.0, 1.0, -1.0);
+        let id = bench.put(PieceKind::Rail, start);
+        bench.world.resource_mut::<PlacedPieces>().selected = Some(id);
+        let hand = Transform::from_xyz(0.0, 1.5, 0.0).looking_at(Vec3::new(0.0, 0.0, -3.0), Vec3::Y);
+        bench.move_hand(hand.translation, hand.rotation);
+        bench.hold(36, |t| t.right_grip = 1.0);
+        assert_eq!(bench.placed().dragging, Some(id));
+        assert!(bench.state().held.is_some(), "held in the hand");
+        let item = |bench: &Bench| bench.placed().items[0].clone();
+        assert!(Vec3::from_array(item(&bench).position).distance(start) < 1e-4);
+        // Moved: it goes as far, up and away too.
+        let moved = Vec3::new(0.3, 0.2, -0.1);
+        bench.move_hand(hand.translation + moved, hand.rotation);
+        bench.hold(2, |t| t.right_grip = 1.0);
+        assert!(Vec3::from_array(item(&bench).position).distance(start + moved) < 1e-3, "{:?}", item(&bench).position);
+        // Turned about up: it turns as much where it is (the hand's turn doesn't swing it).
+        let turn = Quat::from_rotation_y(0.5);
+        bench.move_hand(hand.translation + moved, turn * hand.rotation);
+        bench.hold(2, |t| t.right_grip = 1.0);
+        let expected = start + moved;
+        assert!(Vec3::from_array(item(&bench).position).distance(expected) < 1e-3, "{:?} not {expected}", item(&bench).position);
+        assert!((item(&bench).yaw - 0.5).abs() < 1e-3, "{}", item(&bench).yaw);
+        // The stick up makes it bigger while carried.
+        bench.hold(36, |t| {
+            t.right_grip = 1.0;
+            t.right_stick = [0.0, 1.0];
+        });
+        assert!(item(&bench).scale > 1.2, "{}", item(&bench).scale);
+        bench.hold(3, |_| {});
+        assert_eq!(bench.placed().dragging, None);
+        assert!(Vec3::from_array(item(&bench).position).distance(expected) < 1e-3);
+        // (one undo takes the whole move back)
+        assert!(bench.world.resource_mut::<PlacedPieces>().undo());
+        assert!(Vec3::from_array(item(&bench).position).distance(start) < 1e-4 && item(&bench).scale == 1.0);
+    }
+
+    /// A piece on the floor still moves with the pointer, and the stick turns it on the way.
+    #[test]
+    fn a_piece_on_the_floor_is_moved_by_the_pointer_and_turned_on_the_way() {
+        let mut bench = Bench::new(PieceKind::Platform);
+        let id = bench.put(PieceKind::Platform, Vec3::new(0.0, 0.0, -3.0));
+        bench.world.resource_mut::<PlacedPieces>().selected = Some(id);
+        bench.aim(Vec3::new(0.0, 0.0, -3.0));
+        bench.hold(36, |t| t.right_grip = 1.0);
+        assert_eq!(bench.placed().dragging, Some(id));
+        assert!(bench.state().held.is_none(), "on the floor: the pointer carries it");
+        bench.hold(36, |t| {
+            t.right_grip = 1.0;
+            t.right_stick = [1.0, 0.0];
+        });
+        let yaw = bench.placed().items[0].yaw;
+        assert!(yaw < -0.5, "turned: {yaw}");
+        bench.hold(3, |_| {});
+        assert!((bench.placed().items[0].yaw - yaw).abs() < 1e-4, "put down turned");
+    }
+
+    /// Build mode always starts with the pointer, and so does editing a piece.
+    #[test]
+    fn free_placement_is_left_on_leaving_build_mode_and_on_selecting() {
+        let mut bench = Bench::new(PieceKind::Platform);
+        bench.world.resource_mut::<BuildState>().free = true;
+        bench.world.resource_mut::<BuildMode>().active = false;
+        bench.hold(1, |_| {});
+        bench.world.resource_mut::<BuildMode>().active = true;
+        bench.hold(1, |_| {});
+        assert!(!bench.state().free);
+        let id = bench.put(PieceKind::Platform, Vec3::new(0.0, 0.0, -3.0));
+        bench.world.resource_mut::<BuildState>().free = true;
+        bench.aim(Vec3::new(0.0, 0.2, -3.0));
+        bench.tap(|t| t.right_grip = 1.0);
+        assert_eq!(bench.placed().selected, Some(id));
+        assert!(!bench.state().free);
     }
 
     #[test]

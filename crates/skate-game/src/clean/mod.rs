@@ -39,19 +39,17 @@ pub(crate) struct Options {
 /// retail tier's headset menu uses it too.
 pub(crate) fn embed_font(app: &mut App) {
     bevy::asset::embedded_asset!(app, "assets/fonts/Montserrat-Italic.ttf");
+    bevy::asset::embedded_asset!(app, "assets/fonts/Inter.ttf");
 }
 
-/// Whether this launch runs the clean tier.
+/// Whether this launch builds the clean app (no Skate 3 data to load).
 #[cfg(feature = "retail")]
 pub(crate) fn wanted() -> bool {
     #[cfg(target_os = "android")]
     {
-        // Retail only with the marker AND the imported data, so a marker
-        // left without data can't strand the player outside the menus.
+        // With imported data the app carries Skate 3 (beside SK8 and THUG2: switched in the menu).
         match crate::android::files_dir() {
-            Ok(files) => {
-                !(files.join("use-retail-data").exists() && files.join("assets/private/game.json").is_file())
-            }
+            Ok(files) => !files.join("assets/private/game.json").is_file(),
             Err(_) => true,
         }
     }
@@ -147,57 +145,17 @@ fn build(options: Options) -> App {
     let plugins = plugins.disable::<bevy::gilrs::GilrsPlugin>();
     #[cfg(feature = "xr")]
     let plugins = if options.xr.is_some() { crate::xr::plugins(plugins) } else { plugins };
-    app.add_plugins(plugins)
-        .insert_resource(bevy::winit::WinitSettings {
-            focused_mode: bevy::winit::UpdateMode::Continuous,
-            unfocused_mode: bevy::winit::UpdateMode::Continuous,
-        })
-        .insert_resource(CleanSkate::new())
-        .insert_resource(menu::Menu::new(options.files.clone(), options.xr.is_some()))
-        .init_resource::<menu::MenuNav>()
-        .init_resource::<menu::HudLines>()
-        .init_resource::<UiCapture>()
-        .add_systems(Startup, (view::lights, skater::spawn))
-        .add_systems(PostStartup, menu::spawn_ui);
-    crate::skate_audio::clean::install_sk8(&mut app);
-    bevy::asset::embedded_asset!(app, "assets/skater.glb");
+    app.add_plugins(plugins).insert_resource(bevy::winit::WinitSettings {
+        focused_mode: bevy::winit::UpdateMode::Continuous,
+        unfocused_mode: bevy::winit::UpdateMode::Continuous,
+    });
     embed_font(&mut app);
 
     let xr = options.xr.is_some();
     #[cfg(feature = "xr")]
     if let Some(xr_options) = options.xr {
-        app.add_plugins(crate::xr::XrPlugin {
-            options: xr_options,
-            files: options.files.clone(),
-            retail: false,
-        })
-        .insert_resource(crate::xr::ui::ControlsSheet(
-            menu::XR_CONTROLS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
-        ))
-        .add_systems(Startup, |panel: Res<crate::xr::panel::XrPanel>, mut commands: Commands| {
-            commands.insert_resource(menu::MenuTarget(panel.camera));
-        })
-        .add_systems(
-            Update,
-            (
-                xr_menu::touch_nav,
-                menu::update,
-                xr_menu::apply,
-                input::read_touch,
-                sim::apply_ar_world,
-                sim::teleport,
-                sim::step,
-                sim::publish_link,
-            )
-                .chain()
-                .after(crate::xr::ui::UiSet)
-                .before(feed_sounds),
-        )
-        .add_systems(Update, xr_menu::feed_hud.after(menu::draw));
-        app.world_mut()
-            .resource_mut::<crate::xr::ui::UiProviders>()
-            .0
-            .push(std::sync::Arc::new(skater_page::CleanPages));
+        app.add_plugins(crate::xr::XrPlugin { options: xr_options, files: options.files.clone() });
+        add_xr_engines(&mut app, &options.files, crate::engines::Engine::Sk8);
     }
     // SK8_ROOM_LIGHT: the room light on the desktop park (see `xr::room_light`).
     #[cfg(feature = "xr")]
@@ -205,12 +163,7 @@ fn build(options: Options) -> App {
         app.add_plugins(crate::xr::room_light::RoomLightPlugin(source));
     }
     if !xr {
-        app.add_systems(Startup, view::desktop_world).add_systems(
-            Update,
-            (menu::keyboard_nav, menu::update, input::log_gamepads, input::read_desktop, input::demo_rail_gizmo, sim::step, view::chase, view::views)
-                .chain()
-                .before(feed_sounds),
-        );
+        add_sk8(&mut app, &options.files, false);
     }
     // SK8_FIXED_DT=1: every frame advances exactly 1/60 s (deterministic SK8_ANIM_TRACE runs).
     if std::env::var_os("SK8_FIXED_DT").is_some() {
@@ -250,6 +203,78 @@ fn build(options: Options) -> App {
             commands.spawn(Screenshot::primary_window()).observe(save_to_disk(format!("{dir}/f{i:05}.jpg")));
         });
     }
+    app
+}
+
+/// The headset app's engines: SK8, and THUG2 when the app is built with it (Skate 3, when its data is there, is
+/// added by its own app: `crate::app`). The engine to start on is the one last played (`engine.txt` in `files`),
+/// else `first`; a Skate 3 import just finished (`use-retail-data`, the importer's mark) starts on Skate 3 once.
+#[cfg(feature = "xr")]
+pub(crate) fn add_xr_engines(app: &mut App, files: &std::path::Path, first: crate::engines::Engine) {
+    use crate::engines::{Engine, Engines};
+    let sk8_files = files.to_path_buf();
+    crate::engines::add_engine(app, Engine::Sk8, |_| Ok(()), move |app| add_sk8(app, &sk8_files, true));
+    #[cfg(feature = "thug2")]
+    crate::thug2::install(app, files);
+    let mut engines = app.world_mut().resource_mut::<Engines>();
+    engines.remember_in(files.to_path_buf(), first);
+    let imported = files.join("use-retail-data");
+    if engines.carries(Engine::Skate3) && imported.exists() {
+        engines.request(Engine::Skate3);
+        let _ = std::fs::remove_file(imported);
+    }
+}
+
+/// The SK8 engine: the clean-room skater and its menus, sounds and (in the headset) its adapter to the XR layer.
+fn add_sk8(app: &mut App, files: &std::path::Path, xr: bool) {
+    app.insert_resource(CleanSkate::new())
+        .insert_resource(menu::Menu::new(files.to_path_buf(), xr))
+        .init_resource::<menu::MenuNav>()
+        .init_resource::<menu::HudLines>()
+        .init_resource::<UiCapture>()
+        .add_systems(Startup, (view::lights, skater::spawn))
+        .add_systems(PostStartup, menu::spawn_ui);
+    crate::skate_audio::clean::install_sk8(app);
+    bevy::asset::embedded_asset!(app, "assets/skater.glb");
+    #[cfg(feature = "xr")]
+    if xr {
+        app.world_mut().resource_mut::<crate::xr::ui::ControlsSheet>().set(
+            crate::engines::Engine::Sk8,
+            menu::XR_CONTROLS.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect(),
+        );
+        app.add_systems(Startup, |panel: Res<crate::xr::panel::XrPanel>, mut commands: Commands| {
+            commands.insert_resource(menu::MenuTarget(panel.camera));
+        })
+        .add_systems(
+            Update,
+            (
+                xr_menu::touch_nav,
+                menu::update,
+                xr_menu::apply,
+                input::read_touch,
+                sim::apply_ar_world,
+                sim::teleport,
+                sim::step,
+                sim::publish_link,
+            )
+                .chain()
+                .after(crate::xr::ui::UiSet)
+                .before(feed_sounds),
+        )
+        .add_systems(Update, xr_menu::feed_hud.after(menu::draw));
+        app.world_mut()
+            .resource_mut::<crate::xr::ui::UiProviders>()
+            .0
+            .push(std::sync::Arc::new(skater_page::CleanPages));
+    }
+    if !xr {
+        app.add_systems(Startup, view::desktop_world).add_systems(
+            Update,
+            (menu::keyboard_nav, menu::update, input::log_gamepads, input::read_desktop, input::demo_rail_gizmo, sim::step, view::chase, view::views)
+                .chain()
+                .before(feed_sounds),
+        );
+    }
     app.init_resource::<skater::Clock>()
         .add_systems(Update, (feed_sounds, skater::bind, skater::animate, menu::draw).chain())
         .add_systems(
@@ -259,7 +284,6 @@ fn build(options: Options) -> App {
                 .after(bevy::app::AnimationSystems)
                 .before(bevy::transform::TransformSystems::Propagate),
         );
-    app
 }
 
 /// Turn this frame's engine output into sound cues.

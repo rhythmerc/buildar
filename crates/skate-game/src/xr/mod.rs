@@ -17,6 +17,8 @@ pub(crate) mod ar_settings;
 pub(crate) mod build;
 pub(crate) mod link;
 mod controller_shapes;
+pub(crate) mod hand_hud;
+pub(crate) mod contact_shadow;
 pub(crate) mod occlusion;
 pub(crate) mod occlusion_capture;
 pub(crate) mod occlusion_edges;
@@ -92,28 +94,30 @@ pub(crate) fn plugins(base: PluginGroupBuilder) -> PluginGroupBuilder {
         .disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>()
 }
 
-/// The XR layer. `retail` adds the adapter for the faithful port; the clean
-/// tier adds its own (`crate::clean`).
+/// The XR layer, whatever the engine. Each engine adds its own adapter
+/// (`link`), inside `crate::engines::add_engine`.
 pub(crate) struct XrPlugin {
     pub options: XrOptions,
     pub files: std::path::PathBuf,
-    pub retail: bool,
+}
+
+/// The faithful port's adapter and controls: added as the Skate 3 engine's.
+#[cfg(feature = "retail")]
+pub(crate) fn add_retail_link(app: &mut App) {
+    app.add_plugins(link::RetailLinkPlugin);
+    app.world_mut()
+        .resource_mut::<ui::ControlsSheet>()
+        .set(crate::engines::Engine::Skate3, retail_controls());
 }
 
 impl Plugin for XrPlugin {
     fn build(&self, app: &mut App) {
-        #[cfg(feature = "retail")]
-        if self.retail {
-            app.add_plugins(link::RetailLinkPlugin)
-                .insert_resource(ui::ControlsSheet(retail_controls()));
-        }
         app.insert_resource(XrFiles(self.files.clone()))
             .insert_resource(crate::skate_audio::clean::TuningFile(self.files.clone()))
-            .insert_resource(ui::pages::UiTier { retail: self.retail })
             .add_plugins((
                 ar_settings::ArSettingsPlugin,
                 panel::PanelPlugin,
-                ui::XrUiPlugin { retail: self.retail },
+                ui::XrUiPlugin,
             ))
             .add_plugins(link::LinkPlugin)
             .add_plugins(bevy_mod_openxr::features::fb_passthrough::OxrFbPassthroughPlugin)
@@ -139,6 +143,8 @@ impl Plugin for XrPlugin {
                 spatial_audio::SpatialAudioPlugin,
                 room_light::RoomLightPlugin(room_light::Source::Headset),
             ))
+            .add_plugins(hand_hud::HandHudPlugin)
+            .add_plugins(contact_shadow::ContactShadowPlugin)
             // The world plugin sets an opaque clear colour at build time;
             // passthrough needs alpha 0 wherever nothing was drawn.
             .add_systems(PostStartup, |mut clear: ResMut<ClearColor>| {

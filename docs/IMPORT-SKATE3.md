@@ -53,6 +53,11 @@ Switch back any time: **menu > Skate 3 data > Play the clean-room game from the 
 
 ## Troubleshooting
 
+- **Sounds:** with the decoded sound banks imported (`audio-pcm-cache`), the Skate 3 tier plays
+  Skate 3's own player sounds through its recovered sound graph, from the skater in the room.
+  Without them it falls back to the clean-room sounds. `SKATE_AUDIO=clean|retail` overrides it.
+- **The HUD:** Skate 3's own trick display (the tricks, the multiplier ring, the score and the
+  line's) floats by a controller (Settings > AR picks the left or right one).
 - **No sound in the Skate 3 tier:** the zip had no sound banks. Skate in the desktop game for a
   minute, make the zip again, re-import.
 - **Import can't see the zip:** it must be in `Download/Skate3/` and the app needs "All files

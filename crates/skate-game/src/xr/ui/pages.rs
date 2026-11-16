@@ -1,11 +1,13 @@
-//! The headset menu's shared pages, the same in both tiers: the start page,
-//! the first-run intro, AR settings, building a park, controls and the
-//! Skate 3 data page. A tier adds its own (the clean tier's skater page).
+//! The headset menu's shared pages, the same whatever the engine: the start
+//! page, the first-run intro, AR settings, building a park, controls, the
+//! engine choice and the Skate 3 data page. An engine adds its own (SK8's
+//! skater page).
 #[cfg(feature = "retail")]
 use super::import::{Import, Status};
 use super::{Act, ControlsSheet, Outcome, PageId, UiPage, UiProvider, UiProviders, Widget, XrUi};
+use crate::engines::{Engine, Engines};
 use crate::xr::actions::Hand;
-use crate::xr::ar_settings::{ArMode, ArSettings};
+use crate::xr::ar_settings::{ArMode, ArSettings, HudHand};
 use crate::xr::build::{BuildMode, MAX_PARK_SCALE, MAX_PIECE_SCALE, MAX_SCALE, MIN_PARK_SCALE, MIN_PIECE_SCALE, MIN_SCALE, PlacedPieces};
 use crate::xr::link::{ArWorld, SkaterLink, TeleportSkater};
 use crate::xr::planes::{RoomMesh, SceneCapture, SceneShapes};
@@ -15,6 +17,8 @@ use crate::xr::spawn::ray_triangle;
 use bevy::prelude::*;
 use bevy_mod_xr::camera::XrCamera;
 
+/// The saved parks ([`super::parks`]): what the menu opens on.
+pub(crate) const PARKS: PageId = "parks";
 pub(crate) const START: PageId = "start";
 pub(crate) const INTRO: PageId = "intro";
 const INTRO_MODE: PageId = "intro_mode";
@@ -23,6 +27,7 @@ const INTRO_CONTROLS: PageId = "intro_controls";
 pub(crate) const AR: PageId = "ar";
 pub(crate) const BUILD: PageId = "build";
 pub(crate) const CONTROLS: PageId = "controls";
+pub(crate) const ENGINE: PageId = "engine";
 const BUILD_CONTROLS: PageId = "build_controls";
 #[cfg(feature = "retail")]
 pub(crate) const DATA: PageId = "data";
@@ -33,10 +38,9 @@ const AHEAD_M: f32 = 0.6;
 #[cfg(feature = "retail")]
 const IMPORT_IDS: [&str; 4] = ["import0", "import1", "import2", "import3"];
 
-/// Which tier is running.
-#[derive(Resource, Clone, Copy)]
-pub(crate) struct UiTier {
-    pub retail: bool,
+/// The running engine (none before the first frame).
+fn running(world: &World) -> Option<Engine> {
+    world.get_resource::<Engines>().and_then(Engines::current)
 }
 
 pub(crate) struct Shared;
@@ -44,14 +48,17 @@ pub(crate) struct Shared;
 impl UiProvider for Shared {
     fn page(&self, id: PageId, world: &World) -> Option<UiPage> {
         let settings = world.resource::<ArSettings>();
-        let retail = world.resource::<UiTier>().retail;
+        let engine = running(world);
         Some(match id {
+            // (drawn by `super::parks`; its title is for the trail of the pages over it)
+            PARKS => UiPage::new("Parks", Vec::new()),
             START => {
                 let mut w = vec![Widget::button("skate", "Skate")];
-                for provider in world.resource::<UiProviders>().0.iter() {
+                for provider in UiProviders::active(world) {
                     w.extend(provider.start_items(world));
                 }
                 w.extend([
+                    Widget::link(format!("Engine: {}", engine.map_or("-", Engine::name)), ENGINE),
                     Widget::link("AR settings", AR),
                     Widget::link("Build a park", BUILD),
                     Widget::button("recenter", "Place the skater: point, then A"),
@@ -59,17 +66,17 @@ impl UiProvider for Shared {
                     #[cfg(feature = "retail")]
                     Widget::link("Skate 3 data", DATA),
                     Widget::info(""),
-                    Widget::info(tier_line(retail)),
+                    Widget::info(tier_line(engine)),
                     Widget::info(mode_line(settings)),
                 ]);
-                UiPage::new("SK8 AR", w)
+                UiPage::new("Settings", w)
             }
             INTRO => UiPage::new(
                 "Welcome to SK8 AR",
                 vec![
                     Widget::info("Skate a little skater around your real room: floors, tables,"),
                     Widget::info("couches, and ramps and rails you build yourself."),
-                    Widget::info(tier_line(retail)),
+                    Widget::info(tier_line(engine)),
                     Widget::info(""),
                     Widget::info("Point with the right controller and pull the trigger,"),
                     Widget::info("or move with a stick and press A. B goes back."),
@@ -123,6 +130,7 @@ impl UiProvider for Shared {
                 UiPage::new("Controls", w)
             }
             BUILD_CONTROLS => UiPage::new("Build mode controls", BUILD_HELP.iter().map(|(a, b)| pair(a, b)).collect()),
+            ENGINE => UiPage::new("Skate engine", engine_widgets(world)),
             #[cfg(feature = "retail")]
             DATA => UiPage::new("Skate 3 data", data_widgets(world)),
             _ => return None,
@@ -144,7 +152,8 @@ impl UiProvider for Shared {
             (INTRO, "next") => Outcome::Replace(INTRO_MODE),
             (INTRO, "skip") | (INTRO_CONTROLS, "done") => {
                 edit(world, |s| s.onboarding_done = true);
-                Outcome::Close
+                // (on to the parks)
+                Outcome::Home
             }
             (INTRO_MODE, "room" | "room_scan" | "free") => {
                 let mode = if widget == "free" { ArMode::FreeRoam } else { ArMode::Room };
@@ -175,6 +184,7 @@ impl UiProvider for Shared {
                 }
                 None => Outcome::Say("No right controller".into()),
             },
+            (ENGINE, _) => engine_act(widget, world),
             (AR, _) => ar_act(widget, world),
             (BUILD | INTRO_FLOOR, _) => build_act(widget, act, world)?,
             #[cfg(feature = "retail")]
@@ -189,20 +199,76 @@ fn pair(a: &str, b: &str) -> Widget {
 }
 
 fn controls_rows(world: &World) -> Vec<Widget> {
-    world.resource::<ControlsSheet>().0.iter().map(|(a, b)| pair(a, b)).collect()
+    ControlsSheet::rows(world).iter().map(|(a, b)| pair(a, b)).collect()
 }
 
-#[cfg(not(feature = "retail"))]
-fn tier_line(_retail: bool) -> &'static str {
-    "Every move, value and sound in this game was made for it."
+fn tier_line(engine: Option<Engine>) -> &'static str {
+    match engine {
+        Some(Engine::Skate3) => "Playing your own Skate 3 data (retail controls and skaters).",
+        Some(Engine::Thug2) => "Playing THUG2's own engine, on your copy of the game.",
+        _ => "SK8: every move, value and sound in it was made for this app.",
+    }
 }
 
-#[cfg(feature = "retail")]
-fn tier_line(retail: bool) -> &'static str {
-    if retail {
-        "Playing your own Skate 3 data (retail controls and skaters)."
-    } else {
-        "Clean-room game: no Skate 3 disc needed. Made for this app."
+// ---------------------------------------------------------------- engine
+
+/// Each engine's button.
+const ENGINE_IDS: [(&str, Engine); 3] =
+    [("engine_sk8", Engine::Sk8), ("engine_skate3", Engine::Skate3), ("engine_thug2", Engine::Thug2)];
+
+fn engine_about(engine: Engine) -> &'static str {
+    match engine {
+        Engine::Sk8 => "SK8: the clean-room engine, made for this app.",
+        Engine::Skate3 => "Skate 3: the faithful port, on your imported Skate 3 data.",
+        Engine::Thug2 => "THUG2: the game's own engine (decomp), on your THUG2 files.",
+    }
+}
+
+fn engine_widgets(world: &World) -> Vec<Widget> {
+    let Some(engines) = world.get_resource::<Engines>() else { return vec![Widget::info("One engine in this app.")] };
+    let current = engines.current();
+    let mut w = Vec::new();
+    for (id, engine) in ENGINE_IDS {
+        let label = match engines.available(engine, world) {
+            Ok(()) => engine.name().to_string(),
+            Err(_) if !engines.carries(engine) && engine == Engine::Skate3 && skate3_imported(world) => {
+                format!("{}  (imported: reopen the app to load it)", engine.name())
+            }
+            Err(why) => format!("{}  ({why})", engine.name()),
+        };
+        w.push(Widget::toggle(id, label, current == Some(engine)));
+    }
+    w.push(Widget::info(""));
+    w.push(Widget::info("Switch any time; each engine carries on where it left off."));
+    w.extend(Engine::ALL.map(|e| Widget::info(engine_about(e))));
+    w
+}
+
+fn engine_act(widget: &str, world: &mut World) -> Outcome {
+    let Some(&(_, engine)) = ENGINE_IDS.iter().find(|(id, _)| *id == widget) else { return Outcome::Stay };
+    let Some(engines) = world.get_resource::<Engines>() else { return Outcome::Stay };
+    if engines.current() == Some(engine) {
+        return Outcome::Say(format!("{} is running", engine.name()));
+    }
+    match engines.available(engine, world) {
+        Ok(()) => {
+            world.resource_mut::<Engines>().request(engine);
+            Outcome::Say(format!("Switched to {}", engine.name()))
+        }
+        Err(why) => Outcome::Say(format!("{}: {why}", engine.name())),
+    }
+}
+
+/// Skate 3 data is imported (it loads at launch: imported during this run, it is there from the next).
+fn skate3_imported(world: &World) -> bool {
+    #[cfg(feature = "retail")]
+    {
+        world.get_resource::<Import>().is_some_and(Import::installed)
+    }
+    #[cfg(not(feature = "retail"))]
+    {
+        let _ = world;
+        false
     }
 }
 
@@ -280,6 +346,7 @@ fn ar_widgets(world: &World) -> Vec<Widget> {
     if let Some(problem) = world.resource::<RoomLight>().problem(s.room_light) {
         w.push(Widget::info(problem));
     }
+    w.push(Widget::toggle("contact_shadows", "Contact shadows (board and park pieces)", s.contact_shadows));
     w.push(Widget::toggle("occlusion", "Real things hide the skater and park", s.occlusion.on()));
     if s.occlusion.on() {
         let problem = *world.resource::<crate::xr::occlusion::OcclusionProblem>().0.lock().unwrap();
@@ -302,6 +369,15 @@ fn ar_widgets(world: &World) -> Vec<Widget> {
     }
     w.extend([
         Widget::toggle("hud", "Trick and points readout", s.hud),
+    ]);
+    if s.hud {
+        w.extend([
+            Widget::toggle("hud_left", "Skate 3 and THUG2 HUDs by the left controller", s.hud_hand == HudHand::Left),
+            Widget::toggle("hud_right", "Skate 3 and THUG2 HUDs by the right controller", s.hud_hand == HudHand::Right),
+            Widget::info("THUG2's balance meter is always by the left controller."),
+        ]);
+    }
+    w.extend([
         Widget::button("intro", "Replay the intro"),
         Widget::info(format!("Room: {shapes} surfaces, {triangles} mesh triangles")),
     ]);
@@ -349,7 +425,10 @@ fn ar_act(widget: &str, world: &mut World) -> Outcome {
         "show_all" => s.set_all_shown(true),
         "hide_all" => s.set_all_shown(false),
         "hud" => s.hud = !s.hud,
+        "hud_left" => s.hud_hand = HudHand::Left,
+        "hud_right" => s.hud_hand = HudHand::Right,
         "room_light" => s.room_light = !s.room_light,
+        "contact_shadows" => s.contact_shadows = !s.contact_shadows,
         "occlusion" => s.occlusion = s.occlusion.toggled(),
         "occlusion_edges" => s.occlusion_edges = !s.occlusion_edges,
         "occlusion_steady" => s.occlusion_steady = !s.occlusion_steady,
@@ -541,23 +620,23 @@ const BUILD_HELP: [(&str, &str); 16] = [
 
 #[cfg(feature = "retail")]
 fn data_widgets(world: &World) -> Vec<Widget> {
-    let retail = world.resource::<UiTier>().retail;
+    let engine = running(world);
+    let carried = world.get_resource::<Engines>().is_some_and(|e| e.carries(Engine::Skate3));
     let import = world.resource::<Import>();
     let installed = import.installed();
-    let next = import.retail_next();
     let mut w = vec![
-        Widget::info(tier_line(retail)),
-        Widget::info(match (installed, next) {
-            (true, true) => "Next launch: your Skate 3 data.",
-            (true, false) => "Next launch: the clean-room game (your Skate 3 data is kept).",
+        Widget::info(tier_line(engine)),
+        Widget::info(match (installed, carried) {
+            (true, true) => "Your Skate 3 data is loaded.",
+            (true, false) => "Your Skate 3 data is imported: it loads when the app opens.",
             (false, _) => "No Skate 3 data imported.",
         }),
     ];
-    if installed && !next {
-        w.push(Widget::button("use_retail", "Play my Skate 3 from the next launch"));
+    if carried && engine != Some(Engine::Skate3) {
+        w.push(Widget::button("use_retail", "Play Skate 3 now"));
     }
-    if next || retail {
-        w.push(Widget::button("use_clean", "Play the clean-room game from the next launch"));
+    if engine == Some(Engine::Skate3) {
+        w.push(Widget::button("use_clean", "Play SK8 (the clean-room engine) now"));
     }
     match import.status() {
         Status::Working { what, done, total } => {
@@ -581,7 +660,7 @@ fn data_widgets(world: &World) -> Vec<Widget> {
         }
         Status::Idle => w.push(Widget::button("scan", "Import Skate 3 data from Download/Skate3")),
     }
-    if retail || next {
+    if installed && !carried {
         w.push(Widget::button("restart", "Close the app now (then open it again)"));
     }
     w.extend([
@@ -599,10 +678,10 @@ fn data_widgets(world: &World) -> Vec<Widget> {
 fn data_act(widget: &str, world: &mut World) -> Outcome {
     let import = world.resource::<Import>().clone();
     match widget {
-        "use_retail" | "use_clean" => match import.set_retail_next(widget == "use_retail") {
-            Ok(()) => Outcome::Say("Saved. Close and reopen the app to switch.".into()),
-            Err(e) => Outcome::Say(format!("Could not switch: {e}")),
-        },
+        "use_retail" | "use_clean" => {
+            let engine = if widget == "use_retail" { Engine::Skate3 } else { Engine::Sk8 };
+            engine_act(ENGINE_IDS.iter().find(|(_, e)| *e == engine).map_or("", |(id, _)| id), world)
+        }
         "scan" => {
             if !crate::storage_access() {
                 crate::request_storage_access();
@@ -612,7 +691,7 @@ fn data_act(widget: &str, world: &mut World) -> Outcome {
             Outcome::Stay
         }
         "restart" => {
-            info!("UI closing the app to switch tiers");
+            info!("UI closing the app to load the imported data");
             std::process::exit(0);
         }
         id => {

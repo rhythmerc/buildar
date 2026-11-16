@@ -98,7 +98,7 @@ pub(super) fn install(app: &mut App) {
         return;
     }
     app.add_systems(Startup, start)
-        .add_systems(Update, (forward, report));
+        .add_systems(Update, (forward, follow_skater, report).chain());
 }
 
 /// 82666BC0's sound for a sequence multiplier that has just changed, or `None` for the
@@ -108,10 +108,15 @@ pub(crate) fn multiplier_sound_id(multiplier: f32) -> Option<u64> {
     frontend::FrontEndSound::for_multiplier(multiplier).map(frontend::FrontEndSound::id)
 }
 
+/// The mix's player, which in AR ([`super::clean::SpatialSkateAudio`]) is an emitter kept at the skater.
+#[derive(Component)]
+struct PlayerOutput;
+
 fn start(
     mut commands: Commands,
     mut assets: ResMut<Assets<LivePcm>>,
     configured: Option<Res<PlayerAudioAssets>>,
+    spatial: Option<Res<super::clean::SpatialSkateAudio>>,
 ) {
     let Some(configured) = configured else { return };
     let live = match LivePcm::new(OUTPUT_CHANNELS, SAMPLE_RATE, QUEUE_FRAMES) {
@@ -123,10 +128,17 @@ fn start(
     };
     let handle = assets.add(live.clone());
     commands.spawn((
+        PlayerOutput,
         AudioPlayer(handle),
         // LivePcm never ends. Loop mode would wrap it in Rodio's buffering repeater, which
         // eagerly captures startup silence and retains every streamed sample.
-        PlaybackSettings::ONCE.with_volume(Volume::Linear(1.0)),
+        // In AR the mix comes from the skater in the room: Bevy's spatial sink folds its two
+        // channels into one (retail's own pan is for its camera, not the player's head) and pans
+        // and fades that by where the skater is from the head.
+        PlaybackSettings::ONCE
+            .with_volume(Volume::Linear(1.0))
+            .with_spatial(spatial.is_some()),
+        Transform::default(),
     ));
 
     let (input, observations) = mpsc::sync_channel(OBSERVATION_QUEUE);
@@ -212,6 +224,18 @@ fn forward(
     }
 }
 
+/// Keep the mix's emitter where the skater is (its last observation's place, in the game world).
+fn follow_skater(host: Option<Res<PlayerAudioHost>>, mut output: Query<&mut Transform, With<PlayerOutput>>) {
+    let Some(at) = host.and_then(|h| h.last_observation.as_ref().map(|o| Vec3::from_array(o.retail.position))) else {
+        return;
+    };
+    for mut transform in &mut output {
+        if transform.translation != at {
+            transform.translation = at;
+        }
+    }
+}
+
 fn report(mut host: Option<ResMut<PlayerAudioHost>>) {
     let Some(host) = host.as_deref_mut() else {
         return;
@@ -252,6 +276,17 @@ fn report(mut host: Option<ResMut<PlayerAudioHost>>) {
         );
         host.last_report = Instant::now();
     }
+}
+
+/// Whether the player's sound banks have been decoded ahead of time (`audio-pcm-cache`, made by the
+/// desktop engine and imported with the data): what the retail sounds need where nothing can decode
+/// XMA (the headset).
+pub(crate) fn banks_decoded() -> bool {
+    cache_directory()
+        .and_then(|folder| std::fs::read_dir(folder).ok())
+        .is_some_and(|mut files| {
+            files.any(|f| f.is_ok_and(|f| f.path().extension().is_some_and(|e| e == "pcm")))
+        })
 }
 
 fn cache_directory() -> Option<PathBuf> {

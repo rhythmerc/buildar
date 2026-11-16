@@ -4899,6 +4899,7 @@ dependencies = [
  "skate-mods",
  "skate-net",
  "skate-vehicles",
+ "thug2-sys",
  "tracing-log",
  "wgpu",
  "wgpu-hal",
@@ -5257,6 +5258,10 @@ checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
 dependencies = [
  "cfg-if",
 ]
+
+[[package]]
+name = "thug2-sys"
+version = "0.1.0"
 
 [[package]]
 name = "tiny-skia"

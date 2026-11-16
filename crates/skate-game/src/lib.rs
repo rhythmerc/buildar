@@ -117,6 +117,10 @@ mod world;
 #[cfg(feature = "xr")]
 mod xr;
 mod clean;
+#[cfg_attr(not(feature = "xr"), allow(dead_code))]
+mod engines;
+#[cfg(feature = "thug2")]
+mod thug2;
 
 /// Platform hooks for shared storage (the headset's `Download` folder),
 /// set by the Android entry point: whether the app may read it, and asking

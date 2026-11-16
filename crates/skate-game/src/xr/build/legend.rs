@@ -194,6 +194,7 @@ fn place(
     settings: Res<ArSettings>,
     panel: Res<XrPanel>,
     legend: Res<Legend>,
+    placing: Res<super::parks::Placing>,
     hands: Query<(&Hand, &Transform), (Without<LegendQuad>, Without<XrCamera>)>,
     eyes: Query<&Transform, (With<XrCamera>, Without<LegendQuad>)>,
     mut quads: Query<(&Side, &mut Transform, &mut Visibility), With<LegendQuad>>,
@@ -206,7 +207,8 @@ fn place(
             .find(|(h, _)| matches!((h, side), (Hand::Left, Side::Left) | (Hand::Right, Side::Right)))
             .map(|(_, t)| *t)
     };
-    let on = mode.active && settings.build_hints && !panel.visible;
+    // (putting a park down always shows how)
+    let on = (mode.active && settings.build_hints || placing.0.is_some()) && !panel.visible;
     let rows = |side: Side| if side == Side::Left { legend.left.len() } else { legend.right.len() };
     for (side, mut camera) in &mut cameras {
         let show = on && rows(*side) > 0 && hand(*side).is_some();

@@ -30,6 +30,12 @@ const BOWL_DEPTH: f32 = 1.2;
 const LEDGE: f32 = 0.25;
 /// How thick a deck or pad is when it floats (it has no base down to its surface).
 const SLAB: f32 = 0.12;
+/// The most a deck is banked across, radians.
+pub(crate) const MAX_BANK: f32 = 45.0 * std::f32::consts::PI / 180.0;
+
+fn is_zero(v: &f32) -> bool {
+    *v == 0.0
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Node {
@@ -44,11 +50,22 @@ pub(crate) struct Node {
     /// How far the middle of the stretch to the next node is pulled aside (x, z).
     #[serde(default)]
     pub bend: [f32; 2],
+    /// It was put on an edge (a table's, another piece's): the path crosses
+    /// it here square to that edge, along this direction over the ground
+    /// (x, z, unit; either way along the path), whatever the points around it
+    /// do. A deck's end on a table's edge stays flush along it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub square: Option<[f32; 2]>,
+    /// A deck banked across here, radians: up on its left (+) or its right
+    /// (-), turning about its lower side so nothing of it goes under its
+    /// point. Between points it eases from one bank to the next.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub bank: f32,
 }
 
 impl Node {
     pub(crate) fn new(at: Vec3, base: f32) -> Self {
-        Self { at: at.to_array(), base, corner: false, bend: [0.0; 2] }
+        Self { at: at.to_array(), base, corner: false, bend: [0.0; 2], square: None, bank: 0.0 }
     }
 
     fn p(&self) -> Vec3 {
@@ -70,11 +87,14 @@ pub(crate) struct Path {
     pub floating: bool,
 }
 
-/// A point along a path: where, and the surface's height under it.
-#[derive(Clone, Copy, Debug)]
+/// A point along a path: where, the surface's height under it, the path's
+/// direction over the ground (unit) and its bank.
+#[derive(Clone, Copy, Debug, Default)]
 struct Sample {
     p: Vec3,
     base: f32,
+    heading: Vec2,
+    bank: f32,
 }
 
 impl PieceKind {
@@ -131,7 +151,15 @@ impl Path {
             (None, Some(a)) => a - here,
             _ => Vec2::X,
         };
-        through.normalize_or(Vec2::X)
+        let through = through.normalize_or(Vec2::X);
+        // Put on an edge: square to it, whichever way the path runs.
+        match self.node(i, closed).and_then(|n| n.square) {
+            Some(square) => {
+                let square = Vec2::from_array(square).normalize_or(through);
+                if square.dot(through) < 0.0 { -square } else { square }
+            }
+            None => through,
+        }
     }
 
     /// Where the path is `t` (0-1) of the way along stretch `i`; `bent`:
@@ -143,12 +171,21 @@ impl Path {
         let (m0, m1) = (self.heading(i, true, closed) * chord, self.heading((i + 1) % self.nodes.len(), false, closed) * chord);
         let (t2, t3) = (t * t, t * t * t);
         let mut at = p0 * (2.0 * t3 - 3.0 * t2 + 1.0) + m0 * (t3 - 2.0 * t2 + t) + p1 * (-2.0 * t3 + 3.0 * t2) + m1 * (t3 - t2);
+        // (its direction: the same curve's rate of change)
+        let mut ahead = (p0 - p1) * (6.0 * t2 - 6.0 * t) + m0 * (3.0 * t2 - 4.0 * t + 1.0) + m1 * (3.0 * t2 - 2.0 * t);
         if bent {
             // All of it at the middle, none (and no turn) at the nodes.
             at += Vec2::from_array(a.bend) * 16.0 * t2 * (1.0 - t) * (1.0 - t);
+            ahead += Vec2::from_array(a.bend) * 32.0 * t * (1.0 - t) * (1.0 - 2.0 * t);
         }
-        let rise = if self.eased { t2 * (3.0 - 2.0 * t) } else { t };
-        Sample { p: Vec3::new(at.x, a.at[1] + (b.at[1] - a.at[1]) * rise, at.y), base: a.base + (b.base - a.base) * t }
+        let eased = t2 * (3.0 - 2.0 * t);
+        let rise = if self.eased { eased } else { t };
+        Sample {
+            p: Vec3::new(at.x, a.at[1] + (b.at[1] - a.at[1]) * rise, at.y),
+            base: a.base + (b.base - a.base) * t,
+            heading: ahead.normalize_or((p1 - p0).normalize_or(Vec2::X)),
+            bank: a.bank + (b.bank - a.bank) * eased,
+        }
     }
 
     /// The middle of stretch `i`: where its bend handle is.
@@ -167,16 +204,15 @@ impl Path {
         let mut out = Vec::new();
         for i in 0..self.stretches(closed) {
             let (a, b) = (self.nodes[i], *self.node(i as isize + 1, closed).expect("a stretch has an end"));
-            let straight = a.bend == [0.0; 2] && (a.corner || self.node(i as isize - 1, closed).is_none()) && (b.corner || self.node(i as isize + 2, closed).is_none());
+            let straight = a.bend == [0.0; 2] && a.bank == b.bank && a.square.is_none() && b.square.is_none() && (a.corner || self.node(i as isize - 1, closed).is_none()) && (b.corner || self.node(i as isize + 2, closed).is_none());
             let steps = if straight && !self.eased { 2 } else { 2 * ((a.p().distance(b.p()) / 0.6).ceil() as usize).clamp(3, 8) };
             for step in 0..steps {
                 out.push(self.along(i, step as f32 / steps as f32, closed, true));
             }
         }
-        if !closed {
-            if let Some(last) = self.nodes.last() {
-                out.push(Sample { p: last.p(), base: last.base });
-            }
+        if !closed && self.nodes.len() > 1 {
+            let last = self.nodes.len() - 1;
+            out.push(Sample { p: self.nodes[last].p(), ..self.along(last - 1, 1.0, false, true) });
         }
         out
     }
@@ -190,6 +226,8 @@ impl Path {
                 v.to_bits().hash(&mut h);
             }
             n.corner.hash(&mut h);
+            n.square.map(|s| s.map(f32::to_bits)).hash(&mut h);
+            n.bank.to_bits().hash(&mut h);
         }
         self.eased.hash(&mut h);
         self.floating.hash(&mut h);
@@ -254,7 +292,7 @@ fn rail(g: &mut PieceGeometry, path: &Path, line: &[Sample]) {
             let step = at.p.distance(next.p);
             if step >= left && step > 1e-6 {
                 let t = left / step;
-                return Sample { p: at.p.lerp(next.p, t), base: at.base + (next.base - at.base) * t };
+                return Sample { p: at.p.lerp(next.p, t), base: at.base + (next.base - at.base) * t, ..at };
             }
             left -= step;
             at = *next;
@@ -262,7 +300,7 @@ fn rail(g: &mut PieceGeometry, path: &Path, line: &[Sample]) {
         at
     };
     let last = path.nodes.len() - 1;
-    let mut posts: Vec<Sample> = path.nodes[1..last].iter().map(|n| Sample { p: n.p(), base: n.base }).collect();
+    let mut posts: Vec<Sample> = path.nodes[1..last].iter().map(|n| Sample { p: n.p(), base: n.base, ..default() }).collect();
     posts.insert(0, from_end(Box::new(line.iter())));
     posts.push(from_end(Box::new(line.iter().rev())));
     for i in 0..path.stretches(false) {
@@ -281,17 +319,17 @@ fn rail(g: &mut PieceGeometry, path: &Path, line: &[Sample]) {
 
 fn deck(g: &mut PieceGeometry, line: &[Sample], width: f32, floating: bool) {
     let n = line.len();
-    // Each point's direction over the ground, and its two edges.
-    let heading = |i: usize| {
-        let (a, b) = (line[i.saturating_sub(1)].p, line[(i + 1).min(n - 1)].p);
-        (b - a).with_y(0.0).normalize_or(Vec3::X)
-    };
+    // Each point's direction over the ground (the path's own, so an end put
+    // square to an edge is), and its two edges.
+    let heading = |i: usize| Vec3::new(line[i].heading.x, 0.0, line[i].heading.y);
     let mut sides: [Vec<Vec3>; 2] = [Vec::with_capacity(n), Vec::with_capacity(n)];
     for i in 0..n {
         let forward = heading(i);
         let left = Vec3::Y.cross(forward);
+        // Banked, its higher side rises across the whole width; the lower stays at the path.
+        let lean = line[i].bank.clamp(-MAX_BANK, MAX_BANK).tan() * width;
         for (side, sign) in [(0, 1.0), (1, -1.0)] {
-            let mut at = line[i].p + left * sign * width * 0.5;
+            let mut at = line[i].p + left * sign * width * 0.5 + Vec3::Y * (sign * lean).max(0.0);
             // Inside a turn tighter than the deck is wide, the edge would run backwards: it waits.
             if let Some(&before) = sides[side].last() {
                 if (at - before).with_y(0.0).dot(forward) <= 0.0 {
@@ -303,7 +341,7 @@ fn deck(g: &mut PieceGeometry, line: &[Sample], width: f32, floating: bool) {
     }
     let down = |p: Vec3, i: usize| p.with_y(if floating { p.y - SLAB } else { line[i].base.min(p.y) });
     // (all of a floating deck stands clear)
-    let clear = |i: usize| floating || line[i].p.y - line[i].base > LEDGE;
+    let clear = |p: Vec3, i: usize| floating || p.y - line[i].base > LEDGE;
     for i in 0..n - 1 {
         let (l0, l1, r0, r1) = (sides[0][i], sides[0][i + 1], sides[1][i], sides[1][i + 1]);
         push(&mut g.quads, [l0, r0, r1, l1], Vec3::Y);
@@ -318,7 +356,7 @@ fn deck(g: &mut PieceGeometry, line: &[Sample], width: f32, floating: bool) {
     for (i, out) in [(0, -heading(0)), (n - 1, heading(n - 1))] {
         let (l, r) = (sides[0][i], sides[1][i]);
         push(&mut g.quads, [l, r, down(r, i), down(l, i)], out);
-        if clear(i) {
+        if clear(l, i) && clear(r, i) {
             g.edges.push((l, r));
         }
     }
@@ -326,7 +364,7 @@ fn deck(g: &mut PieceGeometry, line: &[Sample], width: f32, floating: bool) {
     for side in &sides {
         let mut run: Vec<Vec3> = Vec::new();
         for i in 0..=n {
-            if i < n && clear(i) {
+            if i < n && clear(side[i], i) {
                 run.push(side[i]);
                 continue;
             }
@@ -420,7 +458,9 @@ fn pad(g: &mut PieceGeometry, line: &[Sample], floating: bool) {
 }
 
 /// A pool below y = 0 inside the outline: a quarter-circle transition from
-/// the lip down to a flat floor, and (ridden, not drawn) the surface it is
+/// the lip's vertical wall ([`super::POOL_VERT`]) down to a floor
+/// deeper at one end (along the outline's longest way:
+/// [`super::POOL_DEEP_END`]), and (ridden, not drawn) the surface it is
 /// sunk into out to the outline's rectangle, which is what that surface is
 /// opened along.
 fn bowl(g: &mut PieceGeometry, line: &[Sample], depth: f32) {
@@ -430,20 +470,35 @@ fn bowl(g: &mut PieceGeometry, line: &[Sample], depth: f32) {
     let n = lip.len();
     let reach = lip.iter().map(|p| p.distance(middle)).fold(f32::MAX, f32::min);
     let radius = depth.min(reach * 0.6);
+    let vert = super::POOL_VERT * radius;
+    // (the deep end: along the outline's longest way, the end its points are furthest out at)
+    let axis = long_way(&lip, middle);
+    let (near, far) = lip.iter().fold((f32::MAX, f32::MIN), |(a, b), p| {
+        let along = (*p - middle).dot(axis);
+        (a.min(along), b.max(along))
+    });
+    let deep = |p: Vec3| super::POOL_DEEP_END * radius * (((p - middle).dot(axis) - near) / (far - near).max(1e-3)).clamp(0.0, 1.0);
+    // (ring RINGS + 1: the lip, over the top of the transition)
     let ring = |k: usize, j: usize| {
+        if k > RINGS {
+            return lip[j % n];
+        }
         let a = FRAC_PI_2 * k as f32 / RINGS as f32;
         let out = lip[j % n] - middle;
-        (middle + out * (1.0 - radius * (1.0 - a.sin()) / out.length())).with_y(-radius * a.cos())
+        let tall = radius - vert + deep(lip[j % n]);
+        (middle + out * (1.0 - radius * (1.0 - a.sin()) / out.length())).with_y(-vert - tall * a.cos())
     };
     let above = middle + Vec3::Y * radius;
-    for k in 0..RINGS {
+    for k in 0..=RINGS {
         for j in 0..n {
             let quad = [ring(k, j), ring(k, j + 1), ring(k + 1, j + 1), ring(k + 1, j)];
-            push(&mut g.quads, quad, above - (quad[0] + quad[2]) * 0.5);
+            let inward = if k == RINGS { middle - (quad[0] + quad[1]) * 0.5 } else { above - (quad[0] + quad[2]) * 0.5 };
+            push(&mut g.quads, quad, inward);
         }
     }
     let floor: Vec<Vec3> = (0..n).map(|j| ring(0, j)).collect();
-    fan(&mut g.quads, middle.with_y(-radius), &floor);
+    let bottom = middle.with_y(-radius - deep(middle));
+    fan(&mut g.quads, bottom, &floor);
     // Out to the rectangle.
     let (lo, hi) = lip.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), &p| (lo.min(p), hi.max(p)));
     // Where the line from the middle through `p` leaves the rectangle, and by which side.
@@ -469,7 +524,25 @@ fn bowl(g: &mut PieceGeometry, line: &[Sample], depth: f32) {
     }
     g.unseen.extend(before..g.quads.len());
     g.edges.extend((0..n).map(|j| (lip[j], lip[(j + 1) % n])));
+    g.mouth = super::mouth_of(&lip);
+    g.vert = vert;
+    // (the drain: on the floor, toward the deep end)
+    let toward = middle + axis * (far * 0.5);
+    g.drain = Some(toward.with_y(-radius - deep(toward)));
     g.rails.push(lip.iter().copied().chain([lip[0]]).collect());
+}
+
+/// The way an outline is longest (level, unit): its points' main axis about `middle`.
+fn long_way(points: &[Vec3], middle: Vec3) -> Vec3 {
+    let (mut xx, mut xz, mut zz) = (0.0, 0.0, 0.0);
+    for p in points {
+        let d = *p - middle;
+        xx += d.x * d.x;
+        xz += d.x * d.z;
+        zz += d.z * d.z;
+    }
+    let angle = 0.5 * (2.0 * xz).atan2(xx - zz);
+    Vec3::new(angle.cos(), 0.0, angle.sin())
 }
 
 #[cfg(test)]
@@ -606,6 +679,54 @@ mod tests {
         let tight = Path { nodes: vec![node(0.0, 0.5, 0.0), node(1.0, 0.5, 0.0), node(1.0, 0.5, 1.0)], ..default() };
         let g = tight.geometry(Piece { width: 2.5, ..Piece::new(PieceKind::Deck) });
         assert!(g.all_quads().flatten().all(|p| p.is_finite()));
+    }
+
+    #[test]
+    fn a_deck_end_put_on_an_edge_stays_square_to_it_whatever_follows() {
+        // Its first point on an edge along z (the deck crosses it along x); the next two curve away.
+        for (second, third) in [((2.0, 1.5), (4.0, 3.5)), ((1.5, -2.0), (1.0, -4.5)), ((2.0, 0.3), (2.5, 3.0))] {
+            let mut path = Path { nodes: vec![node(0.0, 0.8, 0.0), node(second.0, 0.6, second.1), node(third.0, 0.2, third.1)], ..default() };
+            path.nodes[0].square = Some([1.0, 0.0]);
+            assert!((path.heading(0, true, false) - Vec2::X).length() < 1e-5, "it leaves the edge square");
+            let g = path.geometry(Piece::new(PieceKind::Deck));
+            // The end face is flush along the edge: every corner of it at x = 0.
+            let end: Vec<Vec3> = g.quads.iter().flatten().copied().filter(|p| p.x.abs() < 1e-3).collect();
+            assert!(end.len() >= 4, "{second:?}: {end:?}");
+            let across = end.iter().map(|p| p.z).fold(f32::MIN, f32::max) - end.iter().map(|p| p.z).fold(f32::MAX, f32::min);
+            assert!((across - DECK_WIDTH).abs() < 1e-3, "{second:?}: {across}");
+            // Its sign follows the path: a square pointing the other way changes nothing.
+            path.nodes[0].square = Some([-1.0, 0.0]);
+            assert!((path.heading(0, true, false) - Vec2::X).length() < 1e-5);
+        }
+        let mut path = Path { nodes: vec![node(0.0, 0.0, 0.0), node(3.0, 0.0, 0.0)], ..default() };
+        let before = path.key();
+        path.nodes[1].square = Some([0.0, 1.0]);
+        assert_ne!(before, path.key());
+    }
+
+    #[test]
+    fn a_banked_deck_tilts_about_its_lower_side_and_eases_between_points() {
+        let mut path = Path { nodes: vec![node(0.0, 0.5, 0.0), node(4.0, 0.5, 0.0), node(8.0, 0.5, 0.0)], ..default() };
+        let flat = path.geometry(Piece::new(PieceKind::Deck));
+        path.nodes[1].bank = 30f32.to_radians();
+        let g = path.geometry(Piece::new(PieceKind::Deck));
+        let (lo, hi) = g.bounds();
+        // Nothing goes under the path; its left side (-z, heading +x) rises across the whole width.
+        assert!((lo.y - flat.bounds().0.y).abs() < 1e-5);
+        assert!((hi.y - (0.5 + 30f32.to_radians().tan() * DECK_WIDTH)).abs() < 1e-3, "{hi}");
+        let top = |x: f32, z: f32| g.quads.iter().flatten().filter(|p| (p.x - x).abs() < 1e-3 && (p.z - z).abs() < 1e-3).map(|p| p.y).fold(f32::MIN, f32::max);
+        assert!(top(4.0, -1.0) > 1.6 && (top(4.0, 1.0) - 0.5).abs() < 1e-4, "the left side up, the right at the path");
+        // Its ends are level, and the bank comes and goes smoothly.
+        assert!((top(0.0, -1.0) - 0.5).abs() < 1e-4 && (top(8.0, -1.0) - 0.5).abs() < 1e-4);
+        let mid = path.along(0, 0.5, false, true).bank;
+        assert!((mid - 15f32.to_radians()).abs() < 1e-4 && path.along(0, 0.1, false, true).bank < 2f32.to_radians());
+        // Up on the other side: the right rises.
+        path.nodes[1].bank = -30f32.to_radians();
+        let g = path.geometry(Piece::new(PieceKind::Deck));
+        let right = g.quads.iter().flatten().filter(|p| (p.x - 4.0).abs() < 1e-3 && (p.z - 1.0).abs() < 1e-3).map(|p| p.y).fold(f32::MIN, f32::max);
+        assert!(right > 1.6, "{right}");
+        real_triangles(&g, "a banked deck");
+        assert_ne!(path.key(), Path { nodes: path.nodes.iter().map(|n| Node { bank: 0.0, ..*n }).collect(), ..path.clone() }.key());
     }
 
     #[test]

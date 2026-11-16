@@ -4,7 +4,8 @@
 //! yellow, and the score / combo line. Each tier fills [`TrickHud`].
 //!
 //! Hidden while a menu is open, and off with the AR settings' "Trick and
-//! points readout".
+//! points readout". Not while Skate 3's or THUG2's own HUD is there
+//! (`xr::hand_hud`).
 use crate::xr::ar_settings::ArSettings;
 use crate::xr::panel::{XrPanel, XrPanelCamera};
 use crate::xr::rig::Rig;
@@ -152,6 +153,8 @@ fn place(
     mut quad: Query<(&mut Transform, &mut Visibility), With<HudQuad>>,
     mut camera: Query<&mut Camera, With<HudCamera>>,
     mut pose: Local<Option<Transform>>,
+    engines: Option<Res<crate::engines::Engines>>,
+    own: Query<&crate::engines::EngineOwned, With<crate::xr::hand_hud::HandHud>>,
 ) {
     let (Ok((mut tf, mut vis)), Ok(mut cam)) = (quad.single_mut(), camera.single_mut()) else { return };
     let mut n = 0.0;
@@ -162,7 +165,10 @@ fn place(
         rotation.get_or_insert(eye.rotation);
         n += 1.0;
     }
-    let show = settings.hud && !panel.visible && rotation.is_some();
+    // (an engine with a HUD of its own shows that instead, by a controller: `xr::hand_hud`)
+    let running = engines.and_then(|e| e.current());
+    let own_hud = own.iter().any(|o| Some(o.0) == running);
+    let show = settings.hud && !panel.visible && rotation.is_some() && !own_hud;
     if cam.is_active != show {
         cam.is_active = show;
     }

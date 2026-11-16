@@ -156,6 +156,8 @@ impl PieceKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub(crate) enum Finish {
     Wood,
+    /// A pool's: pale blue plaster, pool coping and a band of tiles under it.
+    Plaster,
     Concrete,
     Brick,
     Steel,
@@ -167,6 +169,7 @@ impl Finish {
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Wood => "wood",
+            Self::Plaster => "pool plaster",
             Self::Concrete => "concrete",
             Self::Brick => "brick",
             Self::Steel => "steel",
@@ -184,7 +187,7 @@ impl PieceKind {
             Self::Kicker | Self::Bank | Self::FunBox | Self::Deck => &[Wood, Concrete, Paint],
             Self::QuarterPipe | Self::HalfPipe | Self::Spine => &[Wood, Concrete, Paint],
             Self::Rail | Self::CurvedRail | Self::RailPath => &[Steel, Paint],
-            Self::Bowl | Self::Pool => &[Concrete, Wood, Paint],
+            Self::Bowl | Self::Pool => &[Plaster, Concrete, Wood, Paint],
             Self::Ledge | Self::Stairs => &[Concrete, Brick, Paint],
             Self::Platform | Self::Pad => &[Concrete, Wood, Brick, Paint],
             Self::Wall => &[Brick, Concrete, Wood, Paint],
@@ -275,6 +278,7 @@ impl Tint {
         match finish {
             Finish::Wood => Self { hue: 2, light: 5 },
             Finish::Brick => Self { hue: 1, light: 3 },
+            Finish::Plaster => Self { hue: 13, light: 5 },
             Finish::Concrete | Finish::Steel => Self { hue: 14, light: 4 },
             Finish::Paint => Self { hue: 14, light: 3 },
         }
@@ -314,6 +318,11 @@ pub(crate) struct PieceGeometry {
     /// A ramp made across its width from a profile: how it is put together,
     /// for drawing it (`dress`).
     pub ramp: Option<Ramp>,
+    /// A pool's mouth (sunk pieces): its lip, level with y = 0, in order round it.
+    pub mouth: Vec<Vec3>,
+    /// A pool's vertical wall under its lip (the tile band's), and its drain: the floor's deepest point.
+    pub vert: f32,
+    pub drain: Option<Vec3>,
 }
 
 /// How a ramp is put together.
@@ -404,6 +413,15 @@ impl PieceGeometry {
         for (index, &(first, count)) in posts.iter().enumerate().rev() {
             if index < 32 && left_out & (1 << index) != 0 {
                 self.quads.drain(first..first + count);
+            }
+        }
+        // (the posts kept, where their faces are now: the ones left out before each moved them back)
+        let mut removed = 0;
+        for (index, &(first, count)) in posts.iter().enumerate() {
+            if index < 32 && left_out & (1 << index) != 0 {
+                removed += count;
+            } else {
+                self.posts.push((first - removed, count));
             }
         }
         self
@@ -829,13 +847,20 @@ fn extrude(g: &mut PieceGeometry, profile: &[Vec2], width: f32) {
     push(&mut g.quads, [at(-x, last), at(x, last), at(x, last.with_y(0.0)), at(-x, last.with_y(0.0))], Vec3::Z);
 }
 
-/// A pool below y = 0: a flat floor (`floor` its half size) `radius` down,
-/// a quarter-circle transition all the way round it up to a rim level with
-/// y = 0, and that rim squared off to the piece's rectangle, so the surface
-/// it is sunk into can be opened along straight lines.
+/// How much of a pool's depth is the vertical wall under its lip, and how much deeper its deep end goes.
+pub(crate) const POOL_VERT: f32 = 0.12;
+pub(crate) const POOL_DEEP_END: f32 = 0.35;
+
+/// A pool below y = 0: a floor (`floor` its half size) `radius` down at its shallow end (-x) and deeper at its deep end
+/// (+x, [`POOL_DEEP_END`]), a transition all the way round it - a quarter circle `radius` across, as tall as the wall
+/// is there - up to a short vertical wall ([`POOL_VERT`]: where its tiles are) and a lip level with y = 0, and that
+/// rim squared off to the piece's rectangle, so the surface it is sunk into can be opened along straight lines.
 fn bowl(g: &mut PieceGeometry, radius: f32, floor: Vec2) {
     const CORNER: usize = 6; // segments round each corner (even)
     const RINGS: usize = 8; // steps up the transition
+    let vert = POOL_VERT * radius;
+    // (deeper along +x, evenly: the long walls between the ends stay flat)
+    let deep = |x: f32| POOL_DEEP_END * radius * (x / floor.x.max(1e-3) * 0.5 + 0.5);
     // Round the floor's edge: at each corner, the directions out of it.
     let corners = [Vec2::new(1.0, 1.0), Vec2::new(-1.0, 1.0), Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0)];
     let around: Vec<(Vec2, Vec2)> = corners
@@ -849,45 +874,62 @@ fn bowl(g: &mut PieceGeometry, radius: f32, floor: Vec2) {
         })
         .collect();
     let count = around.len();
+    // (ring RINGS + 1: the lip, over the top of the transition)
     let ring = |k: usize, j: usize| {
-        let a = FRAC_PI_2 * k as f32 / RINGS as f32;
         let (corner, out) = around[j % count];
+        if k > RINGS {
+            let at = corner + out * radius;
+            return Vec3::new(at.x, 0.0, at.y);
+        }
+        let a = FRAC_PI_2 * k as f32 / RINGS as f32;
         let at = corner + out * radius * a.sin();
-        Vec3::new(at.x, -radius * a.cos(), at.y)
+        let tall = radius - vert + deep(corner.x);
+        Vec3::new(at.x, -vert - tall * a.cos(), at.y)
     };
     // Texture: round the bowl at half its height, and up the transition.
     let mut along = vec![0.0f32; count + 1];
     for j in 0..count {
         along[j + 1] = along[j] + ring(RINGS / 2, j).distance(ring(RINGS / 2, j + 1));
     }
-    let up = |k: usize| radius * FRAC_PI_2 * k as f32 / RINGS as f32;
+    // (up a column of the transition and its wall: the distance from the floor, as tall as the wall is there)
+    let up = |k: usize, j: usize| (0..k).map(|i| ring(i, j).distance(ring(i + 1, j))).sum::<f32>();
     let above = Vec3::new(0.0, radius, 0.0);
     let face = |g: &mut PieceGeometry, quad: [Vec3; 4], uv: [Vec2; 4]| {
         let centre = (quad[0] + quad[1] + quad[2] + quad[3]) * 0.25;
         push_with_uv(g, quad, uv, above - centre);
     };
-    for k in 0..RINGS {
+    for k in 0..=RINGS {
         let mut j = 0;
         while j < count {
             // On the floor's corners the first ring is one point: fan out of it.
             let on_corner = k == 0 && (j % (CORNER + 1)) < CORNER;
             if on_corner {
-                let uv = |jj: usize, kk: usize| Vec2::new(along[jj], up(kk));
+                let uv = |jj: usize, kk: usize| Vec2::new(along[jj], up(kk, jj));
                 face(g, [ring(0, j), ring(1, j), ring(1, j + 1), ring(1, j + 2)], [uv(j + 1, 0), uv(j, 1), uv(j + 1, 1), uv(j + 2, 1)]);
                 j += 2;
                 continue;
             }
-            let uv = |jj: usize, kk: usize| Vec2::new(along[jj], up(kk));
-            face(g, [ring(k, j), ring(k, j + 1), ring(k + 1, j + 1), ring(k + 1, j)], [uv(j, k), uv(j + 1, k), uv(j + 1, k + 1), uv(j, k + 1)]);
+            let uv = |jj: usize, kk: usize| Vec2::new(along[jj], up(kk, jj));
+            // (the vertical wall's faces point in, as the transition's top does)
+            let quad = [ring(k, j), ring(k, j + 1), ring(k + 1, j + 1), ring(k + 1, j)];
+            if k == RINGS {
+                let inward = -(around[j % count].1 + around[(j + 1) % count].1).extend(0.0).xzy();
+                push_with_uv(g, quad, [uv(j, k), uv(j + 1, k), uv(j + 1, k + 1), uv(j, k + 1)], inward);
+            } else {
+                face(g, quad, [uv(j, k), uv(j + 1, k), uv(j + 1, k + 1), uv(j, k + 1)]);
+            }
             j += 1;
         }
     }
-    push(&mut g.quads, [
-        Vec3::new(-floor.x, -radius, -floor.y),
-        Vec3::new(floor.x, -radius, -floor.y),
-        Vec3::new(floor.x, -radius, floor.y),
-        Vec3::new(-floor.x, -radius, floor.y),
-    ], Vec3::Y);
+    let low = |x: f32| -radius - deep(x);
+    // (sloping to the deep end: its texture as long as the slope is)
+    let slope = Vec2::new(2.0 * floor.x, low(floor.x) - low(-floor.x)).length();
+    push_with_uv(g, [
+        Vec3::new(-floor.x, low(-floor.x), -floor.y),
+        Vec3::new(floor.x, low(floor.x), -floor.y),
+        Vec3::new(floor.x, low(floor.x), floor.y),
+        Vec3::new(-floor.x, low(-floor.x), floor.y),
+    ], [Vec2::new(0.0, -floor.y), Vec2::new(slope, -floor.y), Vec2::new(slope, floor.y), Vec2::new(0.0, floor.y)], Vec3::Y);
     // The rim's corners, out to the rectangle: still the surface the bowl is in, so ridden but
     // not drawn.
     for (i, &c) in corners.iter().enumerate() {
@@ -895,14 +937,31 @@ fn bowl(g: &mut PieceGeometry, radius: f32, floor: Vec2) {
         let first = i * (CORNER + 1);
         for j in (first..first + CORNER).step_by(2) {
             let before = g.quads.len();
-            push(&mut g.quads, [square, ring(RINGS, j), ring(RINGS, j + 1), ring(RINGS, j + 2)], Vec3::Y);
+            push(&mut g.quads, [square, ring(RINGS + 1, j), ring(RINGS + 1, j + 1), ring(RINGS + 1, j + 2)], Vec3::Y);
             g.unseen.extend(before..g.quads.len());
         }
     }
     // The rim is coping all the way round.
-    let rim: Vec<Vec3> = (0..=count).map(|j| ring(RINGS, j)).collect();
+    let rim: Vec<Vec3> = (0..=count).map(|j| ring(RINGS + 1, j)).collect();
     g.edges.extend(rim.windows(2).filter(|w| w[0].distance(w[1]) > 1e-4).map(|w| (w[0], w[1])));
+    g.mouth = mouth_of(&rim);
+    g.vert = vert;
+    g.drain = Some(Vec3::new(floor.x * 0.6, low(floor.x * 0.6), 0.0));
     g.rails.push(rim);
+}
+
+/// A closed lip as a mouth: its points once each, in order.
+pub(crate) fn mouth_of(lip: &[Vec3]) -> Vec<Vec3> {
+    let mut out: Vec<Vec3> = Vec::with_capacity(lip.len());
+    for &p in lip {
+        if out.last().is_none_or(|q| q.distance(p) > 1e-4) {
+            out.push(p);
+        }
+    }
+    while out.len() > 2 && out[0].distance(out[out.len() - 1]) <= 1e-4 {
+        out.pop();
+    }
+    out
 }
 
 /// [`push`] for a solid face that brings its texture coordinates.

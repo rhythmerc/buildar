@@ -57,7 +57,8 @@ pub(crate) struct PanelPlugin;
 impl Plugin for PanelPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreStartup, setup)
-            .add_systems(PostUpdate, place.before(bevy::transform::TransformSystems::Propagate));
+            .add_systems(PostUpdate, place.before(bevy::transform::TransformSystems::Propagate))
+            .add_systems(Last, report_on_open);
     }
 }
 
@@ -104,6 +105,21 @@ fn setup(
     });
 }
 
+/// Where the head is (between the eyes) and how it's turned, once the headset tracks it: eyes still at the tracking
+/// origin, unturned, aren't tracked yet.
+fn tracked_head<'a>(eyes: impl Iterator<Item = &'a Transform>) -> Option<(Vec3, Quat)> {
+    let (mut sum, mut n, mut rotation) = (Vec3::ZERO, 0.0, None);
+    for eye in eyes {
+        if eye.translation == Vec3::ZERO && eye.rotation == Quat::IDENTITY {
+            continue;
+        }
+        sum += eye.translation;
+        rotation.get_or_insert(eye.rotation);
+        n += 1.0;
+    }
+    Some((sum / n, rotation?))
+}
+
 fn place(
     rig: Res<Rig>,
     mut panel: ResMut<XrPanel>,
@@ -122,17 +138,10 @@ fn place(
         *vis = want;
     }
     if panel.recenter {
-        let mut n = 0.0;
-        let mut head = Vec3::ZERO;
-        let mut rotation = None;
-        for eye in &eyes {
-            head += eye.translation;
-            rotation.get_or_insert(eye.rotation);
-            n += 1.0;
-        }
-        if let Some(rotation) = rotation {
+        // (not before the headset has the head: at launch the eyes sit at the tracking origin a few frames, and a
+        // panel put in front of that is on the floor, out of sight)
+        if let Some((head, rotation)) = tracked_head(eyes.iter()) {
             panel.recenter = false;
-            let head = head / n;
             let forward = (rotation * Vec3::NEG_Z).with_y(0.0).normalize_or(Vec3::NEG_Z);
             let at = head + forward * DISTANCE_M - Vec3::Y * DROP_M;
             // Face the player: -Z looks away, so the quad's front (+Z) faces the head.
@@ -144,4 +153,43 @@ fn place(
     if *tf != target {
         *tf = target;
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The menu opened at launch waits for the head: eyes at the tracking origin aren't it.
+    #[test]
+    fn the_head_is_where_tracked_eyes_are() {
+        assert_eq!(tracked_head([Transform::default(), Transform::default()].iter()), None);
+        let left = Transform::from_xyz(-0.03, 1.6, 0.2).with_rotation(Quat::from_rotation_y(0.3));
+        let right = Transform::from_xyz(0.03, 1.6, 0.2).with_rotation(Quat::from_rotation_y(0.3));
+        let (head, turn) = tracked_head([left, right].iter()).unwrap();
+        assert!(head.distance(Vec3::new(0.0, 1.6, 0.2)) < 1e-6 && turn == left.rotation);
+    }
+}
+
+/// Each time the menu opens, its state to the log (`PANEL ...`): what draws it - its camera, its quad, the menu's root
+/// UI node - and whether any of them is an engine's (hidden with that engine), with the engine running. To find why a
+/// menu shows nothing on the headset.
+#[allow(clippy::type_complexity)]
+fn report_on_open(
+    panel: Res<XrPanel>,
+    engines: Option<Res<crate::engines::Engines>>,
+    cameras: Query<(&Camera, Option<&crate::engines::EngineOwned>)>,
+    quad: Query<(&Visibility, &ViewVisibility, Option<&crate::engines::EngineOwned>), With<PanelQuad>>,
+    roots: Query<(&Node, &Visibility, Option<&crate::engines::EngineOwned>), With<crate::xr::ui::UiRoot>>,
+    mut was: Local<bool>,
+) {
+    if panel.visible == std::mem::replace(&mut *was, panel.visible) || !panel.visible {
+        return;
+    }
+    let camera = cameras.get(panel.camera).map(|(c, o)| format!("active {} owner {:?}", c.is_active, o.map(|o| o.0)));
+    let quad = quad.single().map(|(v, seen, o)| format!("{v:?} seen {} owner {:?}", seen.get(), o.map(|o| o.0)));
+    let roots: Vec<String> = roots.iter().map(|(n, v, o)| format!("{:?} {v:?} owner {:?}", n.display, o.map(|o| o.0))).collect();
+    info!(
+        "PANEL opened with {:?} running: camera {camera:?}; quad {quad:?}; menu roots {roots:?}",
+        engines.and_then(|e| e.current())
+    );
 }

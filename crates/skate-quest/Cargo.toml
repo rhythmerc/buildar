@@ -11,8 +11,8 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-# The GitHub build: the clean game plus the imported-disc tier (the store build is crates/sk8-quest).
-skate-game = { path = "../skate-game", default-features = false, features = ["xr", "retail"] }
+# The GitHub build: SK8, plus Skate 3 and THUG2 on the player's own data (the store build is crates/sk8-quest).
+skate-game = { path = "../skate-game", default-features = false, features = ["xr", "retail", "thug2"] }
 bevy = { workspace = true, features = ["android-native-activity"] }
 
 [target.'cfg(target_os = "android")'.dependencies]

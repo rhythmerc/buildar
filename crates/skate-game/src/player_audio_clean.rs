@@ -13,7 +13,9 @@
 //! - one-shots (pop, flip, catch, landing, push, footstep, bail, the multiplier chime) fire on
 //!   state edges, with a random variant and a little pitch spread.
 //!
-//! `SKATE_AUDIO=clean|retail` overrides the default (clean on Android, retail elsewhere).
+//! On the Skate 3 tier the retail sounds play wherever the player's decoded sound banks are (the
+//! headset has no XMA decoder: they come with the imported data, `audio-pcm-cache`); these clean
+//! ones only on an Android without them. `SKATE_AUDIO=clean|retail` overrides that.
 //!
 //! In AR ([`SpatialSkateAudio`] present) every sound is a spatial emitter at the skater, heard
 //! through the headset's listener (`xr::spatial_audio`), so it pans and fades as the skater
@@ -38,7 +40,7 @@ pub(crate) fn enabled() -> bool {
     match std::env::var("SKATE_AUDIO").as_deref() {
         Ok("clean") => true,
         Ok("retail") => false,
-        _ => cfg!(target_os = "android"),
+        _ => cfg!(target_os = "android") && !super::player::banks_decoded(),
     }
 }
 
