@@ -1,17 +1,15 @@
-//! Original APT HUD rendered independently of the world's resolution scale.
+//! The original APT HUD. In the headset it is drawn into an image of its own and shown on a panel by a controller
+//! (`xr::hand_hud`); the flat desktop run has none (legacy pass 4).
 use crate::{apt_scene, config::Config, hud_runtime, physics::SkaterRuntime};
 use bevy::{
     asset::{RenderAssetUsages, embedded_asset},
     camera::{RenderTarget, ScalingMode, visibility::RenderLayers},
     prelude::*,
     render::render_resource::{
-        AsBindGroup, BlendState, Extent3d, PrimitiveTopology, RenderPipelineDescriptor, ShaderType,
-        TextureDimension, TextureFormat,
+        AsBindGroup, Extent3d, PrimitiveTopology, ShaderType, TextureDimension, TextureFormat,
     },
     shader::ShaderRef,
     sprite_render::{AlphaMode2d, Material2d, Material2dPlugin, MeshMaterial2d},
-    ui_render::UiMaterialPlugin,
-    window::PrimaryWindow,
 };
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -36,26 +34,6 @@ impl Material2d for HudMaterial {
         AlphaMode2d::Blend
     }
 }
-/// The offscreen target already contains RGB multiplied by coverage. Applying
-/// ImageNode's straight-alpha blend again suppresses the original soft glow.
-#[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-struct HudComposite {
-    #[texture(0)]
-    #[sampler(1)]
-    image: Handle<Image>,
-}
-impl UiMaterial for HudComposite {
-    fn fragment_shader() -> ShaderRef {
-        concat!("embedded://", env!("CARGO_CRATE_NAME"), "/hud_composite.wgsl").into()
-    }
-    fn specialize(descriptor: &mut RenderPipelineDescriptor, _: UiMaterialKey<Self>) {
-        if let Some(fragment) = &mut descriptor.fragment {
-            for target in fragment.targets.iter_mut().flatten() {
-                target.blend = Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING);
-            }
-        }
-    }
-}
 struct Slot {
     entity: Entity,
     mesh: Handle<Mesh>,
@@ -63,17 +41,10 @@ struct Slot {
 }
 #[derive(Resource)]
 struct Hud {
-    target: Handle<Image>,
-    composite: Handle<HudComposite>,
-    rebind_after_resize: bool,
-    /// Its target is a size of its own (the headset's: `xr_setup`), not the window's.
-    fixed: bool,
     runtime: hud_runtime::Runtime,
-    source: serde_json::Value,
     shapes: apt_scene::Shapes,
     textures: BTreeMap<String, Handle<Image>>,
     slots: Vec<Slot>,
-    generation: u64,
     failed: bool,
 }
 pub(crate) struct ScoringHudPlugin;
@@ -83,20 +54,7 @@ fn embed_render_shader(app: &mut App) {
 impl Plugin for ScoringHudPlugin {
     fn build(&self, app: &mut App) {
         embed_render_shader(app);
-        embedded_asset!(app, "hud_composite.wgsl");
-        app.add_plugins((
-            Material2dPlugin::<HudMaterial>::default(),
-            UiMaterialPlugin::<HudComposite>::default(),
-        ))
-        .add_systems(
-            PostStartup,
-            setup
-                .after(crate::graphics_menu::PresentationSetup)
-                // A flat-screen overlay: in XR nothing shows it, and loading
-                // it stalled the first frame ~4.5 s on Quest (input queued
-                // that long is an ANR).
-                .run_if(|config: Res<Config>| config.xr.is_none()),
-        )
+        app.add_plugins(Material2dPlugin::<HudMaterial>::default())
         // In the headset: read on a worker (it took the first frame ~4.5 s on the main thread) and shown on a panel
         // by a controller (`xr::hand_hud`).
         .add_systems(PostStartup, xr::start.run_if(|config: Res<Config>| config.xr.is_some()))
@@ -110,13 +68,11 @@ impl Plugin for ScoringHudPlugin {
             FixedUpdate,
             (advance, multiplier_sounds)
                 .after(crate::app::SimulationSet::Physics)
-                .run_if(crate::graphics_menu::gameplay_active)
                 .in_set(crate::app::SKATE3),
         )
         .add_systems(
             Update,
-            (resize_target, reset, render)
-                .chain()
+            render
                 .after(crate::app::FrameSet::Physics)
                 .in_set(crate::app::SKATE3),
         );
@@ -132,7 +88,6 @@ fn hud_root(config: &Config) -> PathBuf {
 /// The HUD read from its files (all but the GPU's part): its movie started, its shapes and its textures' pixels.
 struct Loaded {
     runtime: hud_runtime::Runtime,
-    source: serde_json::Value,
     shapes: apt_scene::Shapes,
     textures: Vec<(String, [u32; 2], Vec<u8>)>,
 }
@@ -164,7 +119,7 @@ fn load(root: &std::path::Path, input: hud_runtime::Input) -> Result<Loaded, Str
         }
         textures.push((path, size, bytes));
     }
-    Ok(Loaded { runtime, source, shapes, textures })
+    Ok(Loaded { runtime, shapes, textures })
 }
 
 impl Loaded {
@@ -188,145 +143,15 @@ impl Loaded {
             })
             .collect();
         Hud {
-            target: Handle::default(),
-            composite: Handle::default(),
-            rebind_after_resize: false,
-            fixed: false,
             runtime: self.runtime,
-            source: self.source,
             shapes: self.shapes,
             textures,
             slots: Vec::new(),
-            generation: 0,
             failed: false,
         }
     }
 }
 
-fn setup(
-    mut commands: Commands,
-    config: Res<Config>,
-    skater: Res<SkaterRuntime>,
-    cameras: Query<Entity, With<IsDefaultUiCamera>>,
-    window: Single<&Window, With<PrimaryWindow>>,
-    mut images: ResMut<Assets<Image>>,
-    mut composites: ResMut<Assets<HudComposite>>,
-) {
-    // The startup dependency also applies the presentation system's deferred
-    // camera spawn before this query. Without it, setup silently lost the HUD.
-    let Ok(output) = cameras.single() else {
-        error!("Original HUD requires the presentation camera");
-        return;
-    };
-    let root = hud_root(&config);
-    let result = load(&root, skater.scoring.hud_input()).map(|loaded| loaded.into_hud(&mut images));
-    match result {
-        Ok(mut hud) => {
-            let target = images.add(Image::new_target_texture(
-                window.physical_width().max(1),
-                window.physical_height().max(1),
-                TextureFormat::Rgba8UnormSrgb,
-                None,
-            ));
-            hud.target = target.clone();
-            commands.spawn((
-                Camera2d,
-                Projection::Orthographic(OrthographicProjection {
-                    scaling_mode: ScalingMode::Fixed {
-                        width: 1280.,
-                        height: 720.,
-                    },
-                    ..OrthographicProjection::default_2d()
-                }),
-                Camera {
-                    order: -1,
-                    clear_color: ClearColorConfig::Custom(Color::NONE),
-                    ..default()
-                },
-                RenderTarget::Image(target.clone().into()),
-                RenderLayers::layer(31),
-                Msaa::Off,
-            ));
-            hud.composite = composites.add(HudComposite { image: target });
-            commands.spawn((
-                MaterialNode(hud.composite.clone()),
-                UiTargetCamera(output),
-                GlobalZIndex(1),
-                Pickable::IGNORE,
-                Node {
-                    position_type: PositionType::Absolute,
-                    width: percent(100),
-                    height: percent(100),
-                    ..default()
-                },
-            ));
-            commands.insert_resource(hud);
-            info!("Original scoring HUD loaded from {}", root.display());
-        }
-        Err(error) => error!(
-            "Original scoring HUD could not load from {}: {error}",
-            root.display()
-        ),
-    }
-}
-// Rasterize at output pixel resolution; retain the original 1280x720 APT
-// coordinate space. This avoids a second enlargement of every glyph/glow.
-fn resize_target(
-    hud: Option<ResMut<Hud>>,
-    window: Single<&Window, With<PrimaryWindow>>,
-    mut images: ResMut<Assets<Image>>,
-    mut composites: ResMut<Assets<HudComposite>>,
-) {
-    let Some(mut hud) = hud.filter(|h| !h.fixed) else {
-        return;
-    };
-    // Bevy 0.18's UI material preparation has no dependency on GpuImage
-    // preparation. Retry once on the following frame, when the replacement
-    // image is available regardless of preparation order during the resize.
-    if hud.rebind_after_resize {
-        if let Some(material) = composites.get_mut(&hud.composite) {
-            material.image = hud.target.clone();
-        }
-    }
-    let size = Extent3d {
-        width: window.physical_width().max(1),
-        height: window.physical_height().max(1),
-        depth_or_array_layers: 1,
-    };
-    hud.rebind_after_resize = resize_image(
-        &mut images,
-        &mut composites,
-        &hud.target,
-        &hud.composite,
-        size,
-    );
-}
-fn resize_image(
-    images: &mut Assets<Image>,
-    composites: &mut Assets<HudComposite>,
-    target: &Handle<Image>,
-    composite: &Handle<HudComposite>,
-    size: Extent3d,
-) -> bool {
-    if images
-        .get(target)
-        .is_some_and(|image| image.texture_descriptor.size != size)
-    {
-        // Assets::get_mut emits Modified even without a write. Doing that
-        // every frame recreates the GPU target behind the compositor's
-        // cached bind group. Only invalidate the image on a real resize.
-        if let Some(image) = images.get_mut(target) {
-            image.resize(size);
-        }
-        // The UI material retains its bind group. A real target resize must
-        // reprepare it so it samples the replacement GPU texture view.
-        if let Some(material) = composites.get_mut(composite) {
-            material.image = target.clone();
-        }
-        return true;
-    }
-    false
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,16 +199,13 @@ mod tests {
         let loaded = load(std::path::Path::new(&root), input("", 0, 1.0, false)).expect("the HUD");
         let full = std::env::var_os("SK8_HUD_SHOT_FULL").is_some();
         let [x, y, width, height] = if full { [0.0, 0.0, 1280.0, 720.0] } else { xr::AREA };
-        let mut hud = loaded.into_hud(&mut app.world_mut().resource_mut::<Assets<Image>>());
+        let hud = loaded.into_hud(&mut app.world_mut().resource_mut::<Assets<Image>>());
         let target = app.world_mut().resource_mut::<Assets<Image>>().add(Image::new_target_texture(
             width as u32,
             height as u32,
             TextureFormat::Rgba8UnormSrgb,
             None,
         ));
-        hud.target = target.clone();
-        hud.fixed = true;
-        hud.generation = 0;
         app.world_mut().spawn((
             Camera2d,
             Projection::Orthographic(OrthographicProjection {
@@ -421,112 +243,15 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
-
-    #[test]
-    fn hud_target_changes_only_on_resize_and_refreshes_composite() {
-        // Asset scheduling only: no render plugin, window or gameplay systems.
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()))
-            .init_asset::<Image>()
-            .init_asset::<HudComposite>();
-        let target =
-            app.world_mut()
-                .resource_mut::<Assets<Image>>()
-                .add(Image::new_target_texture(
-                    1280,
-                    720,
-                    TextureFormat::Rgba8UnormSrgb,
-                    None,
-                ));
-        let composite = app
-            .world_mut()
-            .resource_mut::<Assets<HudComposite>>()
-            .add(HudComposite {
-                image: target.clone(),
-            });
-        app.update();
-        app.world_mut()
-            .resource_mut::<Messages<AssetEvent<Image>>>()
-            .clear();
-        app.world_mut()
-            .resource_mut::<Messages<AssetEvent<HudComposite>>>()
-            .clear();
-        for (width, height, changed) in
-            [(1280, 720, false), (1920, 1080, true), (1920, 1080, false)]
-        {
-            app.world_mut()
-                .resource_scope(|world, mut images: Mut<Assets<Image>>| {
-                    let mut composites = world.resource_mut::<Assets<HudComposite>>();
-                    resize_image(
-                        &mut images,
-                        &mut composites,
-                        &target,
-                        &composite,
-                        Extent3d {
-                            width,
-                            height,
-                            depth_or_array_layers: 1,
-                        },
-                    );
-                });
-            app.update();
-            let images: Vec<_> = app
-                .world_mut()
-                .resource_mut::<Messages<AssetEvent<Image>>>()
-                .drain()
-                .collect();
-            let materials: Vec<_> = app
-                .world_mut()
-                .resource_mut::<Messages<AssetEvent<HudComposite>>>()
-                .drain()
-                .collect();
-            assert_eq!(
-                images
-                    .iter()
-                    .any(|e| matches!(e, AssetEvent::Modified { id } if *id == target.id())),
-                changed
-            );
-            assert_eq!(
-                materials
-                    .iter()
-                    .any(|e| matches!(e, AssetEvent::Modified { id } if *id == composite.id())),
-                changed
-            );
-        }
-    }
-}
-fn reset(
-    hud: Option<ResMut<Hud>>,
-    skater: Res<SkaterRuntime>,
-    map: Res<crate::map_transition::CurrentMap>,
-) {
-    let Some(mut hud) = hud else {
-        return;
-    };
-    if hud.generation == map.generation {
-        return;
-    }
-    match hud_runtime::Runtime::load(&hud.source, skater.scoring.hud_input()) {
-        Ok(runtime) => {
-            hud.runtime = runtime;
-            hud.generation = map.generation;
-            hud.failed = false;
-        }
-        Err(error) => {
-            error!("Original scoring HUD reset: {error}");
-            hud.failed = true;
-        }
-    }
 }
 fn advance(
     hud: Option<ResMut<Hud>>,
     skater: Res<SkaterRuntime>,
-    map: Res<crate::map_transition::CurrentMap>,
 ) {
     let Some(mut hud) = hud else {
         return;
     };
-    if hud.failed || hud.generation != map.generation {
+    if hud.failed {
         return;
     }
     if let Err(error) = hud.runtime.update(
@@ -675,7 +400,6 @@ mod xr {
         mut images: ResMut<Assets<Image>>,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
-        map: Res<crate::map_transition::CurrentMap>,
     ) {
         let Some(result) = block_on(future::poll_once(&mut loading.0)) else {
             return;
@@ -688,7 +412,7 @@ mod xr {
                 return;
             }
         };
-        let mut hud = loaded.into_hud(&mut images);
+        let hud = loaded.into_hud(&mut images);
         let [x, y, width, height] = AREA;
         let target = images.add(Image::new_target_texture(
             (width * PIXELS_PER_UNIT) as u32,
@@ -696,10 +420,6 @@ mod xr {
             TextureFormat::Rgba8UnormSrgb,
             None,
         ));
-        hud.target = target.clone();
-        hud.fixed = true;
-        // (started for the map that's there: `reset` would start it again, on this thread)
-        hud.generation = map.generation;
         let camera = commands
             .spawn((
                 engine_api::EngineHudCamera,

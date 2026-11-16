@@ -53,7 +53,6 @@ fn capture(
     camera: Res<CameraRuntime>,
     time: Res<Time<Fixed>>,
     mut history: ResMut<Presentation>,
-    mut replay: ResMut<crate::replay::Replay>,
 ) {
     let pose = skate3_sim::SkaterPose::of(&skater);
     if pose.generation == history.generation {
@@ -78,7 +77,7 @@ fn capture(
     let reset = frame.discontinuity
         || skater.player_input.processed.flags_2472 & (1 << 10) != 0
         || history.period != time.timestep();
-    replay.record(next.clone(), time.delta_secs_f64(), reset);
+    // (the parked replay records nothing: `crate::replay`)
     if let Some((previous, current)) = history.pair.as_mut() {
         if reset || current.bones.len() != next.bones.len() {
             *previous = next.clone();

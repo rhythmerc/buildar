@@ -206,6 +206,9 @@ Placement = Hand { metres_per_px, offset, anchor, hand: Option<HudHand>, on_left
    **To return to:** the user wants Skate 3's and THUG2's own character customisers later. They belong at
    the headless-game level and would be exposed through the engine contract (for example, an engine's
    customisation options and the resulting model/material description), not built into the app.
+   **Done (2026-11-16, legacy pass 6):** the customiser parts and material, custom models, retail character
+   shading, irradiance, shadow state, and exposure/tone are deleted. The skater's gameplay preferences are
+   always the default profile's.
 2. **No retail character shading, and no shaders-as-data.** The shared renderer keeps the engines
    cohesive with the stages. Engines describe models and materials as plain data, and the app's lighting
    models draw them.

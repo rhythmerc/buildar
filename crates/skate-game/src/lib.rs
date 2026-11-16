@@ -21,19 +21,9 @@ mod camera;
 mod config;
 mod fonts;
 #[cfg(feature = "retail")]
-mod custom_models;
-#[cfg(feature = "retail")]
-mod customiser_material;
-#[cfg(feature = "retail")]
-mod customiser_parts;
-#[cfg(feature = "retail")]
 use skate3_sim::difficulty;
 #[cfg(feature = "retail")]
-mod fps_overlay;
-#[cfg(feature = "retail")]
 mod graph_runtime;
-#[cfg(feature = "retail")]
-mod graphics_menu;
 #[cfg(feature = "retail")]
 mod grind_world;
 #[cfg(feature = "retail")]
@@ -41,29 +31,13 @@ use skate3_sim::hud_runtime;
 #[cfg(feature = "retail")]
 mod input;
 #[cfg(feature = "retail")]
-use skate3_sim::map_library;
-#[cfg(feature = "retail")]
-mod map_render;
-#[cfg(feature = "retail")]
 mod logging;
-#[cfg(feature = "retail")]
-mod map_transition;
-#[cfg(feature = "retail")]
-mod performance;
 #[cfg(feature = "retail")]
 mod physics;
 #[cfg(feature = "retail")]
 mod presentation;
 #[cfg(feature = "retail")]
-mod render_capacity;
-#[cfg(feature = "retail")]
 mod replay;
-#[cfg(feature = "retail")]
-mod retail_character;
-#[cfg(feature = "retail")]
-mod retail_irradiance;
-#[cfg(feature = "retail")]
-mod retail_render;
 #[cfg(feature = "retail")]
 mod scoring_hud;
 #[cfg(feature = "retail")]
@@ -75,10 +49,6 @@ mod skate_audio;
 #[path = "skate_audio_store.rs"]
 mod skate_audio;
 mod stream_pcm;
-#[cfg(feature = "retail")]
-mod skate_world;
-#[cfg(feature = "retail")]
-mod verification;
 #[cfg(feature = "retail")]
 mod world;
 #[cfg(feature = "xr")]
@@ -164,7 +134,7 @@ pub(crate) fn right_passthrough_camera() -> Option<String> {
 #[cfg(feature = "retail")]
 fn load() -> Result<Loaded, bevy::app::AppExit> {
     eprintln!("REPORT_META stage=configuration_and_installation");
-    let config = match bevy::log::info_span!("load_configuration_and_map")
+    let config = match bevy::log::info_span!("load_configuration")
         .in_scope(config::Config::from_env)
     {
         Ok(config) => config,
@@ -174,8 +144,7 @@ fn load() -> Result<Loaded, bevy::app::AppExit> {
         }
     };
     eprintln!(
-        "REPORT_META startup=map_fingerprint:{:016x} difficulty:{} renderer:Vulkan",
-        config.map_fingerprint,
+        "REPORT_META startup=difficulty:{} renderer:Vulkan",
         config.difficulty.key(),
     );
     // The sim reads the bundle and builds itself; each stage is announced as before.
@@ -191,7 +160,7 @@ fn load() -> Result<Loaded, bevy::app::AppExit> {
         &bundle,
         &skate3_sim::SimConfig {
             difficulty: config.difficulty,
-            map: config.map.as_ref(),
+            map: None,
             spawn_offset: 0.0,
         },
         &mut stage,

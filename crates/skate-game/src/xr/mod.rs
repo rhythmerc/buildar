@@ -152,7 +152,6 @@ impl Plugin for XrPlugin {
             .add_systems(Startup, log_scene_extensions)
             .add_systems(PostUpdate, headset_only_rendering)
             .add_observer(no_window_surface)
-            .add_observer(no_eye_occlusion_culling)
             .add_observer(no_eye_indirect_drawing);
     }
 }
@@ -216,22 +215,6 @@ fn no_eye_indirect_drawing(add: On<Add, bevy_mod_xr::camera::XrCamera>, mut comm
     commands
         .entity(add.entity)
         .insert(bevy::render::view::NoIndirectDrawing);
-}
-
-/// The graphics menu puts GPU occlusion culling on every `Camera3d`. The eye
-/// cameras skip it: the scene is a few props, and the indirect/preprocess
-/// path it enables is a suspect in the Adreno GPU hangs.
-fn no_eye_occlusion_culling(
-    add: On<Add, bevy::render::experimental::occlusion_culling::OcclusionCulling>,
-    eyes: Query<(), With<bevy_mod_xr::camera::XrCamera>>,
-    mut commands: Commands,
-) {
-    if eyes.contains(add.entity) {
-        commands.entity(add.entity).remove::<(
-            bevy::core_pipeline::prepass::DepthPrepass,
-            bevy::render::experimental::occlusion_culling::OcclusionCulling,
-        )>();
-    }
 }
 
 /// Quest's GPU only has budget for the two eye views (and the menu panel's

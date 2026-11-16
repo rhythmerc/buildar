@@ -4,7 +4,7 @@ use crate::{
     graph_runtime::StockGraphs,
     input,
     physics::{GamePhysics, PhysicsPlugin, SkaterRuntime},
-    verification, world,
+    world,
 };
 use crate::engines::{Engine, EngineSet};
 use bevy::{
@@ -75,7 +75,6 @@ pub(crate) enum FrameSet {
     Assets,
     Physics,
     Animation,
-    Verification,
 }
 
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
@@ -92,12 +91,7 @@ pub(crate) fn build(
     physics: GamePhysics,
     skater: SkaterRuntime,
 ) -> App {
-    let retail_scene = config
-        .map
-        .as_ref()
-        .is_some_and(|map| crate::retail_render::RetailScene::for_map(map));
     let mut app = App::new();
-    crate::custom_models::register_source(&mut app);
     // Bevy's Android default `AssetReader` only ever reads from inside the
     // APK's bundled `assets/` (via `AssetManager`); it ignores
     // `AssetPlugin::file_path` entirely. The Quest build instead pushes a
@@ -162,18 +156,14 @@ pub(crate) fn build(
         })
         .insert_resource(crate::skate_audio::player::PlayerAudioAssets(config.asset_root.clone()))
         .insert_resource(config)
-        .insert_resource(crate::retail_render::RetailScene(retail_scene))
         .insert_resource(assets::AssetManifest(manifest))
         .insert_resource(graphs)
         .insert_resource(physics)
         .insert_resource(skater);
     #[cfg(feature = "xr")]
     if let Some(options) = xr {
-        // (the room's floor at the map's spawn: the test course's landing floor without a map)
-        let origin = match &app.world().resource::<crate::config::Config>().map {
-            Some(map) => Vec3::from_array(map.spawn),
-            None => Vec3::new(0.0, crate::physics::ground::FLOOR_HEIGHT, 0.0),
-        };
+        // (the room's floor: the test course's landing floor)
+        let origin = Vec3::new(0.0, crate::physics::ground::FLOOR_HEIGHT, 0.0);
         app.insert_resource(crate::xr::rig::WorldOrigin(origin));
         app.add_plugins(crate::xr::XrPlugin { options, files: xr_files.clone() });
         // In the headset the faithful port is one engine of three: switched to and from while the app runs.
@@ -205,18 +195,12 @@ fn add_retail(app: &mut App) {
     )
     .configure_sets(
         Update,
-        (FrameSet::Assets, FrameSet::Physics, FrameSet::Animation, FrameSet::Verification)
+        (FrameSet::Assets, FrameSet::Physics, FrameSet::Animation)
             .chain()
             .in_set(SKATE3),
-    )
-    .configure_sets(
-        PreUpdate,
-        (crate::map_transition::MapTransitionSet, crate::graphics_menu::MenuInput).in_set(SKATE3),
     );
     hold(app);
-    app.add_plugins(crate::fps_overlay::FpsOverlayPlugin)
-    .add_plugins((
-        crate::retail_render::RetailRenderPlugin,
+    app.add_plugins((
         input::InputPlugin,
         PhysicsPlugin,
         crate::presentation::PresentationPlugin,
@@ -226,14 +210,7 @@ fn add_retail(app: &mut App) {
         world::WorldPlugin,
         crate::grind_world::GrindGeometryPlugin,
         camera::CameraPlugin,
-        crate::graphics_menu::GraphicsMenuPlugin,
-        crate::map_transition::MapTransitionPlugin,
-        crate::render_capacity::RenderCapacityPlugin,
-        verification::VerificationPlugin,
-        crate::performance::PerformancePlugin,
     ));
-    app.add_plugins(crate::customiser_parts::CharacterPlugin);
-    app.add_plugins(crate::custom_models::CustomModelsPlugin);
     app.add_plugins(crate::skate_audio::SkateAudioPlugin);
     app.add_plugins(crate::scoring_hud::ScoringHudPlugin);
 }

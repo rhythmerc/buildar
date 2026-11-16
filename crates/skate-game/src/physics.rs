@@ -16,40 +16,8 @@ pub(crate) use skate3_sim::physics::*;
 #[derive(Resource, Deref, DerefMut)]
 pub(crate) struct GamePhysics(pub skate3_sim::physics::GamePhysics);
 
-impl GamePhysics {
-    pub fn load_with_difficulty(
-        asset_root: &std::path::Path,
-        map: Option<&skate_data::skate_map::SkateMap>,
-        difficulty: crate::difficulty::Difficulty,
-    ) -> Result<Self, String> {
-        skate3_sim::physics::GamePhysics::load_with_difficulty(asset_root, map, difficulty).map(Self)
-    }
-}
-
 #[derive(Resource, Deref, DerefMut)]
 pub(crate) struct SkaterRuntime(pub skate3_sim::physics::SkaterRuntime);
-
-impl SkaterRuntime {
-    pub fn load(
-        asset_root: &std::path::Path,
-        graphs: &skate3_sim::graph_runtime::StockGraphs,
-        physics: &skate3_sim::physics::GamePhysics,
-        mode: &str,
-    ) -> Result<Self, String> {
-        skate3_sim::physics::SkaterRuntime::load(asset_root, graphs, physics, mode).map(Self)
-    }
-
-    pub fn load_for_world(
-        asset_root: &std::path::Path,
-        graphs: &skate3_sim::graph_runtime::StockGraphs,
-        physics: &skate3_sim::physics::GamePhysics,
-        mode: &str,
-        source: Option<std::sync::Arc<skate3_sim::skater_animation::AnimationSource>>,
-    ) -> Result<Self, String> {
-        skate3_sim::physics::SkaterRuntime::load_for_world(asset_root, graphs, physics, mode, source)
-            .map(Self)
-    }
-}
 
 #[derive(Resource, Deref, DerefMut)]
 pub(crate) struct PlayerControls(pub skate3_sim::physics::PlayerControls);
@@ -92,8 +60,23 @@ impl Plugin for PhysicsPlugin {
                     .after(SimulationSet::Physics)
                     .in_set(crate::app::SKATE3),
             )
-            .add_systems(Update, present.in_set(FrameSet::Physics));
+            .add_systems(Update, present.in_set(FrameSet::Physics))
+            .add_systems(
+                PreUpdate,
+                preferences
+                    .before(crate::input::poll_controllers)
+                    .in_set(crate::app::SKATE3),
+            );
     }
+}
+
+/// The skater's gameplay preferences, every frame as the customiser's profile did before it went (legacy pass 6):
+/// now always the default profile's (trucks and wheels 0.7, stance 1, style and posture 0, the stock gestures).
+/// Choosing them comes back with character customisation, through the engine contract.
+fn preferences(mut physics: ResMut<GamePhysics>, mut skater: ResMut<SkaterRuntime>) {
+    static DEFAULT: std::sync::LazyLock<serde_json::Value> =
+        std::sync::LazyLock::new(|| serde_json::json!({"selections": {}, "morphs": {}}));
+    skate3_sim::physics::apply_preferences(&DEFAULT, &mut physics, &mut skater.animation);
 }
 
 /// `SimulationSet::Controls`: the sim's controller sampling on this tick's published actions.
@@ -127,12 +110,10 @@ fn advance(
     mut camera: ResMut<crate::camera::CameraRuntime>,
     mut cadence: ResMut<Time<Fixed>>,
     mut exit: MessageWriter<AppExit>,
-    mut performance: Option<ResMut<crate::performance::Performance>>,
 ) {
     if physics.failed {
         return;
     }
-    let timer = performance.as_ref().map(|_| std::time::Instant::now());
     if let Err(message) = skate3_sim::physics::advance(
         &mut physics,
         &mut skater,
@@ -145,9 +126,6 @@ fn advance(
         exit.write(AppExit::error());
     }
     cadence.set_timestep(physics.period());
-    if let (Some(performance), Some(timer)) = (performance.as_mut(), timer) {
-        performance.physics(timer.elapsed());
-    }
 }
 
 /// After `SimulationSet::Physics`: the completed tick's player-audio observation, once.
