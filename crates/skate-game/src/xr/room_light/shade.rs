@@ -350,55 +350,148 @@ mod tests {
         assert_eq!(single.volume(&cubes[..1]).0, UVec3::ONE);
     }
 
-    /// A piece in front of a bright window, in a room depth has placed (the
-    /// headset's case, 2026-11-17: its side away from the window was near
-    /// black beside walls passthrough showed well lit). What a white surface
-    /// facing away from the window is shown as (the soft light's cube side,
-    /// in cd/m^2 by the content's scale) is about what it is in the same room
-    /// with the window bricked up: the walls light it either way.
-    #[test]
-    fn a_face_away_from_a_window_keeps_the_walls_light() {
+    /// The synthetic box room the tests below light content in (4 x 2.5 x 5
+    /// m, depth placing its walls), swept by a head at `eye`, its light made
+    /// at the content's point and the grid the app makes it on (mod.rs's
+    /// constants; the grid's points nearest the x = -2 wall are 0.33 m from
+    /// it). `radiance` is the camera's reading where a ray meets the walls.
+    fn box_room_light(eye: Vec3, content: Vec3, radiance: impl Fn(Vec3) -> f32) -> (Vec<Vec3>, Vec<Lighting>) {
         use super::super::{depth, feed::Feed};
         use std::sync::Arc;
         let (min, max) = (Vec3::new(-2.0, 0.0, -2.5), Vec3::new(2.0, 2.5, 2.5));
-        let eye = Vec3::new(0.5, 1.5, 0.0);
-        // The content's point and the grid the app makes the light on (mod.rs's
-        // constants): its points nearest the window are 0.33 m from it.
-        let mut points = vec![Vec3::new(0.0, 0.3, 0.0)];
+        let mut points = vec![content];
         points.extend(Grid::over(min, max, 0.5, 1.5, UVec3::new(3, 2, 3)).points());
-        let made = |window: f32| {
-            let surfaces = Arc::new(depth::Surfaces::new(depth::box_room(min, max)));
-            let feed = Feed::default();
-            feed.set_surfaces(Some(surfaces.clone()));
-            let mut room = roomtone_sys::Room::new();
-            room.set_points(&points.iter().map(|p| p.to_array().into()).collect::<Vec<_>>());
-            roomtone_sys::synthetic::sweep_with(
-                &mut room,
-                |d| {
-                    let d = Vec3::from_array(d);
-                    let p = eye + d * surfaces.cast(eye, d).unwrap_or(10.0);
-                    // A 1.4 x 1.2 m window on the x = -2 wall, clipping, 100 times the walls.
-                    let v = if p.x < -1.99 && p.z.abs() < 0.7 && p.y > 0.9 && p.y < 2.1 { window } else { 0.01 };
-                    [v; 3]
-                },
-                |room, frame| {
-                    let mut frame = *frame;
-                    frame.head.position = eye.to_array().into();
-                    feed.add_frame(room, &frame);
-                },
-            );
-            room.make();
-            assert!(room.voxels() > 1000, "{}", room.summary());
-            let content = room.light_at(0).unwrap();
-            let scale = Scale::new(&content, 1e-3, 1.0);
-            (0..points.len()).map(|i| ambient_cube(&room.light_at(i).unwrap(), Quat::IDENTITY, scale)).collect::<Vec<_>>()
+        let surfaces = Arc::new(depth::Surfaces::new(depth::box_room(min, max)));
+        let feed = Feed::default();
+        feed.set_surfaces(Some(surfaces.clone()));
+        let mut room = roomtone_sys::Room::new();
+        room.set_points(&points.iter().map(|p| p.to_array().into()).collect::<Vec<_>>());
+        roomtone_sys::synthetic::sweep_with(
+            &mut room,
+            |d| {
+                let d = Vec3::from_array(d);
+                [radiance(eye + d * surfaces.cast(eye, d).unwrap_or(10.0)); 3]
+            },
+            |room, frame| {
+                let mut frame = *frame;
+                frame.head.position = eye.to_array().into();
+                feed.add_frame(room, &frame);
+            },
+        );
+        room.make();
+        assert!(room.voxels() > 1000, "{}", room.summary());
+        let lights = (0..points.len()).map(|i| room.light_at(i).unwrap()).collect();
+        (points, lights)
+    }
+
+    /// A 1.4 x 1.2 m window on the x = -2 wall, `window` bright (1 clips:
+    /// 100 times the walls).
+    fn window_wall(window: f32) -> impl Fn(Vec3) -> f32 {
+        move |p| if p.x < -1.99 && p.z.abs() < 0.7 && p.y > 0.9 && p.y < 2.1 { window } else { 0.01 }
+    }
+
+    /// How a white surface at `at` facing `n` is shown in the light `l`, as
+    /// the reference's white (a surface lit by the mean: 1; the level and
+    /// the exposure aside): the soft light and the keys as Bevy lights them,
+    /// a placed key by the inverse square from its place.
+    fn shown(l: &Lighting, at: Vec3, n: Vec3) -> f32 {
+        let mut lit = l.irradiance(n.to_array())[1];
+        for k in l.lights.iter().filter(|k| k.lit()) {
+            let (toward, falloff) = if k.placed() && k.range > 0.0 {
+                let to = Vec3::from_array(k.pos.into()) - at;
+                (to.normalize(), k.range * k.range / to.length_squared())
+            } else {
+                (Vec3::from_array(k.dir.into()), 1.0)
+            };
+            lit += k.color[1] * n.dot(toward).max(0.0) * falloff;
+        }
+        lit / l.mean
+    }
+
+    /// [`shown`], the mean over every way a surface can face (400 directions).
+    fn shown_overall(l: &Lighting, at: Vec3) -> f32 {
+        let n = 400;
+        let sum: f32 = (0..n)
+            .map(|i| {
+                let z = 1.0 - 2.0 * (i as f32 + 0.5) / n as f32;
+                let (r, a) = ((1.0 - z * z).sqrt(), i as f32 * 2.399_963);
+                shown(l, at, Vec3::new(r * a.cos(), z, r * a.sin()))
+            })
+            .sum();
+        sum / n as f32
+    }
+
+    /// A piece in front of a bright window, in a room depth has placed (the
+    /// headset's case, 2026-11-17: its side away from the window was near
+    /// black beside walls passthrough showed well lit). At every point the
+    /// light is made for, a surface facing away from the window keeps the
+    /// walls' light, not the dark side of the window's ring in the soft
+    /// light (before 2026-11-17: 0 beside the window): the same share of
+    /// the bricked-up room's everywhere, which is the reference's (a third
+    /// here, where the window's light beyond its core adds twice the walls'
+    /// to the room's mean).
+    #[test]
+    fn a_face_away_from_a_window_keeps_the_walls_light() {
+        let eye = Vec3::new(0.5, 1.5, 0.0);
+        let content = Vec3::new(0.0, 0.3, 0.0);
+        let cubes = |window: f32| {
+            let (points, lights) = box_room_light(eye, content, window_wall(window));
+            let scale = Scale::new(&lights[0], 1e-3, 1.0);
+            (points, lights.iter().map(|l| ambient_cube(l, Quat::IDENTITY, scale)).collect::<Vec<_>>())
         };
-        let (lit, bricked) = (made(1.0), made(0.01));
+        let ((points, lit), (_, bricked)) = (cubes(1.0), cubes(0.01));
         for (i, (lit, bricked)) in lit.iter().zip(&bricked).enumerate() {
-            // +X faces away from the window (before 2026-11-17: 0 beside it, black).
+            // +X faces away from the window.
             let away = lit[0].y / bricked[0].y;
-            assert!((0.7..1.3).contains(&away), "point {i} {:?}: away from the window {away} of the walls' light", points[i]);
-            assert!(lit[1].y > bricked[1].y * 0.9, "point {i}: toward it");
+            assert!((0.25..0.5).contains(&away), "point {i} {:?}: away from the window {away} of the walls' light", points[i]);
+            // Toward it the soft light has no less (the window itself is the key light's).
+            assert!(lit[1].y > 0.9 * lit[0].y, "point {i}: toward it {:?}", lit);
+        }
+    }
+
+    /// How bright what the room lights is shown, as before 2026-11-17's
+    /// light extraction (each light its whole spot, down to the room's
+    /// median), which left the walls' light alone in the reference: the
+    /// scene then sat 3-4 times as bright in a room a window lights (the
+    /// user's: "I had to lower brightness to 25%"), 1.7 times by a monitor in
+    /// a dark room and 1.4 times under a ceiling lamp. The mean over every
+    /// way a white surface at the content can face, against the reference's
+    /// white, is pinned to what the roomtone vendored before it made
+    /// (f2a9adb), beside what the extraction alone gave:
+    ///
+    /// | scene         | before | extraction alone | now   |
+    /// |---------------|--------|------------------|-------|
+    /// | window 30:1   | 1.342  | 1.590            | 1.342 |
+    /// | window 100:1  | 2.435  | 7.085            | 2.434 |
+    /// | monitor, dark | 1.978  | 3.387            | 1.979 |
+    /// | ceiling lamp  | 0.937  | 1.342            | 0.937 |
+    ///
+    /// A surface facing the light is clearly brighter than one facing away
+    /// (linear: 3.0, 21.8, 11.7 and 4.2 times).
+    #[test]
+    fn the_rooms_brightness_keeps_its_reference() {
+        let eye = Vec3::new(0.5, 1.5, 0.0);
+        let middle = Vec3::new(0.0, 0.3, 0.0);
+        // A monitor on the desk wall 0.7 m ahead, in a dark room; the content on the desk before it.
+        let monitor = |p: Vec3| {
+            if p.z < -2.49 && p.x.abs() < 0.3 && (p.y - 1.2).abs() < 0.18 { 0.3 } else { 0.003 + 0.004 * (-p.z / 2.5).max(0.0) }
+        };
+        // A 0.5 m ceiling lamp over the middle, clipping; the walls it lights brighter up high.
+        let lamp = |p: Vec3| if p.y > 2.49 && p.x.abs() < 0.25 && p.z.abs() < 0.25 { 1.0 } else { 0.02 + 0.015 * p.y / 2.5 };
+        // (name, eye, content, toward the light, radiance, overall before)
+        let scenes: [(&str, Vec3, Vec3, Vec3, Box<dyn Fn(Vec3) -> f32>, f32); 4] = [
+            ("window 30:1", eye, middle, Vec3::NEG_X, Box::new(window_wall(0.3)), 1.342),
+            ("window 100:1", eye, middle, Vec3::NEG_X, Box::new(window_wall(1.0)), 2.435),
+            ("monitor", Vec3::new(0.0, 1.2, -1.8), Vec3::new(0.0, 1.0, -2.0), Vec3::NEG_Z, Box::new(monitor), 1.978),
+            ("ceiling lamp", eye, middle, Vec3::Y, Box::new(lamp), 0.937),
+        ];
+        for (name, eye, content, toward, radiance, before) in scenes {
+            let (_, lights) = box_room_light(eye, content, radiance);
+            let l = &lights[0];
+            let overall = shown_overall(l, content);
+            assert!((overall / before - 1.0).abs() < 0.1, "{name}: {overall}, {before} before");
+            let (to, away) = (shown(l, content, toward), shown(l, content, -toward));
+            assert!(to > 2.5 * away, "{name}: toward the light {to}, away {away}");
         }
     }
 

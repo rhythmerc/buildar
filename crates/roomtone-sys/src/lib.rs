@@ -154,7 +154,8 @@ pub struct Lighting {
     /// x^2 - y^2 at the unit normal (tracking space). See [`Lighting::irradiance`].
     pub sh: [[f32; 3]; 9],
     pub lights: [Light; 2],
-    /// The reference's mean light over every direction, without its lights.
+    /// The reference's mean light over every direction, without its lights'
+    /// cores (each one's brightest 17 degrees): the brightness's reference.
     pub mean: f32,
     /// The reference's brightness as passthrough shows it.
     pub level: f32,
@@ -778,8 +779,7 @@ mod tests {
     /// A window filling much of a wall (wider than a cell): it becomes the
     /// key light whole, and the soft light keeps the walls' own, so a
     /// surface facing away from it is lit as the walls are, not left with
-    /// the dark side of the window's ring in the SH and a reference made
-    /// bright by the window.
+    /// the dark side of the window's ring in the SH.
     #[test]
     fn a_wide_window_leaves_the_walls_their_light() {
         let window = |d: [f32; 3]| d[0] < -0.6 && d[1].abs() < 0.45;
@@ -796,21 +796,29 @@ mod tests {
             room.light_at(0).unwrap()
         };
         let (lit, dark) = (made(true), made(false));
-        // The soft light on what faces away, as the reference sees it (its
-        // brightness is irradiance over the mean, at the walls' level): about
-        // the room's without the window, whose walls are the same.
-        let shown = |l: &Lighting, n| l.irradiance(n)[1] / l.mean;
-        let away = shown(&lit, [1.0, 0.0, 0.0]) / shown(&dark, [1.0, 0.0, 0.0]);
-        assert!((0.7..1.3).contains(&away), "away from the window: {away} of the walls' light");
-        for n in [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]] {
-            let side = shown(&lit, n) / shown(&dark, n);
-            assert!((0.7..1.3).contains(&side), "{n:?}: {side} of the walls' light");
+        // The soft light on what faces away: the walls', as on what faces
+        // along the window, against the room's without it (whose walls are
+        // the same), in the SH's own units.
+        let soft = |l: &Lighting, n| l.irradiance(n)[1];
+        let walls = |l: &Lighting, n| soft(l, n) / soft(l, [0.0, 0.0, 1.0]);
+        for n in [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]] {
+            let side = walls(&lit, n) / walls(&dark, n);
+            assert!((0.8..1.25).contains(&side), "{n:?}: {side} of the walls' light");
         }
+        // The reference (the brightness's) keeps the window's light beyond
+        // its core, as it did before the light took the window whole: shown
+        // against it, the walls' light is less than without the window, by
+        // what the window adds to the room's mean (0.09 here, where it is 25
+        // to 30 times the walls over an eighth of the sky; before the light
+        // took the window whole the SH rang below that).
+        let shown = |l: &Lighting, n| soft(l, n) / l.mean;
+        let away = shown(&lit, [1.0, 0.0, 0.0]) / shown(&dark, [1.0, 0.0, 0.0]);
+        assert!((0.06..0.12).contains(&away), "away from the window: {away} of the walls' light");
         // Toward it: the window's light on top, one light (not two halves of it).
         let key = lit.lights[0];
         assert!(key.dir.x < -0.95 && !lit.lights[1].lit(), "one light, the window: {:?}", lit.lights);
         let toward = (lit.irradiance([-1.0, 0.0, 0.0])[1] + key.color[1]) / lit.mean;
-        assert!(toward > 10.0 * shown(&dark, [-1.0, 0.0, 0.0]), "toward the window: {toward}");
+        assert!(toward > 10.0 * shown(&lit, [1.0, 0.0, 0.0]), "toward the window: {toward}");
     }
 
     fn temp(name: &str) -> std::path::PathBuf {
