@@ -514,3 +514,21 @@ step 6); the rest waits for an engine that needs it.
   - **A shadow budget.** The caster cap (24) is sized for one skater. Nearby models get their body-group shadows,
     distant ones a single soft blob or none. Measure the frame rate on the headset with a full grid.
   - One-model engines (Skate 3, THUG2, SK8) don't change.
+
+## Later: a Mario Kart Wii spike (2026-11-17)
+
+[Wiicompiled](https://github.com/patchzyy/Wiicompiled) is a static recompilation of Mario Kart Wii (GPL-3.0, from the
+player's own disc). The game's PowerPC code is lifted to C++ and built with a runtime that draws through aurora (GX
+over Dawn) and reads input with SDL. Unlike thug2-decomp it gives behaviour, not readable code: hooks would be per
+lifted function, named from the MKW community's symbol maps.
+
+- **The spike (Linux x64):** build it, step the game with aurora stubbed out, and load a custom KCL. If the runtime
+  can't run without its renderer, the cost rises a lot.
+- **The lifts if it passes:**
+  - A headless build for Android ARM64 (its tested build is x86-64 desktop), with no aurora, SDL or Dawn.
+  - The stage as a course, made at runtime: KCL (collision, mechanical) and KMP (start, checkpoints, respawns, CPU
+    and item routes: the `race` mode module's design work). Free roam or time trial first sidesteps most of KMP.
+  - Karts and riders in the shared renderer: models from the game's files and bone matrices from game state (as
+    THUG2's palette), or aurora's draw calls captured. GX's colour-combining (TEV) materials map lossily onto
+    `MaterialDesc`; the HUD needs its layouts as draw lists.
+- Several models from one engine (the CPU racers) is the section above.
