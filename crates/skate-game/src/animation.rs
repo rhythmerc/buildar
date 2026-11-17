@@ -7,12 +7,12 @@ use bevy::{camera::visibility::NoFrustumCulling, mesh::skinning::SkinnedMesh, pr
 #[derive(Resource, Default)]
 pub(crate) struct AnimationStatus {
     pub ready: bool,
-    bindings: Vec<BoneBinding>,
+    pub(crate) bindings: Vec<BoneBinding>,
 }
-struct BoneBinding {
-    entity: Entity,
-    bone: usize,
-    parent_bone: Option<usize>,
+pub(crate) struct BoneBinding {
+    pub(crate) entity: Entity,
+    pub(crate) bone: usize,
+    pub(crate) parent_bone: Option<usize>,
 }
 impl AnimationStatus {
     pub(crate) fn pose_transforms(&self, pose: &[Mat4]) -> Vec<(Entity, Transform)> {
@@ -72,70 +72,26 @@ fn bind(
         return;
     }
     let names = &skater.animation.evaluator.frames.bone_names;
-    let result = (|| -> Result<Option<Vec<BoneBinding>>, String> {
-        let mut bindings = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for (entity, skin) in &skins {
-            if !parents.iter_ancestors(entity).any(|e| roots.contains(e)) {
-                continue;
-            }
-            if parents
-                .iter_ancestors(entity)
-                .any(|e| visibility.get(e).is_ok_and(|v| *v == Visibility::Hidden))
-            {
-                continue;
-            }
-            let mut binding = Vec::with_capacity(skin.joints.len());
-            for &joint in &skin.joints {
-                if !seen.insert(joint) {
-                    continue;
-                }
-                let (name, _) = nodes
-                    .get(joint)
-                    .map_err(|_| "Skater skin joint is missing its name or transform")?;
-                let bone = names
-                    .iter()
-                    .position(|n| n.eq_ignore_ascii_case(name.as_str()))
-                    .ok_or_else(|| {
-                        format!("Skater skin bone {name} is absent from the stock rig")
-                    })?;
-                let mut parent_bone = None;
-                for parent in parents.iter_ancestors(joint) {
-                    if roots.contains(parent) {
-                        break;
-                    }
-                    if let Ok((name, transform)) = nodes.get(parent) {
-                        if let Some(index) = names
-                            .iter()
-                            .position(|n| n.eq_ignore_ascii_case(name.as_str()))
-                        {
-                            parent_bone = Some(index);
-                            break;
-                        }
-                        // The supplied GLB's armature node is identity. Reject
-                        // another import convention rather than double a pose.
-                        if !transform.to_matrix().abs_diff_eq(Mat4::IDENTITY, 0.00001) {
-                            return Err(format!(
-                                "Skater armature ancestor {name} has an unsupported transform"
-                            ));
-                        }
-                    }
-                }
-                binding.push(BoneBinding {
-                    entity: joint,
-                    bone,
-                    parent_bone,
-                });
-            }
-            // Bind each visible modular rig, retaining its authored inverse binds.
-            bindings.extend(binding);
+    let skins = skins.iter().filter_map(|(entity, skin)| {
+        if !parents.iter_ancestors(entity).any(|e| roots.contains(e)) {
+            return None;
         }
-        Ok(if bindings.is_empty() {
-            None
-        } else {
-            Some(bindings)
-        })
-    })();
+        if parents
+            .iter_ancestors(entity)
+            .any(|e| visibility.get(e).is_ok_and(|v| *v == Visibility::Hidden))
+        {
+            return None;
+        }
+        Some(skin.joints.as_slice())
+    });
+    let result = bind_skins(
+        names,
+        skins,
+        |e| nodes.get(e).ok().map(|(name, transform)| (name.as_str().to_owned(), transform.to_matrix())),
+        |e| parents.iter_ancestors(e).collect(),
+        |e| roots.contains(e),
+    )
+    .map(|bindings| if bindings.is_empty() { None } else { Some(bindings) });
     match result {
         Ok(Some(binding)) => {
             animation.bindings = binding;
@@ -152,6 +108,79 @@ fn bind(
         }
     }
 }
+/// Each visible skin's joints bound to the stock rig's bones by name (`names`), with the nearest named ancestor as
+/// the parent bone. `node`: a node's name and local matrix; `ancestors`: a node's ancestors, nearest first;
+/// `is_root`: the model's root (the search stops there).
+pub(crate) fn bind_skins<'a>(
+    names: &[String],
+    skins: impl IntoIterator<Item = &'a [Entity]>,
+    node: impl Fn(Entity) -> Option<(String, Mat4)>,
+    ancestors: impl Fn(Entity) -> Vec<Entity>,
+    is_root: impl Fn(Entity) -> bool,
+) -> Result<Vec<BoneBinding>, String> {
+    let mut bindings = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for skin in skins {
+        let mut binding = Vec::with_capacity(skin.len());
+        for &joint in skin {
+            if !seen.insert(joint) {
+                continue;
+            }
+            let (name, _) = node(joint).ok_or("Skater skin joint is missing its name or transform")?;
+            let bone = names
+                .iter()
+                .position(|n| n.eq_ignore_ascii_case(name.as_str()))
+                .ok_or_else(|| format!("Skater skin bone {name} is absent from the stock rig"))?;
+            let mut parent_bone = None;
+            for parent in ancestors(joint) {
+                if is_root(parent) {
+                    break;
+                }
+                if let Some((name, transform)) = node(parent) {
+                    if let Some(index) = names.iter().position(|n| n.eq_ignore_ascii_case(name.as_str())) {
+                        parent_bone = Some(index);
+                        break;
+                    }
+                    // The supplied GLB's armature node is identity. Reject
+                    // another import convention rather than double a pose.
+                    if !transform.abs_diff_eq(Mat4::IDENTITY, 0.00001) {
+                        return Err(format!("Skater armature ancestor {name} has an unsupported transform"));
+                    }
+                }
+            }
+            binding.push(BoneBinding { entity: joint, bone, parent_bone });
+        }
+        // Bind each visible modular rig, retaining its authored inverse binds.
+        bindings.extend(binding);
+    }
+    Ok(bindings)
+}
+
+/// Each binding's bone-local transform between two snapshots: bone-local rotations blended, not matrix entries or
+/// independent world positions, so joints retain their hierarchy while limbs turn.
+pub(crate) fn blended_locals(
+    bindings: &[BoneBinding],
+    previous: &crate::presentation::Snapshot,
+    current: &crate::presentation::Snapshot,
+    alpha: f32,
+) -> Vec<Transform> {
+    let basis = render_basis();
+    bindings
+        .iter()
+        .map(|binding| {
+            let local = |snapshot: &crate::presentation::Snapshot| {
+                let global = snapshot.bones[binding.bone] * basis;
+                Transform::from_matrix(if let Some(parent) = binding.parent_bone {
+                    (snapshot.bones[parent] * basis).inverse() * global
+                } else {
+                    global
+                })
+            };
+            crate::presentation::blend(local(previous), local(current), alpha)
+        })
+        .collect()
+}
+
 fn present(
     history: Res<crate::presentation::Presentation>,
     skater: Res<SkaterRuntime>,
@@ -164,10 +193,6 @@ fn present(
     if !animation.ready {
         return;
     }
-    // Existing GLB was exported through Blender: its bone-local axes are
-    // rotated -90 degrees about X relative to the native frames. Both files'
-    // world positions are Y-up. This is a skin basis change, not a physics turn.
-    let basis = render_basis();
     let Some((previous, current, alpha)) = history.view(&replay, hold.alpha(&time)) else {
         let pose: Vec<_> = skater
             .render_pose
@@ -182,23 +207,16 @@ fn present(
         }
         return;
     };
-    for binding in &animation.bindings {
-        // Blend bone-local rotations, not matrix entries or independent world
-        // positions: joints retain their hierarchy while limbs turn.
-        let local = |snapshot: &crate::presentation::Snapshot| {
-            let global = snapshot.bones[binding.bone] * basis;
-            Transform::from_matrix(if let Some(parent) = binding.parent_bone {
-                (snapshot.bones[parent] * basis).inverse() * global
-            } else {
-                global
-            })
-        };
-        if let Ok(mut transform) = nodes.get_mut(binding.entity) {
-            *transform = crate::presentation::blend(local(previous), local(current), alpha);
+    for (binding, transform) in animation.bindings.iter().zip(blended_locals(&animation.bindings, previous, current, alpha)) {
+        if let Ok(mut node) = nodes.get_mut(binding.entity) {
+            *node = transform;
         }
     }
 }
-fn render_basis() -> Mat4 {
+/// Existing GLB was exported through Blender: its bone-local axes are
+/// rotated -90 degrees about X relative to the native frames. Both files'
+/// world positions are Y-up. This is a skin basis change, not a physics turn.
+pub(crate) fn render_basis() -> Mat4 {
     Mat4::from_cols(Vec4::X, -Vec4::Z, Vec4::Y, Vec4::W)
 }
 pub(crate) use skate3_sim::animation::native_matrix;

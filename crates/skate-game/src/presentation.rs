@@ -46,6 +46,11 @@ impl Presentation {
     pub fn pair(&self) -> Option<(&Snapshot, &Snapshot)> {
         self.pair.as_ref().map(|(a, b)| (a, b))
     }
+    /// The generation of the newest snapshot (a tick whose pose has it is taken already).
+    #[cfg(test)]
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
 }
 
 fn capture(
@@ -72,27 +77,33 @@ fn capture(
         camera: camera_transform(frame),
         fov: frame.field_of_view_degrees.to_radians(),
     };
-    // Snap teleports/cuts and cadence changes instead of sweeping through the
-    // world or blending snapshots across different simulation-clock periods.
-    let reset = frame.discontinuity
-        || skater.player_input.processed.flags_2472 & (1 << 10) != 0
-        || history.period != time.timestep();
+    let cut = frame.discontinuity || skater.player_input.processed.flags_2472 & (1 << 10) != 0;
     // (the parked replay records nothing: `crate::replay`)
-    if let Some((previous, current)) = history.pair.as_mut() {
-        if reset || current.bones.len() != next.bones.len() {
-            *previous = next.clone();
-        } else {
-            std::mem::swap(previous, current);
-        }
-        *current = next;
-    } else {
-        history.pair = Some((next.clone(), next));
-    }
-    history.generation = pose.generation;
-    history.period = time.timestep();
+    history.advance(next, pose.generation, cut, time.timestep());
 }
 
-fn camera_transform(frame: CameraFrame) -> Transform {
+impl Presentation {
+    /// A completed tick's snapshot as the newest of the pair.
+    pub(crate) fn advance(&mut self, next: Snapshot, generation: u64, cut: bool, period: std::time::Duration) {
+        // Snap teleports/cuts and cadence changes instead of sweeping through the
+        // world or blending snapshots across different simulation-clock periods.
+        let reset = cut || self.period != period;
+        if let Some((previous, current)) = self.pair.as_mut() {
+            if reset || current.bones.len() != next.bones.len() {
+                *previous = next.clone();
+            } else {
+                std::mem::swap(previous, current);
+            }
+            *current = next;
+        } else {
+            self.pair = Some((next.clone(), next));
+        }
+        self.generation = generation;
+        self.period = period;
+    }
+}
+
+pub(crate) fn camera_transform(frame: CameraFrame) -> Transform {
     let [right, up, at] = frame.basis.columns.map(Vec3::from_array);
     Transform {
         translation: Vec3::new(frame.position[0], frame.position[1], frame.position[2]),

@@ -658,7 +658,6 @@ fn spawn_skater(world: &mut World, model: &t2::SkaterModel) {
     use bevy::asset::RenderAssetUsages;
     use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
     use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
-    use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
     use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
     const JOINTS: usize = 64;
     let images: Vec<Handle<Image>> = {
@@ -689,8 +688,33 @@ fn spawn_skater(world: &mut World, model: &t2::SkaterModel) {
     let root = world.spawn((Name::new("THUG2 skater"), Transform::default(), Visibility::Hidden)).id();
     let joints: Vec<Entity> = (0..JOINTS).map(|_| world.spawn((Transform::default(), Visibility::default())).id()).collect();
     for part in &model.meshes {
+        let Some(mesh) = part_mesh(part) else { continue };
+        let material = part_material(part, &images);
+        let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
+        let material = world.resource_mut::<Assets<StandardMaterial>>().add(material);
+        let part = world
+            .spawn((
+                SkaterPart,
+                Mesh3d(mesh),
+                MeshMaterial3d(material),
+                SkinnedMesh { inverse_bindposes: bindposes.clone(), joints: joints.clone() },
+                // (bounds of the bind pose: a pose reaches past them)
+                bevy::camera::visibility::NoFrustumCulling,
+                Transform::default(),
+            ))
+            .id();
+        world.entity_mut(root).add_child(part);
+    }
+    world.insert_resource(SkaterJoints { joints, root });
+}
+
+/// A part of the skater's model as a Bevy mesh (none for a part with no triangles).
+pub(crate) fn part_mesh(part: &t2::SkaterMesh) -> Option<Mesh> {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
+    {
         if part.indices.is_empty() {
-            continue;
+            return None;
         }
         let v = &part.vertices;
         let mut indices = part.indices.clone();
@@ -728,8 +752,15 @@ fn spawn_skater(world: &mut World, model: &t2::SkaterModel) {
                 .collect::<Vec<[f32; 4]>>(),
         );
         mesh.insert_indices(Indices::U16(indices));
+        Some(mesh)
+    }
+}
+
+/// A part of the skater's model's material (`images`: its model's textures).
+pub(crate) fn part_material(part: &t2::SkaterMesh, images: &[Handle<Image>]) -> StandardMaterial {
+    {
         let colour = part.color.map(|c| (c * 2.0).min(1.0));
-        let material = StandardMaterial {
+        StandardMaterial {
             base_color: Color::srgba(colour[0], colour[1], colour[2], 1.0),
             base_color_texture: part.texture.and_then(|t| images.get(t).cloned()),
             alpha_mode: if part.blended {
@@ -743,23 +774,8 @@ fn spawn_skater(world: &mut World, model: &t2::SkaterModel) {
             cull_mode: if part.two_sided { None } else { Some(bevy::render::render_resource::Face::Back) },
             perceptual_roughness: 0.85,
             ..default()
-        };
-        let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
-        let material = world.resource_mut::<Assets<StandardMaterial>>().add(material);
-        let part = world
-            .spawn((
-                SkaterPart,
-                Mesh3d(mesh),
-                MeshMaterial3d(material),
-                SkinnedMesh { inverse_bindposes: bindposes.clone(), joints: joints.clone() },
-                // (bounds of the bind pose: a pose reaches past them)
-                bevy::camera::visibility::NoFrustumCulling,
-                Transform::default(),
-            ))
-            .id();
-        world.entity_mut(root).add_child(part);
+        }
     }
-    world.insert_resource(SkaterJoints { joints, root });
 }
 
 /// A mesh's triangles turned the other way to ours (front: counter-clockwise): most of them face away from their
@@ -788,34 +804,45 @@ fn pose_skater(thug2: Res<Thug2>, joints: Option<Res<SkaterJoints>>, mut q: Quer
     if !shown {
         return;
     }
-    let scale = thug2.stage.scale();
-    let to_ours =
-        Mat4::from_scale(Vec3::splat(1.0 / (t2::INCHES_PER_METRE * scale))) * Mat4::from_translation(-thug2_engine::stage::OFFSET);
     // (between the last two frames: the game steps at 60 Hz, the headset draws faster)
     let now = thug2.current.unwrap();
     let before = thug2.previous.unwrap_or(now);
     let alpha = (thug2.accum / STEP).clamp(0.0, 1.0);
-    let back = Vec3::from_array(before.position).lerp(Vec3::from_array(now.position), alpha) - Vec3::from_array(now.position);
-    let mut draw = thug2.pose.draw;
-    (draw[3], draw[7], draw[11], draw[15]) = (0.0, 0.0, 0.0, 1.0);
-    let placed = to_ours * Mat4::from_translation(back) * Mat4::from_cols_array(&draw);
+    let (placed, matrices) =
+        placed_joints(&thug2.pose, thug2.stage.scale(), before.position, now.position, alpha, joints.joints.len());
     // (the parts' own transform - the root's - is where the model is: skinning ignores it, but culling places the
     // parts' bind-pose bounds with it)
     if let Ok((mut t, _)) = q.get_mut(joints.root) {
         *t = Transform::from_matrix(placed);
     }
-    for (i, &joint) in joints.joints.iter().enumerate() {
-        // (the game clears its palette's w column - its skinning reads only the rest, as for a point: w is 1 again
-        // here, or the product would drop the translations of the matrices before it)
-        let palette = thug2.pose.palette.get(i).map_or(Mat4::IDENTITY, |m| {
-            let mut m = *m;
-            (m[3], m[7], m[11], m[15]) = (0.0, 0.0, 0.0, 1.0);
-            Mat4::from_cols_array(&m)
-        });
+    for (&joint, matrix) in joints.joints.iter().zip(matrices) {
         if let Ok((mut transform, _)) = q.get_mut(joint) {
-            *transform = Transform::from_matrix(placed * palette);
+            *transform = Transform::from_matrix(matrix);
         }
     }
+}
+
+/// [`pose_skater`]'s matrices: where the model is (the root's), and each of `count` joints.
+pub(crate) fn placed_joints(pose: &t2::Pose, scale: f32, before: [f32; 3], now: [f32; 3], alpha: f32, count: usize) -> (Mat4, Vec<Mat4>) {
+    let to_ours =
+        Mat4::from_scale(Vec3::splat(1.0 / (t2::INCHES_PER_METRE * scale))) * Mat4::from_translation(-thug2_engine::stage::OFFSET);
+    let back = Vec3::from_array(before).lerp(Vec3::from_array(now), alpha) - Vec3::from_array(now);
+    let mut draw = pose.draw;
+    (draw[3], draw[7], draw[11], draw[15]) = (0.0, 0.0, 0.0, 1.0);
+    let placed = to_ours * Mat4::from_translation(back) * Mat4::from_cols_array(&draw);
+    let joints = (0..count)
+        .map(|i| {
+            // (the game clears its palette's w column - its skinning reads only the rest, as for a point: w is 1
+            // again here, or the product would drop the translations of the matrices before it)
+            let palette = pose.palette.get(i).map_or(Mat4::IDENTITY, |m| {
+                let mut m = *m;
+                (m[3], m[7], m[11], m[15]) = (0.0, 0.0, 0.0, 1.0);
+                Mat4::from_cols_array(&m)
+            });
+            placed * palette
+        })
+        .collect();
+    (placed, joints)
 }
 
 /// `THUG2_SHOT=<file.png>` (testing without a headset): a camera put a little way in front of the skater, looking at

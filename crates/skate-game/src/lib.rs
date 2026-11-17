@@ -55,6 +55,8 @@ mod engines;
 mod engine_hud;
 #[cfg(feature = "thug2")]
 mod thug2;
+#[cfg(test)]
+mod model_parity;
 
 /// Platform hooks for shared storage (the headset's `Download` folder),
 /// set by the Android entry point: whether the app may read it, and asking
