@@ -175,3 +175,109 @@ mod adapter {
         assert_eq!(fnv(&written.out), RECORDED);
     }
 }
+
+/// Through the generic driver (`crate::engine_driver`), Skate 3 as an `engine_core::EngineCore`
+/// (`skate3_engine::engine`): the same script, from the first frame it runs.
+#[cfg(test)]
+mod driver {
+    use super::*;
+    use crate::engines::{Engine, Engines};
+    use crate::xr::link::{CurrentPark, CurrentStage, PlacePlayer, SkaterLink};
+    use bevy::time::TimeUpdateStrategy;
+
+    struct Skate3;
+
+    impl crate::engine_driver::Hosted for Skate3 {
+        const ENGINE: Engine = Engine::Skate3;
+    }
+
+    type Driver = crate::engine_driver::Driver<Skate3>;
+
+    #[test]
+    fn skate3_hosted_by_the_driver() {
+        let Some(root) = root() else {
+            eprintln!("SKATE3_ASSET_ROOT not set: skipped");
+            return;
+        };
+        // (its tick, for the frames: the sim's own, read once)
+        let period = {
+            let bundle = skate3_sim::Bundle::open(&root, &mut |_| {}).expect("the bundle");
+            let config = skate3_sim::SimConfig { difficulty: skate3_sim::difficulty::Difficulty::Easy, map: None, spawn_offset: 0.0 };
+            skate3_sim::Sim::load(&bundle, &config, &mut |_| {}).expect("the sim").period()
+        };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default(), bevy::mesh::MeshPlugin))
+            .init_asset::<StandardMaterial>()
+            .init_asset::<Image>()
+            .init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>()
+            .add_plugins(bevy::audio::AudioPlugin::default())
+            .insert_resource(TimeUpdateStrategy::ManualDuration(period))
+            .insert_resource(crate::xr::rig::Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: None })
+            .init_resource::<CurrentStage>()
+            .init_resource::<CurrentPark>()
+            .init_resource::<SkaterLink>()
+            .init_resource::<engine_api::LatestTouch>()
+            .init_resource::<engine_api::PadHeld>()
+            .init_resource::<engine_api::PlayerBodies>()
+            .init_resource::<crate::xr::ui::hud::TrickHud>()
+            .init_resource::<crate::xr::ui::XrUi>()
+            .init_resource::<crate::xr::ar_settings::ArSettings>()
+            .add_message::<PlacePlayer>();
+        crate::engine_hud::install(&mut app);
+        let factory = skate3_engine::engine::factory(root.clone(), skate3_sim::difficulty::Difficulty::Easy, false);
+        crate::engines::add_engine(&mut app, Engine::Skate3, |_| Ok(()), |app| {
+            crate::engine_driver::install::<Skate3>(app, factory, None);
+        });
+        app.world_mut().resource_mut::<Engines>().request(Engine::Skate3);
+        // (the frame it is made in, it ticks: that is the adapter's first tick, its frame 1's, with the stage)
+        let (stage, park) = Script::stage();
+        assert!(Script::at(1).stage);
+        app.insert_resource(CurrentStage(stage.clone()));
+        **app.world_mut().resource_mut::<CurrentPark>() = park.clone();
+        let mut out = String::new();
+        let mut ticks = 0;
+        let record = |app: &App, out: &mut String, ticks: &mut u32| {
+            let driver = app.world().resource::<Driver>();
+            let pose = driver.last_poses().first().cloned().unwrap_or_default();
+            let link = **app.world().resource::<SkaterLink>();
+            let trick = (**app.world().resource::<crate::xr::ui::hud::TrickHud>()).clone();
+            line(out, *ticks, &link, &trick, &pose);
+            *ticks += 1;
+        };
+        for _ in 0..2000 {
+            app.update();
+            if app.world_mut().resource_mut::<Driver>().running() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(app.world_mut().resource_mut::<Driver>().running(), "Skate 3 made");
+        assert_eq!(app.world().resource::<Driver>().steps(), 1, "a tick the frame it was made");
+        record(&app, &mut out, &mut ticks);
+        for frame in 2..TICKS {
+            let script = Script::at(frame);
+            if script.stage {
+                app.insert_resource(CurrentStage(stage.clone()));
+                **app.world_mut().resource_mut::<CurrentPark>() = park.clone();
+            }
+            if let Some(place) = script.place {
+                app.world_mut().write_message(PlacePlayer(place));
+            }
+            app.world_mut().resource_mut::<engine_api::LatestTouch>().0 = script.touch;
+            **app.world_mut().resource_mut::<engine_api::PadHeld>() = script.held;
+            let before = app.world().resource::<Driver>().steps();
+            app.update();
+            let driver = app.world().resource::<Driver>();
+            assert!(driver.steps() - before <= 1, "a tick a frame");
+            if driver.steps() > before {
+                record(&app, &mut out, &mut ticks);
+            }
+        }
+        eprintln!("skate3 by the driver: {ticks} ticks, digest {:016x}", fnv(&out));
+        if let Some(path) = std::env::var_os("SKATE3_GATE_DUMP") {
+            std::fs::write(path, &out).unwrap();
+        }
+        assert_eq!(ticks, TICKS - HELD.len() as u32 - 1, "a tick a frame, none held");
+        assert_eq!(fnv(&out), RECORDED);
+    }
+}

@@ -123,6 +123,18 @@ impl<M: Hosted> Driver<M> {
         self.steps
     }
 
+    /// It runs (made, not failed).
+    #[cfg(test)]
+    pub(crate) fn running(&mut self) -> bool {
+        running::<M>(&mut self.phase).is_some()
+    }
+
+    /// The poses the last step left, as stamped.
+    #[cfg(test)]
+    pub(crate) fn last_poses(&self) -> &[Pose] {
+        &self.scratch
+    }
+
     #[cfg(test)]
     pub(crate) fn clips(&self) -> usize {
         self.voices.clips()

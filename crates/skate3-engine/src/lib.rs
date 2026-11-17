@@ -5,6 +5,7 @@
 //! `skate3-sim`, or into it as `skate3_sim::hud`: `docs/game-code-out-plan.md`, step 3). Nothing here may depend on
 //! the app.
 //!
+//! - [`engine`]: Skate 3 as the runtime drives it ([`engine_core::EngineCore`]), made on a worker by its factory.
 //! - [`hud`]: the retail trick display (its movie, read from the player's prepared HUD files) as a
 //!   [`engine_core::hud::HudFrame`].
 //! - [`input`]: the Touch controllers as the Xbox pad the sim reads, and its controls sheet.
@@ -14,6 +15,7 @@
 //! - [`sound`]: its own sound graph as a stream, or its ticks as the skating sounds the app carries, and retail's
 //!   multiplier sounds.
 //! - [`trick`]: the sim's scoring as the plain trick readout.
+pub mod engine;
 pub mod hud;
 pub mod input;
 pub mod model;
