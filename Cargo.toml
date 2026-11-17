@@ -38,8 +38,9 @@ strip = false
 opt-level = 3
 
 # Local buildar-engine-core checkout (a sibling of this repo):
-# [patch."https://github.com/rhythmerc/buildar-engine-core"]
-# engine-core = { path = "../buildar-engine-core" }
+# (step 6: the branch `step-6`, from the clone in .local until it is published and re-pinned)
+[patch."https://github.com/rhythmerc/buildar-engine-core"]
+engine-core = { path = ".local/buildar-engine-core" }
 
 # Local skate3-headless checkout (a sibling of this repo):
 # [patch."https://github.com/rhythmerc/skate3-headless"]

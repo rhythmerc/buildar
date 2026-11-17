@@ -1,9 +1,6 @@
 use crate::app::FrameSet;
 use bevy::{asset::LoadState, gltf::Gltf, prelude::*};
-use skate_data::GameAssets;
 
-#[derive(Resource)]
-pub(crate) struct AssetManifest(pub GameAssets);
 #[derive(Resource)]
 pub(crate) struct CharacterAsset(pub Handle<Gltf>);
 #[derive(Resource, Default, PartialEq, Eq)]
@@ -22,10 +19,8 @@ impl Plugin for GameAssetsPlugin {
             .add_systems(Update, check.in_set(FrameSet::Assets));
     }
 }
-fn load(mut commands: Commands, server: Res<AssetServer>, manifest: Res<AssetManifest>) {
-    commands.insert_resource(CharacterAsset(
-        server.load(manifest.0.character_scene.clone()),
-    ));
+fn load(mut commands: Commands, server: Res<AssetServer>, model: Res<crate::animation::Skate3Model>) {
+    commands.insert_resource(CharacterAsset(server.load(model.gltf().0.to_owned())));
 }
 fn check(
     server: Res<AssetServer>,

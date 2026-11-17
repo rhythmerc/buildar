@@ -392,6 +392,39 @@ sorting rule.
   of every kind, and both through a turned, scaled rig. Through the stage and park they are identical. The meter's
   placement is checked against the old factors exactly (`engine_hud` tests).
 
+**Step 6, as done (2026-11-16):** each engine describes its skater model and gives its pose as plain data; the app
+draws both through one generic layer that doesn't know which engine it is.
+- **Core** (`engine_core::model`): `Model { source, parents, groups }`; `ModelSource::Gltf { path, joint_names, basis }`
+  or `ModelSource::Meshes { meshes, textures, joint_count }` (`MeshData`: positions, normals, uvs, colour multipliers,
+  joints and weights, indices, a `MaterialDesc { base_color, texture, alpha, two_sided, vertex_color, lighting }` with
+  `AlphaMode` and `Lighting::{Standard, Unlit}`; textures are the HUD's `Rgba8`); `Pose { generation, discontinuity,
+  root, joints }`. The skeleton's shape is the model's (`parents`), not each pose's: the one refinement of the sketch
+  above. Body groups (`BodyGroup`, `Cast`, `Point`, `Ellipse`) are in core with neutral `u32` ids;
+  `engine_core::skate::body` names them (`RIDER`, `BOARD`) and holds `BOARD_FOOTPRINT`.
+- **The app** (`skate-game`'s `model.rs`): `PoseHistory` (the last two poses, taken once; a cut, a new step period or
+  joint count restarts the pair) with `blend`; for a glTF source `bind_skins` (skin joints by name, the nearest named
+  ancestor as parent), `joint_locals` (bone-local blending) and `joint_transforms` (unblended); for meshes as data
+  `spawn_meshes`, `mesh`, `material` (the lit or unlit standard material, roughness 0.85) and `flat_joints` (root x
+  joint, identity inverse binds, not blended). The per-engine systems that feed it stay in each adapter until step 8.
+- **Skate 3** (`skate3_engine::model`): `model` (the manifest's GLB, the rig's bone names and parents, `BASIS`, the old
+  `render_basis` to the sign of its zeros) and `pose` (the render pose and animation root; a discontinuity when the
+  gameplay camera cuts or the teleport flag is up: the sim's own flag, so skate3-headless is unchanged). The desktop
+  camera's shot rides in the same `PoseHistory` as the pose, so camera, root and joints keep one interval; the replay
+  (parked) samples the same snapshots.
+- **THUG2** (`thug2_engine::model`): `source` (winding, vertex colours /128, the part colour doubled, weights of three
+  normalised, alpha mode) and `pose` (the w columns fixed, game to ours x draw matrix as the root, the palette as the
+  joints). Its only interpolation, the root moved back by the skater's position between the game's last two frames,
+  stays exactly as it was: the adapter works out the shift (game units) and the engine puts it between the unit
+  conversion and the draw matrix. A generic world-space root blend instead would also turn the root between frames,
+  and would take the motion from the draw matrix rather than the skater's position: the user's call.
+- **Parity:** `model_parity` (recorded at 8773c47, the old maths lifted out as functions unchanged) digests the `f32`
+  bits of what each engine's model is given. Skate 3: joints and root over fixed ticks (a cut, a cadence change, a
+  repeated generation, a bone count change) at six alphas, inside and outside 0..1, and the no-pair fallback; and
+  the real game (`SKATE3_ASSET_ROOT`): 150 of its own ticks bound to its GLB. THUG2: joints from a fixed palette and
+  draw matrix (short palette, junk w columns, world sizes 1 and 2.5, moving and not) and its parts as meshes and
+  materials; and the real game (ignored: the game boots once a process) after a fixed run. All identical through the
+  new path.
+
 ### Risks
 
 - **Quest performance:**

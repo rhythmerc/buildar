@@ -52,54 +52,43 @@ fn matrix(seed: f32) -> Mat4 {
 #[cfg(feature = "retail")]
 mod skate3 {
     use super::*;
-    use crate::animation::{AnimationStatus, BoneBinding};
-    use crate::presentation::{Presentation, Snapshot, blend};
+    use crate::model::{JointBinding, blend};
+    use crate::presentation::{Presentation, Shot};
+    use engine_core::Pose;
     use std::time::Duration;
 
-    /// A completed tick as the sim publishes it.
+    /// A completed tick as the engine gives it, with the desktop camera's shot of it and the step's period.
     pub(crate) struct Tick {
-        pub generation: u64,
-        pub root: Mat4,
-        pub bones: Vec<Mat4>,
-        pub camera: Transform,
-        pub fov: f32,
-        pub cut: bool,
+        pub pose: Pose,
+        pub shot: Shot,
         pub period: Duration,
     }
 
     const ALPHAS: [f32; 6] = [-0.25, 0.0, 0.3, 0.5, 1.0, 1.4];
 
     /// What's drawn for each tick (and before any): the fallback joints before the first, then at each alpha the
-    /// root's transform and each binding's bone-local one.
+    /// root's transform and each binding's joint-local one.
     pub(crate) fn drawn(ticks: &[Tick], bindings: &[(usize, Option<usize>)], fallback: &[Mat4]) -> String {
+        let basis = skate3_engine::model::BASIS;
         let mut b = Bytes::default();
         let mut world = World::new();
-        let bindings: Vec<BoneBinding> = bindings
+        let bindings: Vec<JointBinding> = bindings
             .iter()
-            .map(|&(bone, parent_bone)| BoneBinding { entity: world.spawn_empty().id(), bone, parent_bone })
+            .map(|&(joint, parent)| JointBinding { entity: world.spawn_empty().id(), joint, parent })
             .collect();
         let replay = crate::replay::Replay::default();
         let mut history = Presentation::default();
         // (no pair yet: the live pose, unblended)
         assert!(history.view(&replay, 0.5).is_none());
-        let status = AnimationStatus { ready: true, bindings };
-        let joints = status.pose_transforms(fallback);
+        let joints = crate::model::joint_transforms(&bindings, fallback, basis);
         b.n(joints.len());
         joints.iter().for_each(|&(_, t)| b.t(t));
         for tick in ticks {
-            if tick.generation != history.generation() {
-                let next = Snapshot {
-                    root: Transform::from_matrix(tick.root),
-                    bones: tick.bones.clone(),
-                    camera: tick.camera,
-                    fov: tick.fov,
-                };
-                history.advance(next, tick.generation, tick.cut, tick.period);
-            }
+            history.0.offer(&tick.pose, tick.shot, tick.period);
             for alpha in ALPHAS {
                 let (previous, current, alpha) = history.view(&replay, alpha).expect("a pair");
                 b.t(blend(previous.root, current.root, alpha));
-                let locals = crate::animation::blended_locals(&status.bindings, previous, current, alpha);
+                let locals = crate::model::joint_locals(&bindings, &previous.joints, &current.joints, basis, alpha);
                 b.n(locals.len());
                 locals.into_iter().for_each(|t| b.t(t));
             }
@@ -115,12 +104,13 @@ mod skate3 {
                 let s = g as f32;
                 let count = if g >= 9 { bones + 1 } else { bones };
                 Tick {
-                    generation: if g == 7 { 6 } else { g },
-                    root: matrix(s * 0.37 + 2.0) * Mat4::from_translation(Vec3::new(s * 0.1, 0.0, 0.0)),
-                    bones: (0..count).map(|i| matrix(s * 0.21 + i as f32 * 0.77)).collect(),
-                    camera: Transform::from_matrix(matrix(s + 9.0)),
-                    fov: 1.0 + s * 0.01,
-                    cut: g == 4,
+                    pose: Pose {
+                        generation: if g == 7 { 6 } else { g },
+                        discontinuity: g == 4,
+                        root: matrix(s * 0.37 + 2.0) * Mat4::from_translation(Vec3::new(s * 0.1, 0.0, 0.0)),
+                        joints: (0..count).map(|i| matrix(s * 0.21 + i as f32 * 0.77)).collect(),
+                    },
+                    shot: Shot { camera: Transform::from_matrix(matrix(s + 9.0)), fov: 1.0 + s * 0.01 },
                     period: Duration::from_micros(if g >= 6 { 33_333 } else { 16_667 }),
                 }
             })
@@ -153,25 +143,24 @@ mod skate3 {
             skate3_sim::SimConfig { difficulty: skate3_sim::difficulty::Difficulty::Easy, map: None, spawn_offset: 0.0 };
         let mut sim = skate3_sim::Sim::load(&bundle, &config, &mut |_| {}).expect("the sim");
         sim.load_camera(root).expect("its camera");
-        let names = sim.skater.animation.evaluator.frames.bone_names.clone();
-        let bindings = glb_bindings(&root.join("private/skater.glb"), &names);
+        let model = skate3_engine::model::model("private/skater.glb", &sim.skater);
+        let engine_core::ModelSource::Gltf { path, joint_names, .. } = &model.source else { panic!("a GLB") };
+        let bindings = glb_bindings(&root.join(path), joint_names);
         assert!(bindings.len() > 20, "{} bound", bindings.len());
         let mut ticks = Vec::new();
         for i in 0..150 {
             sim.tick(true).expect("a tick");
             let Some(frame) = sim.camera_frame().copied() else { continue };
-            let pose = sim.pose();
+            let mut pose = Pose::default();
+            skate3_engine::model::pose(&sim.skater, &frame, &mut pose);
             ticks.push(Tick {
-                generation: pose.generation,
-                root: pose.root,
-                bones: pose.bones.iter().copied().map(crate::animation::native_matrix).collect(),
-                camera: crate::presentation::camera_transform(frame),
-                fov: frame.field_of_view_degrees.to_radians(),
-                cut: frame.discontinuity || sim.skater.player_input.processed.flags_2472 & (1 << 10) != 0,
+                pose,
+                shot: Shot { camera: crate::presentation::camera_transform(frame), fov: frame.field_of_view_degrees.to_radians() },
                 period: if i == 100 { Duration::from_micros(1) } else { sim.period() },
             });
         }
-        let fallback: Vec<Mat4> = sim.skater.render_pose.iter().copied().map(crate::animation::native_matrix).collect();
+        let mut fallback = Vec::new();
+        skate3_engine::model::joints(&sim.skater, &mut fallback);
         let got = drawn(&ticks[ticks.len() - 60..], &bindings, &fallback);
         eprintln!("skate3 real: {got} ({} ticks, {} bindings)", ticks.len(), bindings.len());
         assert_eq!(got, RECORDED_SKATE3_REAL);
@@ -214,14 +203,15 @@ mod skate3 {
             }
             out
         };
-        crate::animation::bind_skins(names, skins.iter().map(Vec::as_slice), node, ancestors, |e| e == root)
+        crate::model::bind_skins(names, skins.iter().map(Vec::as_slice), node, ancestors, |e| e == root)
             .expect("bound")
             .into_iter()
-            .map(|b| (b.bone, b.parent_bone))
+            .map(|b| (b.joint, b.parent))
             .collect()
     }
 
-    /// Recorded at the step's start (the old path, its maths lifted out as functions unchanged).
+    /// Recorded at 8773c47 (the old path, its maths lifted out as functions unchanged), before the model and pose went
+    /// behind the contract.
     const RECORDED_SKATE3: &str = "38016 bytes 445d5099ea36739a";
     #[cfg(feature = "xr")]
     const RECORDED_SKATE3_REAL: &str = "522688 bytes 60d160ab6667a97f";
@@ -237,7 +227,9 @@ pub(crate) mod thug2 {
         let mut b = Bytes::default();
         for scale in [1.0, 2.5] {
             for (from, alpha) in [(now, 0.0), (before, 0.0), (before, 0.4), (before, 1.0)] {
-                let (root, joints) = crate::thug2::placed_joints(pose, scale, from, now, alpha, 64);
+                let mut contract = engine_core::Pose::default();
+                thug2_engine::model::pose(pose, scale, crate::thug2::shift(from, now, alpha), 0, &mut contract);
+                let (root, joints) = crate::model::flat_joints(&contract, 64);
                 b.m(root);
                 b.n(joints.len());
                 joints.into_iter().for_each(|m| b.m(m));
@@ -251,9 +243,11 @@ pub(crate) mod thug2 {
         use bevy::mesh::VertexAttributeValues as V;
         let mut b = Bytes::default();
         let mut assets = Assets::<Image>::default();
-        let images: Vec<Handle<Image>> = model.textures.iter().map(|_| assets.add(Image::default())).collect();
-        for part in &model.meshes {
-            let Some(mesh) = crate::thug2::part_mesh(part) else {
+        let model = thug2_engine::model::source(model);
+        let engine_core::ModelSource::Meshes { meshes, textures, .. } = &model.source else { panic!("meshes") };
+        let images: Vec<Handle<Image>> = textures.iter().map(|_| assets.add(Image::default())).collect();
+        for part in meshes {
+            let Some(mesh) = crate::model::mesh(part) else {
                 b.n(0);
                 continue;
             };
@@ -277,7 +271,7 @@ pub(crate) mod thug2 {
             let Some(bevy::mesh::Indices::U16(indices)) = mesh.indices() else { panic!("u16 indices") };
             b.n(indices.len());
             indices.iter().for_each(|&i| b.n(i as usize));
-            let m = crate::thug2::part_material(part, &images);
+            let m = crate::model::material(&part.material, &images);
             m.base_color.to_srgba().to_f32_array().into_iter().for_each(|x| b.f(x));
             b.n(m.base_color_texture.as_ref().and_then(|t| images.iter().position(|i| i == t)).map_or(usize::MAX, |i| i));
             match m.alpha_mode {
@@ -387,6 +381,7 @@ pub(crate) mod thug2 {
         assert_eq!(got, RECORDED_THUG2_REAL);
     }
 
+    /// Recorded at 8773c47, as Skate 3's.
     const RECORDED_THUG2: [&str; 2] = ["33344 bytes 9f9943545708ccca", "1028 bytes 5cf400bfb29176e8"];
     const RECORDED_THUG2_REAL: [&str; 2] = ["33344 bytes f6763fb9dcb1e942", "568712 bytes 88922c8caceb6a32"];
 }

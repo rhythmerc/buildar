@@ -1,35 +1,31 @@
-//! Render the same stock skeleton that animation and physics update.
-//! The GLB supplies the mesh, skin weights and hierarchy; it does not play a
-//! separate idle clip or own the skater's pose.
+//! Skate 3's skater drawn by the generic model layer ([`crate::model`]): its model (`skate3_engine::model::model`: the
+//! GLB bound to the sim's rig) and each tick's pose, blended between ticks ([`crate::presentation`]). The GLB supplies
+//! the mesh, skin weights and hierarchy; it does not play a separate idle clip or own the skater's pose.
+use crate::model::{self, JointBinding};
 use crate::{app::FrameSet, assets::AssetStatus, physics::SkaterRuntime, world::PlayerRoot};
 use bevy::{camera::visibility::NoFrustumCulling, mesh::skinning::SkinnedMesh, prelude::*};
+use engine_core::ModelSource;
+
+/// Skate 3's skater model, as its engine describes it.
+#[derive(Resource)]
+pub(crate) struct Skate3Model(pub engine_core::Model);
+
+impl Skate3Model {
+    /// Its GLB, its joints' names and their basis.
+    pub(crate) fn gltf(&self) -> (&str, &[String], Mat4) {
+        match &self.0.source {
+            ModelSource::Gltf { path, joint_names, basis } => (path, joint_names, *basis),
+            ModelSource::Meshes { .. } => unreachable!("Skate 3's skater is a GLB"),
+        }
+    }
+}
 
 #[derive(Resource, Default)]
 pub(crate) struct AnimationStatus {
     pub ready: bool,
-    pub(crate) bindings: Vec<BoneBinding>,
+    pub(crate) bindings: Vec<JointBinding>,
 }
-pub(crate) struct BoneBinding {
-    pub(crate) entity: Entity,
-    pub(crate) bone: usize,
-    pub(crate) parent_bone: Option<usize>,
-}
-impl AnimationStatus {
-    pub(crate) fn pose_transforms(&self, pose: &[Mat4]) -> Vec<(Entity, Transform)> {
-        self.bindings
-            .iter()
-            .filter_map(|b| {
-                let global = *pose.get(b.bone)? * render_basis();
-                let local = if let Some(parent) = b.parent_bone {
-                    (*pose.get(parent)? * render_basis()).inverse() * global
-                } else {
-                    global
-                };
-                Some((b.entity, Transform::from_matrix(local)))
-            })
-            .collect()
-    }
-}
+
 pub(crate) struct AnimationPlugin;
 impl Plugin for AnimationPlugin {
     fn build(&self, app: &mut App) {
@@ -57,9 +53,10 @@ fn disable_skater_culling(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn bind(
     status: Res<AssetStatus>,
-    skater: Res<SkaterRuntime>,
+    skater: Res<Skate3Model>,
     mut animation: ResMut<AnimationStatus>,
     skins: Query<(Entity, &SkinnedMesh)>,
     nodes: Query<(&Name, &Transform)>,
@@ -71,7 +68,8 @@ fn bind(
     if *status != AssetStatus::Ready || animation.ready {
         return;
     }
-    let names = &skater.animation.evaluator.frames.bone_names;
+    let (_, names, _) = skater.gltf();
+    // (each visible modular rig, keeping its authored inverse binds)
     let skins = skins.iter().filter_map(|(entity, skin)| {
         if !parents.iter_ancestors(entity).any(|e| roots.contains(e)) {
             return None;
@@ -84,139 +82,60 @@ fn bind(
         }
         Some(skin.joints.as_slice())
     });
-    let result = bind_skins(
+    let result = model::bind_skins(
         names,
         skins,
         |e| nodes.get(e).ok().map(|(name, transform)| (name.as_str().to_owned(), transform.to_matrix())),
         |e| parents.iter_ancestors(e).collect(),
         |e| roots.contains(e),
-    )
-    .map(|bindings| if bindings.is_empty() { None } else { Some(bindings) });
+    );
     match result {
-        Ok(Some(binding)) => {
-            animation.bindings = binding;
+        Ok(bindings) if bindings.is_empty() => (),
+        Ok(bindings) => {
+            animation.bindings = bindings;
             animation.ready = true;
             info!(
                 "GAME_CHARACTER_READY bones={} source=physical_stock_pose",
                 animation.bindings.len()
             );
         }
-        Ok(None) => (),
         Err(message) => {
-            error!("{message}");
+            error!("Skate 3's skater: {message}");
             exit.write(AppExit::error());
         }
     }
 }
-/// Each visible skin's joints bound to the stock rig's bones by name (`names`), with the nearest named ancestor as
-/// the parent bone. `node`: a node's name and local matrix; `ancestors`: a node's ancestors, nearest first;
-/// `is_root`: the model's root (the search stops there).
-pub(crate) fn bind_skins<'a>(
-    names: &[String],
-    skins: impl IntoIterator<Item = &'a [Entity]>,
-    node: impl Fn(Entity) -> Option<(String, Mat4)>,
-    ancestors: impl Fn(Entity) -> Vec<Entity>,
-    is_root: impl Fn(Entity) -> bool,
-) -> Result<Vec<BoneBinding>, String> {
-    let mut bindings = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for skin in skins {
-        let mut binding = Vec::with_capacity(skin.len());
-        for &joint in skin {
-            if !seen.insert(joint) {
-                continue;
-            }
-            let (name, _) = node(joint).ok_or("Skater skin joint is missing its name or transform")?;
-            let bone = names
-                .iter()
-                .position(|n| n.eq_ignore_ascii_case(name.as_str()))
-                .ok_or_else(|| format!("Skater skin bone {name} is absent from the stock rig"))?;
-            let mut parent_bone = None;
-            for parent in ancestors(joint) {
-                if is_root(parent) {
-                    break;
-                }
-                if let Some((name, transform)) = node(parent) {
-                    if let Some(index) = names.iter().position(|n| n.eq_ignore_ascii_case(name.as_str())) {
-                        parent_bone = Some(index);
-                        break;
-                    }
-                    // The supplied GLB's armature node is identity. Reject
-                    // another import convention rather than double a pose.
-                    if !transform.abs_diff_eq(Mat4::IDENTITY, 0.00001) {
-                        return Err(format!("Skater armature ancestor {name} has an unsupported transform"));
-                    }
-                }
-            }
-            binding.push(BoneBinding { entity: joint, bone, parent_bone });
-        }
-        // Bind each visible modular rig, retaining its authored inverse binds.
-        bindings.extend(binding);
-    }
-    Ok(bindings)
-}
 
-/// Each binding's bone-local transform between two snapshots: bone-local rotations blended, not matrix entries or
-/// independent world positions, so joints retain their hierarchy while limbs turn.
-pub(crate) fn blended_locals(
-    bindings: &[BoneBinding],
-    previous: &crate::presentation::Snapshot,
-    current: &crate::presentation::Snapshot,
-    alpha: f32,
-) -> Vec<Transform> {
-    let basis = render_basis();
-    bindings
-        .iter()
-        .map(|binding| {
-            let local = |snapshot: &crate::presentation::Snapshot| {
-                let global = snapshot.bones[binding.bone] * basis;
-                Transform::from_matrix(if let Some(parent) = binding.parent_bone {
-                    (snapshot.bones[parent] * basis).inverse() * global
-                } else {
-                    global
-                })
-            };
-            crate::presentation::blend(local(previous), local(current), alpha)
-        })
-        .collect()
-}
-
+#[allow(clippy::too_many_arguments)]
 fn present(
     history: Res<crate::presentation::Presentation>,
     skater: Res<SkaterRuntime>,
+    model: Res<Skate3Model>,
     replay: Res<crate::replay::Replay>,
     time: Res<Time<Fixed>>,
     hold: Res<crate::app::Hold>,
     animation: Res<AnimationStatus>,
     mut nodes: Query<&mut Transform>,
+    mut live: Local<Vec<Mat4>>,
 ) {
     if !animation.ready {
         return;
     }
+    let (_, _, basis) = model.gltf();
     let Some((previous, current, alpha)) = history.view(&replay, hold.alpha(&time)) else {
-        let pose: Vec<_> = skater
-            .render_pose
-            .iter()
-            .copied()
-            .map(native_matrix)
-            .collect();
-        for (entity, transform) in animation.pose_transforms(&pose) {
+        // (no tick taken yet: the sim's pose as it is)
+        skate3_engine::model::joints(&skater, &mut live);
+        for (entity, transform) in model::joint_transforms(&animation.bindings, &live, basis) {
             if let Ok(mut node) = nodes.get_mut(entity) {
                 *node = transform;
             }
         }
         return;
     };
-    for (binding, transform) in animation.bindings.iter().zip(blended_locals(&animation.bindings, previous, current, alpha)) {
+    let locals = model::joint_locals(&animation.bindings, &previous.joints, &current.joints, basis, alpha);
+    for (binding, transform) in animation.bindings.iter().zip(locals) {
         if let Ok(mut node) = nodes.get_mut(binding.entity) {
             *node = transform;
         }
     }
 }
-/// Existing GLB was exported through Blender: its bone-local axes are
-/// rotated -90 degrees about X relative to the native frames. Both files'
-/// world positions are Y-up. This is a skin basis change, not a physics turn.
-pub(crate) fn render_basis() -> Mat4 {
-    Mat4::from_cols(Vec4::X, -Vec4::Z, Vec4::Y, Vec4::W)
-}
-pub(crate) use skate3_sim::animation::native_matrix;

@@ -55,6 +55,8 @@ mod engines;
 mod engine_hud;
 #[cfg(feature = "thug2")]
 mod thug2;
+#[cfg(any(feature = "retail", feature = "thug2"))]
+mod model;
 #[cfg(test)]
 mod model_parity;
 

@@ -3,9 +3,8 @@ use super::*;
 fn pose(x: f32) -> Snapshot {
     Snapshot {
         root: Transform::from_xyz(x, 0., 0.),
-        bones: vec![Mat4::from_translation(Vec3::X * x)],
-        camera: Transform::from_xyz(x, 2., 3.),
-        fov: 1.0,
+        joints: vec![Mat4::from_translation(Vec3::X * x)],
+        extra: crate::presentation::Shot { camera: Transform::from_xyz(x, 2., 3.), fov: 1.0 },
     }
 }
 
@@ -43,7 +42,7 @@ fn scrubbing_interpolates_shared_pose_and_camera_without_recording() {
     let (a, b, alpha) = replay.sample().unwrap();
     assert_eq!(alpha, 0.5);
     assert_eq!(blend(a.root, b.root, alpha).translation.x, 0.5);
-    assert_eq!(blend(a.camera, b.camera, alpha).translation.x, 0.5);
+    assert_eq!(blend(a.extra.camera, b.extra.camera, alpha).translation.x, 0.5);
     replay.toggle_camera();
     let free = replay.free_camera.unwrap();
     replay.seek(0.1);

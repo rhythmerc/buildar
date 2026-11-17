@@ -156,7 +156,7 @@ pub(crate) fn build(
         })
         .insert_resource(crate::skate_audio::player::PlayerAudioAssets(config.asset_root.clone()))
         .insert_resource(config)
-        .insert_resource(assets::AssetManifest(manifest))
+        .insert_resource(animation::Skate3Model(skate3_engine::model::model(&manifest.character_scene, &skater)))
         .insert_resource(graphs)
         .insert_resource(physics)
         .insert_resource(skater);
