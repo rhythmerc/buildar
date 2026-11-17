@@ -32,7 +32,12 @@ pub mod settings {
 /// `assets` folder). `own_sound`: its own sound graph (the decoded sound banks are there), else the skating sounds the
 /// runtime carries.
 pub fn factory(assets: PathBuf, difficulty: Difficulty, own_sound: bool) -> EngineFactory {
-    Box::new(move || {
+    Box::new(move || Ok(Box::new(load(assets, difficulty, own_sound)?) as Box<dyn EngineCore>))
+}
+
+/// [`factory`]'s work: the sim and the rest loaded.
+fn load(assets: PathBuf, difficulty: Difficulty, own_sound: bool) -> Result<Skate3, String> {
+    {
         let started = std::time::Instant::now();
         let mut stage = |name: &str| eprintln!("REPORT_META stage={name}");
         let bundle = skate3_sim::Bundle::open(&assets, &mut stage)?;
@@ -59,8 +64,8 @@ pub fn factory(assets: PathBuf, difficulty: Difficulty, own_sound: bool) -> Engi
             Sound::Carried(Heard::default())
         };
         eprintln!("Skate 3 ready in {:.0} ms", started.elapsed().as_secs_f32() * 1000.0);
-        Ok(Box::new(Skate3::new(sim, model, hud, sound)) as Box<dyn EngineCore>)
-    })
+        Ok(Skate3::new(sim, model, hud, sound))
+    }
 }
 
 enum Sound {
@@ -254,6 +259,52 @@ impl SkateMode for Skate3 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The real game (`SKATE3_ASSET_ROOT`; skipped without it) skated through a line - pushed, an ollie, rolled on
+    /// until the line ends - its trick display drawn as the engine has it (the circle always shown, by default) and,
+    /// fed the same scoring, as retail has it: retail's circle comes and goes, the engine's is drawn throughout.
+    #[test]
+    fn the_circle_stays_shown_through_a_line() {
+        let Some(assets) = std::env::var_os("SKATE3_ASSET_ROOT").map(PathBuf::from) else {
+            eprintln!("SKATE3_ASSET_ROOT not set: skipped");
+            return;
+        };
+        let mut engine = load(assets.clone(), Difficulty::Easy, false).expect("Skate 3");
+        let mut retail = hud::Hud::load(&hud::root(&assets), engine.sim.skater.scoring.hud_input()).expect("its HUD");
+        let (mut ours, mut theirs) = (Vec::new(), Vec::new());
+        for t in 0..900u32 {
+            let touch = TouchState {
+                x: matches!(t, 20..=24 | 40..=44 | 60..=64),
+                right_stick: match t {
+                    120..=125 => [0.0, -1.0],
+                    126..=128 => [0.0, 1.0],
+                    _ => [0.0, 0.0],
+                },
+                ..Default::default()
+            };
+            engine.set_input(&touch, PadHeld::default());
+            engine.step().expect("a tick");
+            let scoring = &engine.sim.skater.scoring;
+            retail.advance(scoring.hud_input(), scoring.new_trick, scoring.modified_trick, scoring.close_tricks).expect("retail's");
+            ours.push(engine.hud.as_mut().expect("its HUD").circle_alpha());
+            theirs.push(retail.circle_alpha());
+        }
+        let shown = |a: &[f32]| a.iter().filter(|&&x| x > 0.9).count();
+        let hidden = |a: &[f32]| a.iter().filter(|&&x| x < 0.05).count();
+        eprintln!(
+            "retail's circle: shown {} hidden {} of {}; ours: shown {} hidden {}",
+            shown(&theirs),
+            hidden(&theirs),
+            theirs.len(),
+            shown(&ours),
+            hidden(&ours)
+        );
+        eprintln!("retail's alpha every 30 ticks: {:?}", theirs.iter().step_by(30).collect::<Vec<_>>());
+        assert!(shown(&theirs) > 0 && hidden(&theirs) > 0, "retail's comes and goes");
+        assert_eq!(hidden(&ours), 0, "ours is always drawn: {:?}", ours.iter().step_by(30).collect::<Vec<_>>());
+    }
+
     #[test]
     fn it_moves_to_the_runtimes_worker() {
         fn send<T: Send>() {}

@@ -110,6 +110,83 @@ impl Hud {
         }
     }
 
+    /// The movie drawn. Retail hides its whole screen once a line has ended and the display is idle; with the circle
+    /// always shown, the circle is drawn then on its own (the screen shown and its other parts hidden for the draw, and
+    /// put back after).
+    fn draws(&mut self) -> Result<Vec<apt_scene::Draw>, String> {
+        use skate3_sim::apt_vm::Value;
+        let root = self.runtime.bindings.movie.root;
+        let alone = match &self.circle {
+            Some(circle) if self.circle_always && !self.runtime.vm.get(root, "_visible").truth() => self.circle_top(circle.character),
+            _ => None,
+        };
+        let Some(top) = alone else {
+            return apt_scene::draw(&self.runtime.bindings.movie, &self.runtime.vm, &self.shapes);
+        };
+        let others: Vec<(usize, bool)> = self.runtime.bindings.movie.instances[&root]
+            .children
+            .values()
+            .filter(|&&c| c != top)
+            .map(|&c| (c, self.runtime.vm.get(c, "_visible").truth()))
+            .collect();
+        let vm = &mut self.runtime.vm;
+        vm.set(root, "_visible", Value::Bool(true))?;
+        for (c, _) in &others {
+            vm.set(*c, "_visible", Value::Bool(false))?;
+        }
+        let draws = apt_scene::draw(&self.runtime.bindings.movie, &self.runtime.vm, &self.shapes);
+        let vm = &mut self.runtime.vm;
+        for (c, visible) in others {
+            vm.set(c, "_visible", Value::Bool(visible))?;
+        }
+        vm.set(root, "_visible", Value::Bool(false))?;
+        draws
+    }
+
+    /// The root's child the circle is under (or is).
+    fn circle_top(&self, character: i32) -> Option<usize> {
+        let movie = &self.runtime.bindings.movie;
+        let mut at = movie.instances.iter().find(|(_, i)| i.character == character).map(|(id, _)| *id)?;
+        loop {
+            let parent = movie.instances.iter().find(|(_, i)| i.children.values().any(|c| *c == at)).map(|(p, _)| *p)?;
+            if parent == movie.root {
+                return Some(at);
+            }
+            at = parent;
+        }
+    }
+
+    /// How opaque the circle is drawn (its draws' alpha, composed through every clip above it: 0 when it isn't drawn).
+    #[cfg(test)]
+    pub(crate) fn circle_alpha(&mut self) -> f32 {
+        use std::collections::BTreeSet;
+        let Some(circle) = &self.circle else { return 0.0 };
+        let movie = &self.runtime.bindings.movie;
+        // (its clip and every character placed under it, and the textures only their shapes use)
+        let mut under = BTreeSet::new();
+        let mut todo = vec![circle.character];
+        while let Some(id) = todo.pop() {
+            if !under.insert(id) {
+                continue;
+            }
+            for control in movie.characters.get(&id).into_iter().flat_map(|c| c.frames.iter().flat_map(|f| f.controls.iter())) {
+                todo.extend(control.character_id.filter(|&c| c >= 0));
+            }
+        }
+        let textures = |inside: bool| -> BTreeSet<String> {
+            self.shapes
+                .iter()
+                .filter(|(id, _)| under.contains(*id) == inside)
+                .flat_map(|(_, shapes)| shapes.iter().map(|s| s.texture.rgba.clone()))
+                .collect()
+        };
+        let others = textures(false);
+        let own: BTreeSet<String> = textures(true).difference(&others).cloned().collect();
+        assert!(!own.is_empty(), "the circle has textures of its own");
+        let draws = self.draws().expect("drawn");
+        draws.iter().filter(|d| own.contains(&d.texture)).map(|d| d.multiply[3]).fold(0.0, f32::max)
+    }
+
     /// The circle's parts at their shown colours, where its timeline has put them (each frame sets them again).
     fn hold_circle(&mut self) {
         let (Some(circle), true) = (&self.circle, self.circle_always) else { return };
@@ -151,7 +228,7 @@ impl Hud {
         if self.failed {
             return Ok(true);
         }
-        let draws = match apt_scene::draw(&self.runtime.bindings.movie, &self.runtime.vm, &self.shapes) {
+        let draws = match self.draws() {
             Ok(draws) => draws,
             Err(error) => {
                 self.failed = true;

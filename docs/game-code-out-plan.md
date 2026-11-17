@@ -576,8 +576,13 @@ nothing loads before the app.
   it is made, and as they change).
 - **Skate 3's option** (the user, 2026-11-17): the trick display's multiplier circle (`multiplier_mc`, its timer and
   background) always shown, on by default (`skate3.json`, the "Skate 3: HUD" page). Retail fades it out when a line
-  ends (`clear`, `clearlong`); held, its parts keep their first frame's colours after every advance of the movie,
-  its timer and values still running (`skate3_engine::hud::Hud::set_circle_always`).
+  ends (`clear`, `clearlong`) and, once the display is idle, hides its whole screen; held, the circle's parts keep
+  their first frame's colours after every advance of the movie (its timer and values still running), and while the
+  screen is hidden the circle is drawn on its own (the screen shown and its other parts hidden for that draw)
+  (`skate3_engine::hud::Hud::set_circle_always`). Checked on the real game through a line and its end: retail's
+  circle drawn 758 ticks of 900 and gone 133, the held one drawn at full all 900.
+- **Starting:** an engine is made on a thread with a 64 MB stack (the old Skate 3 loader's); Skate 3's crash marker
+  (`skate3-starting`) is read at launch as THUG2's is (the app opens on another engine and says so).
 - **One host builder** (`clean::build`): Skate 3 is carried when the player's data is there (`skate3::assets`: the
   headset's `files/assets`, or `--assets`/`SKATE3_ASSET_ROOT`, with `private/game.json`), its data registered as the
   `skate3` asset source before the plugins (in place of the Android default-source override), the room's floor at its

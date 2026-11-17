@@ -32,6 +32,8 @@ use std::time::Duration;
 
 /// Steps a frame at most: behind more than that, the engine's clock lets the time go.
 const MAX_STEPS_PER_FRAME: u32 = 4;
+/// The stack an engine is made on (the old Skate 3 loader's).
+const BOOT_STACK: usize = 64 << 20;
 /// A frame longer than this (a hitch) counts as this long.
 const MAX_FRAME_S: f32 = 0.1;
 
@@ -225,7 +227,8 @@ fn boot<M: Hosted>(mut driver: ResMut<Driver<M>>) {
     if let Some(marker) = &marker {
         let _ = std::fs::write(marker, b"");
     }
-    let worker = std::thread::Builder::new().name(format!("{name}-boot").to_lowercase()).spawn(move || {
+    // (loading a game's files can recurse deep: Skate 3's sim needs more than a thread's default stack)
+    let worker = std::thread::Builder::new().name(format!("{name}-boot").to_lowercase()).stack_size(BOOT_STACK).spawn(move || {
         let made = factory();
         // (made or not, it didn't crash the app)
         if let Some(marker) = marker {

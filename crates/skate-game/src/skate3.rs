@@ -33,7 +33,8 @@ pub(crate) fn assets(files: &Path) -> Option<PathBuf> {
         }
     }
     let root = given.unwrap_or_else(|| if cfg!(target_os = "android") { files.join("assets") } else { PathBuf::from("assets") });
-    root.join("private/game.json").is_file().then_some(root)
+    // (absolute: an asset source's reader resolves a relative folder against Bevy's base path, not this one)
+    root.join("private/game.json").is_file().then(|| std::path::absolute(&root).unwrap_or(root))
 }
 
 /// Its data as an asset source (its GLB loads from it), before the app's plugins.
@@ -71,6 +72,12 @@ pub(crate) fn install(app: &mut App, files: &Path, assets: PathBuf) {
     info!("Skate 3 carried: {} ({}, {})", assets.display(), difficulty.key(), if own { "its own sound" } else { "the clean sounds" });
     let factory = skate3_engine::engine::factory(assets, difficulty, own);
     let _ = std::fs::create_dir_all(files);
+    // (Skate 3 stopped the app while it started last time: the app opens on another engine, and says so)
+    let crashed = files.join(STARTING).exists();
+    if crashed {
+        warn!("Skate 3 stopped the app while it started last time: opening on another engine");
+        let _ = std::fs::remove_file(files.join(STARTING));
+    }
     app.insert_resource(Settings::load(&files.join(SETTINGS_FILE)))
         .insert_resource(SettingsFile(files.join(SETTINGS_FILE)));
     app.world_mut().resource_mut::<crate::xr::ui::UiProviders>().0.push(std::sync::Arc::new(Skate3Pages));
@@ -83,6 +90,14 @@ pub(crate) fn install(app: &mut App, files: &Path, assets: PathBuf) {
         crate::engine_driver::install::<Skate3>(app, factory, Some(files.join(STARTING)), Some(ASSETS));
         app.add_systems(Startup, light).add_systems(Update, tune.in_set(engines::EngineSet(Engine::Skate3)));
     });
+    if crashed {
+        app.world_mut().resource_mut::<engines::Engines>().not_at_launch(Engine::Skate3);
+        app.add_systems(Update, |mut ui: ResMut<crate::xr::ui::XrUi>, mut said: Local<bool>| {
+            if !std::mem::replace(&mut *said, true) {
+                ui.say("Skate 3 crashed while starting last time: check its data (docs/IMPORT-SKATE3.md)");
+            }
+        });
+    }
 }
 
 /// Made while Skate 3 starts, gone once it has.
