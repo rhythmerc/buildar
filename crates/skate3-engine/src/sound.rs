@@ -282,6 +282,41 @@ mod tests {
         assert!(feed.next(false, block).is_err());
     }
 
+    /// The real graph (`SKATE3_ASSET_ROOT`: the prepared data's `assets`, and `LOCALAPPDATA` holding its decoded banks,
+    /// `Skate3RustEngine/audio-pcm-cache`; skipped without them): made by the
+    /// factory, fed ticks through the feed (a landing among them), held, and rendered a second's blocks, each a full
+    /// block of finite stereo. (Silent: these ticks lack the sim's physical state retail's graph sounds from.)
+    #[test]
+    fn the_real_graph_renders_from_its_feed() {
+        let Some(assets) = std::env::var_os("SKATE3_ASSET_ROOT").filter(|_| banks_decoded()) else {
+            eprintln!("SKATE3_ASSET_ROOT not set, or no decoded banks under LOCALAPPDATA: skipped");
+            return;
+        };
+        let (mut feed, factory) = stream(assets.into());
+        let mut stream = factory().expect("the graph");
+        assert_eq!((stream.channels(), stream.rate()), (OUTPUT_CHANNELS, SAMPLE_RATE));
+        let frames = (stream.block().as_secs_f64() * f64::from(SAMPLE_RATE)).round() as usize;
+        let (mut blocks, mut loud) = (0, 0.0f32);
+        for n in 0..300u64 {
+            if n % 3 == 0 && n < 240 {
+                let mut o = tick(n / 3);
+                if n == 90 {
+                    o.landed = true;
+                    o.landing_impact_speed = -3.0;
+                    o.events.push(PhysicsEvent::Landing);
+                }
+                feed.observe(&o);
+            }
+            let block = stream.render(n >= 240).expect("a block");
+            assert_eq!(block.len(), frames * usize::from(OUTPUT_CHANNELS));
+            assert!(block.iter().all(|v| v.is_finite()));
+            loud = block.iter().fold(loud, |m, v| m.max(v.abs()));
+            blocks += 1;
+        }
+        assert_eq!(feed.dropped(), 0);
+        eprintln!("skate3 graph: {blocks} blocks of {frames} frames, peak {loud}");
+    }
+
     #[test]
     fn flips_are_recognised() {
         assert!(is_flip("Kickflip"));

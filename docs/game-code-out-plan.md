@@ -513,7 +513,9 @@ which engine it is.
   before (c45e939) and through the new path. Skate 3's differs in one frame (the first, before any tick: silent loops'
   pitch); SK8's in one thing on purpose: a flip into a grind no longer plays its catch on the rail (a catch is heard
   only in the air, as Skate 3's always was). Skate 3's stream feed is tested on its own (order, the held repeats, the
-  front-end sounds once); THUG2's voices through the real engine (`thug2::tests::skates_the_room_and_switches_away_and_back`).
+  front-end sounds once), and the real graph made by the factory and rendered from the feed (`SKATE3_ASSET_ROOT` with
+  the decoded banks under `LOCALAPPDATA`; silent, as the test's ticks lack the sim's physical state: that it is heard is
+  the listening pass's); THUG2's voices through the real engine (`thug2::tests::skates_the_room_and_switches_away_and_back`).
 - **Owed:** a listening pass on the headset: Skate 3 (its own sound, and `SKATE_AUDIO=clean`), THUG2 and SK8, each
   also held in a menu and switched away from and back to.
 
