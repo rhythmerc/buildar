@@ -18,11 +18,13 @@ pub const WALL_UP: f32 = 0.26;
 pub const RAMP_UP: f32 = 0.95;
 pub const VERT_UP: f32 = 0.707;
 /// How far each side of a wall is put out from its plane, game units (inches, at any world size): a wall is a slab
-/// an inch thick, not two faces in one plane. A wall plant puts the skater off the wall with a feeler from the hit
-/// out along its normal, and when that feeler hits something the skater goes 0.1 inch off that instead, along *its*
-/// normal. A back face in the same plane is hit at once (whenever the hit rounds onto or behind the plane), and its
-/// normal points through the wall: the skater was put behind the wall and rode up the back of it (tests/wallplant.rs).
-pub const WALL_SKIN: f32 = 0.5;
+/// a quarter inch thick, not two faces in one plane. A wall plant puts the skater off the wall with a feeler from the
+/// hit out along its normal, and when that feeler hits something the skater goes 0.1 inch off that instead, along
+/// *its* normal. A back face in the same plane is hit at once (whenever the hit rounds onto or behind the plane), and
+/// its normal points through the wall: the skater was put behind the wall and rode up the back of it
+/// (tests/wallplant.rs). Kept small, well over the float spacing out at OFFSET (1/256 inch): each side stands that
+/// far proud of its plane, so a box's sides no longer quite meet at its edges.
+pub const WALL_SKIN: f32 = 0.125;
 /// Where the deck is above the skater's feet, metres (at its own size).
 pub const DECK_HEIGHT: f32 = 0.08;
 /// Where the skater's sounds come from: its board, a little up from its feet (metres at its own size).
