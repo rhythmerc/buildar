@@ -524,11 +524,15 @@ steps the same way, so THUG2 (60 Hz on a 72-90 Hz headset) no longer judders.
   of the deck for `Focus::feet` as the point re-placed (an engine's placement puts its deck or spawn point there, not
   its rider's feet).
 - **THUG2: hitting a wall fast enters it.** At speed the skater can go into a wall and skate along its plane; seen
-  on the build with the wall slab (`thug2_engine::stage::WALL_SKIN`, cb8a75d). On a flat wall in the real engine
-  (`thug2-engine/tests/wallplant.rs`, 3fd5397) it predates the slab and the slab fixes it: straight-on jumps planted
-  by accident (the ollie's press counts as the plant's) and hit the plant-placement bug; rolling and glancing hits
-  never went in. Still seen with the slab, so the next suspects are what that test doesn't cover: room-mesh
-  triangles and placed pieces' sides.
+  on the build with the wall slab (`thug2_engine::stage::WALL_SKIN`, cb8a75d, since removed). On a flat wall in the
+  real engine (`thug2-engine/tests/wallplant.rs`) straight-on jumps planted by accident (the ollie's press counts as
+  the plant's) and hit the plant-placement bug: the feeler that places the skater off the wall hit the wall's own
+  back face (the two sides go in one plane) and put it behind the wall. Rolling and glancing hits never went in. The
+  slab worked around it at the cost of hairline gaps at box edges and room-mesh creases; it is now fixed in the
+  engine instead (thug2-decomp `wall_plant`, a NOT ORIGINAL guard: that back face is passed over), the walls are one
+  plane again, and the test, now also at walls turned all ways and far out, has no plant or hit behind a wall. The
+  headset report came with the slab in, so it may be something else: the next suspects are what that test doesn't
+  cover, room-mesh triangles and placed pieces' sides.
 
 ## Later: several models from one engine (2026-11-17)
 

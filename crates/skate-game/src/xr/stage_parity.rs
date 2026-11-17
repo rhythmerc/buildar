@@ -158,11 +158,11 @@ fn each_engine_is_given_exactly_what_it_was() {
 }
 
 /// Recorded at 5dc9513 (f37f837 with the engines' inputs taken out as pure functions, no behaviour change), before
-/// the split. THUG2's re-recorded at cb8a75d: its upright faces a thin slab (`thug2_engine::stage::WALL_SKIN`), so a
-/// wall plant can't put the skater behind a wall. THUG2's world size 2.5 column dropped with the world size
-/// (2026-11-17); its size-1 digests are the ones recorded with it.
+/// the split. THUG2's world size 2.5 column dropped with the world size (2026-11-17); its size-1 digests are the ones
+/// recorded with it. (THUG2's were re-recorded at cb8a75d for a wall slab, and restored when thug2-decomp's wall plant
+/// took over that fix.)
 const RECORDED: [[&str; 3]; 3] = [
-    ["404 bytes e94bef4d55aae7e3", "480 bytes 81d2d88f3a6315c7", "440 bytes d31134ab8c18d474"],
-    ["74592 bytes 5748a3e11b86bc44", "148204 bytes d7d963805da12db0", "114444 bytes 52f682f160123635"],
-    ["74592 bytes d6dfe23a7269df61", "148204 bytes f2af15ec9ea92d67", "114444 bytes 0a010c6448a0c1b1"],
+    ["404 bytes e94bef4d55aae7e3", "480 bytes 58cb0e708af05d9f", "440 bytes d31134ab8c18d474"],
+    ["74592 bytes 5748a3e11b86bc44", "148204 bytes 9706442ac69c044b", "114444 bytes 52f682f160123635"],
+    ["74592 bytes d6dfe23a7269df61", "148204 bytes 2f4c6c867e7255be", "114444 bytes 0a010c6448a0c1b1"],
 ];

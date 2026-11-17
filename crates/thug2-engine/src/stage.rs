@@ -18,14 +18,6 @@ pub const OFFSET: Vec3 = Vec3::new(50_000.0, 0.0, 50_000.0);
 pub const WALL_UP: f32 = 0.26;
 pub const RAMP_UP: f32 = 0.95;
 pub const VERT_UP: f32 = 0.707;
-/// How far each side of a wall is put out from its plane, game units (inches): a wall is a slab
-/// a quarter inch thick, not two faces in one plane. A wall plant puts the skater off the wall with a feeler from the
-/// hit out along its normal, and when that feeler hits something the skater goes 0.1 inch off that instead, along
-/// *its* normal. A back face in the same plane is hit at once (whenever the hit rounds onto or behind the plane), and
-/// its normal points through the wall: the skater was put behind the wall and rode up the back of it
-/// (tests/wallplant.rs). Kept small, well over the float spacing out at OFFSET (1/256 inch): each side stands that
-/// far proud of its plane, so a box's sides no longer quite meet at its edges.
-pub const WALL_SKIN: f32 = 0.125;
 /// Where the deck is above the skater's feet, metres.
 pub const DECK_HEIGHT: f32 = 0.08;
 /// Where the skater's sounds come from: its board, a little up from its feet, metres.
@@ -72,8 +64,8 @@ pub fn rails(park: &SkatePark) -> Vec<Vec<[f32; 3]>> {
 /// - ground (level to a steep ramp): facing up, skatable;
 /// - a piece's transition steeper than 45° above a ramp (a quarter pipe's top half): vert, facing the ramp, so the
 ///   skater goes straight up and comes back down into it - or transfers to a vert face behind the coping (a spine);
-/// - any other upright face (room walls, furniture and box sides): both ways, wallridable, the two sides a slab
-///   [`WALL_SKIN`] either side of it.
+/// - any other upright face (room walls, furniture and box sides): both ways, wallridable. (The two sides are in one
+///   plane: thug2-decomp's wall plant passes over the back one when it places the skater off the wall.)
 pub fn triangles(stage: &Stage, park: &SkatePark) -> Vec<t2::Triangle> {
     let mut out = Vec::new();
     for t in stage.room() {
@@ -105,14 +97,8 @@ fn face(out: &mut Vec<t2::Triangle>, t: [Vec3; 3], vert: Option<Vec3>) {
         // (ground, or a slope or overhang turned to face up)
         out.push(game(if n.y > 0.0 { t } else { flipped }, SKATABLE));
     } else {
-        // Each side WALL_SKIN out along its own normal: a slab, not two faces in one plane (see WALL_SKIN).
-        let out_by = |t: [Vec3; 3], n: Vec3, flags: u16| {
-            let mut g = game(t, flags);
-            g.v = g.v.map(|p| (Vec3::from_array(p) + n * WALL_SKIN).to_array());
-            g
-        };
-        out.push(out_by(t, n, SKATABLE | WALL));
-        out.push(out_by(flipped, -n, SKATABLE | WALL));
+        out.push(game(t, SKATABLE | WALL));
+        out.push(game(flipped, SKATABLE | WALL));
     }
 }
 
@@ -263,24 +249,6 @@ mod tests {
         face(&mut out, [Vec3::ZERO, Vec3::Y, Vec3::X], None);
         assert_eq!(out.len(), 3, "a wall is two faces");
         assert_eq!(out[1].flags, t2::face::SKATABLE | t2::face::WALL);
-    }
-
-    /// A wall's two sides are apart, each out along its own normal by the skin (in the game's units): a feeler from
-    /// one side's face out along its normal never meets the other side.
-    #[test]
-    fn a_walls_sides_are_a_slab_not_one_plane() {
-        let mut out = Vec::new();
-        let t = [Vec3::ZERO, Vec3::Y, Vec3::X]; // facing -z
-        face(&mut out, t, None);
-        let plane = to_game(Vec3::ZERO)[2];
-        let (front, back) = (&out[0], &out[1]);
-        assert!(front.v.iter().all(|v| (v[2] - (plane - WALL_SKIN)).abs() < 1e-3), "{front:?} at {plane}");
-        assert!(back.v.iter().all(|v| (v[2] - (plane + WALL_SKIN)).abs() < 1e-3), "{back:?} at {plane}");
-        let n = |t: &t2::Triangle| {
-            let v = t.v.map(Vec3::from_array);
-            normal([v[0], v[1], v[2]])
-        };
-        assert!(n(front).z < -0.99 && n(back).z > 0.99, "each faces away from the other");
     }
 
     #[test]
