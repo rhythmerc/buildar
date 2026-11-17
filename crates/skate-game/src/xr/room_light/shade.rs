@@ -10,12 +10,29 @@ use bevy::math::{Quat, UVec3, Vec3};
 use roomtone_sys::{Light, Lighting};
 use std::f32::consts::PI;
 
-/// A white surface lit by 1 (Roomtone's units, at level 1) is shown this
-/// bright (0-1, display): Roomtone's own reference, tuned on a Quest 3
-/// against the passthrough image beside it.
-const REFERENCE_WHITE: f32 = 0.7;
-/// Display to linear.
-const GAMMA: f32 = 2.2;
+/// A white surface lit by the reference's mean is shown this bright per
+/// unit of `level` (linear, what reaches tonemapping).
+///
+/// The level is linear in the light: Roomtone's `kMedian` (12.5) times the
+/// room's median brightness in the camera's linear pixels, clamped to
+/// 0.15-1.6. Roomtone's callers' 0.7 is a display value, tuned in Xelee,
+/// whose renderer lights in display space; taken here as display and
+/// turned linear, `(0.7 * level)^2.2`, a white surface lit by the mean asked
+/// for 1.28 (over white) at 1.6, the level every lit room sits at (the
+/// median pixel is about 0.17 once auto exposure has settled), and content
+/// went with the room's brightness to the power 2.2 where passthrough goes
+/// with it to the power 1: the slope is the units', linear.
+///
+/// The constant is what the camera itself reads: a white surface lit by the
+/// mean, in the frames' own pixels (the reference's light from above times
+/// their exposure, times the mean), per unit of level, was 0.19, 0.20 and
+/// 0.22 in the headset's three recordings of 2026-11-17 (level 1.6 in all).
+/// There the old curve showed it 3.6-4.3 times as bright; the user found
+/// strength 0.5 nearer than 1, and on the screenshot the pool's white coping
+/// was 2-3 times as bright (linear) as a white tissue on the floor beside it
+/// at 0.5. Now by day a quarter of the old brightness; below a level of 0.5
+/// (a dark room) brighter than before (twice at 0.3).
+const WHITE_PER_LEVEL: f32 = 0.2;
 
 /// Roomtone's units to Bevy's, for one made light.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -29,7 +46,7 @@ impl Scale {
     /// times it is the linear colour that reaches tonemapping); `strength`
     /// the player's own trim (1: as tuned).
     pub(crate) fn new(light: &Lighting, exposure: f32, strength: f32) -> Self {
-        let white = (REFERENCE_WHITE * light.level).powf(GAMMA) / light.mean.max(1e-3);
+        let white = WHITE_PER_LEVEL * light.level / light.mean.max(1e-3);
         Self { luminance: white * strength / exposure.max(1e-9) }
     }
 }
@@ -251,12 +268,18 @@ mod tests {
         let l = lighting();
         let exposure = 1.0 / 1000.0;
         let s = Scale::new(&l, exposure, 1.0);
-        // A surface lit by the room's mean comes out of the camera at 0.7 (display).
+        // A surface lit by the room's mean comes out of the camera at 0.2 (linear) at level 1.
         let shown = l.mean * s.luminance * exposure;
-        assert!((shown.powf(1.0 / GAMMA) - 0.7).abs() < 1e-4, "{shown}");
-        // A darker room (level) is shown darker; strength trims it.
+        assert!((shown - 0.2).abs() < 1e-5, "{shown}");
+        // A darker room (level) is shown darker, in proportion (the level is
+        // linear in the light, as passthrough is); strength trims it.
         let dark = Lighting { level: 0.5, ..l };
-        assert!(Scale::new(&dark, exposure, 1.0).luminance < s.luminance * 0.3);
+        assert!((Scale::new(&dark, exposure, 1.0).luminance / s.luminance - 0.5).abs() < 1e-5);
+        // A lit room (the level at its clamp, 1.6): a white surface lit by
+        // the mean is 0.32 (display 0.6), not over white (before: 1.28).
+        let lit = Lighting { level: 1.6, ..l };
+        let shown = l.mean * Scale::new(&lit, exposure, 1.0).luminance * exposure;
+        assert!((shown - 0.32).abs() < 1e-4 && shown < 0.3 * (0.7f32 * 1.6).powf(2.2), "{shown}");
         assert!((Scale::new(&l, exposure, 2.0).luminance / s.luminance - 2.0).abs() < 1e-5);
     }
 
@@ -493,6 +516,71 @@ mod tests {
             let (to, away) = (shown(l, content, toward), shown(l, content, -toward));
             assert!(to > 2.5 * away, "{name}: toward the light {to}, away {away}");
         }
+    }
+
+    /// A sunlit patch of carpet beside the content (or a white sheet, a lap
+    /// in the light) is a lit surface: no key light below the content, and
+    /// no point light on the floor beside it (2026-11-17: one there lit the
+    /// pool's floor 10-100 times over, a bright hotspot). Its light is the
+    /// soft light's, from below; the window is still the key light.
+    #[test]
+    fn a_lit_patch_of_floor_is_no_light() {
+        let eye = Vec3::new(0.5, 1.2, 0.0);
+        let content = Vec3::new(0.0, 0.3, 0.0);
+        let patch = Vec3::new(0.7, 0.0, -0.3);
+        let with = |lit: bool| {
+            move |p: Vec3| {
+                if lit && p.y < 0.01 && (p - patch).with_y(0.0).length() < 0.35 { 0.8 } else { window_wall(0.3)(p) }
+            }
+        };
+        let (_, plain) = box_room_light(eye, content, with(false));
+        let (points, lights) = box_room_light(eye, content, with(true));
+        let root = Transform::IDENTITY;
+        for (i, l) in lights.iter().enumerate() {
+            for k in l.lights.iter().filter(|k| k.lit()) {
+                match key(k, &root, Scale { luminance: 1.0 }) {
+                    // (the window is below the grid's high points: a light, on its wall)
+                    Key::Point { position, .. } => assert!(position.y > 0.5, "point {i} {:?}: a point light at {position:?}", points[i]),
+                    _ => assert!(k.dir.y > -0.26, "point {i} {:?}: a light from below {k:?}", points[i]),
+                }
+            }
+        }
+        let below = |l: &Lighting| l.irradiance([0.0, -1.0, 0.0])[1];
+        assert!(below(&lights[0]) > 1.3 * below(&plain[0]), "from below {} vs {}", below(&lights[0]), below(&plain[0]));
+        assert!(lights[0].lights.iter().any(|k| k.lit() && k.dir.x < -0.5), "the window: {:?}", lights[0].lights);
+    }
+
+    /// The headset's own recording (2026-11-17, a room a window and a
+    /// ceiling light light, strength 1.0, the app at 568f02a), replayed:
+    /// the ceiling light placed on the ceiling, the window's light from
+    /// its direction (it was placed mid-room from 2% of its brightness, and
+    /// its colour cut to a fifth there: 0.07), and a white surface facing up
+    /// at the content shown at 0.31 (linear; the camera read 0.29 for one
+    /// there), where `(0.7 level)^2.2` put it at 1.23 (over white).
+    ///
+    /// The recording is of a home, so it isn't in the repository:
+    /// `ROOMTONE_RECORDING` names its folder (the saved session's
+    /// `roomtone-1794945068`); skipped without it.
+    #[test]
+    fn the_headsets_recording_lights_the_content_as_the_room_shows() {
+        let Some(dir) = std::env::var_os("ROOMTONE_RECORDING").map(std::path::PathBuf::from) else {
+            eprintln!("skipped: ROOMTONE_RECORDING unset");
+            return;
+        };
+        let mut room = roomtone_sys::Room::new();
+        assert!(room.replay(&dir.join("session.rtone")));
+        let l = room.light_at(0).expect("made");
+        let [ceiling, window] = l.lights;
+        assert!(ceiling.placed() && ceiling.pos.y > 2.4 && ceiling.dir.y > 0.8, "{ceiling:?}");
+        assert!(window.lit() && !window.placed() && window.dir.z < -0.9, "{window:?}");
+        assert!((0.25..0.45).contains(&window.color[1]), "{window:?}");
+        assert!(l.level > 1.59, "the level at its clamp: {}", l.level);
+        let up = l.irradiance([0.0, 1.0, 0.0])[1] + l.lights.iter().map(|k| k.color[1] * k.dir.y.max(0.0)).sum::<f32>();
+        let exposure = 1e-3;
+        let shown = up * Scale::new(&l, exposure, 1.0).luminance * exposure;
+        let before = up * (0.7 * l.level).powf(2.2) / l.mean;
+        assert!((shown - 0.308).abs() < 0.025, "a white surface facing up {shown}");
+        assert!((before - 1.23).abs() < 0.05 && shown < 0.3 * before, "{shown} vs {before}");
     }
 
     #[test]
