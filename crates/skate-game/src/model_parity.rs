@@ -6,8 +6,8 @@
 //!   is a pair. Synthetic always; on the real game too with `SKATE3_ASSET_ROOT` (its skeleton bound to its GLB, its
 //!   own ticks).
 //! - **THUG2:** each joint's matrix and the root between two steps' palettes and draw matrices (a short palette, junk
-//!   w columns, world sizes 1 and 2.5, a cut and not, the clock at fixed points of a step: re-recorded with generic
-//!   pose interpolation) and the model's parts as meshes and materials. Synthetic always; on the real game in
+//!   w columns, a cut and not, the clock at fixed points of a step: re-recorded with generic pose interpolation, and
+//!   again with THUG2's world size gone) and the model's parts as meshes and materials. Synthetic always; on the real game in
 //!   [`thug2::real`] (ignored: the game boots once a process).
 use bevy::prelude::*;
 
@@ -267,14 +267,14 @@ pub(crate) mod thug2 {
     use super::*;
     use thug2_sys as t2;
 
-    /// Each joint's matrix and the root's between two steps' poses as the model layer draws them, at world sizes 1 and
-    /// 2.5, with the game's clock 0, 0.4, 0.5 and 1 of a step after the newer one (and the newer alone, a cut).
+    /// Each joint's matrix and the root's between two steps' poses as the model layer draws them, with the game's
+    /// clock 0, 0.4, 0.5 and 1 of a step after the newer one (and the newer alone, a cut).
     pub(crate) fn posed(before: &t2::Pose, now: &t2::Pose) -> String {
         use engine_core::Step;
         use std::time::Duration;
         let period = thug2_engine::model::PERIOD;
         let mut b = Bytes::default();
-        for scale in [1.0, 2.5] {
+        for scale in [1.0] {
             for cut in [false, true] {
                 let mut history = crate::model::PoseHistories::<()>::default();
                 for (generation, game) in [(1, before), (2, now)] {
@@ -482,6 +482,10 @@ pub(crate) mod thug2 {
     /// newest pose slid back by the skater's move, so `posed` takes two poses and its digests changed; the parts
     /// (`built`) are unchanged. The real game's palettes and draw matrices over the run: none mirrored, none that won't
     /// come apart, axes 0.81..1.03 long, no shear (cosines under 1e-6).
-    const RECORDED_THUG2: [&str; 2] = ["66688 bytes d9a041747b850d5b", "1028 bytes 5cf400bfb29176e8"];
-    const RECORDED_THUG2_REAL: [&str; 2] = ["66688 bytes de9d8b900e1813cc", "568712 bytes 88922c8caceb6a32"];
+    /// Re-recorded when THUG2's world size went (2026-11-17): `posed` ran world sizes 1 and 2.5 into one digest
+    /// (["66688 bytes d9a041747b850d5b"] synthetic, ["66688 bytes de9d8b900e1813cc"] real); these are its size-1 pass
+    /// alone, recorded with the world size still in the code (the first half of the same bytes), so the removal
+    /// changes nothing at size 1.
+    const RECORDED_THUG2: [&str; 2] = ["33344 bytes db16f02920af864c", "1028 bytes 5cf400bfb29176e8"];
+    const RECORDED_THUG2_REAL: [&str; 2] = ["33344 bytes 2127efec3eab0b44", "568712 bytes 88922c8caceb6a32"];
 }
