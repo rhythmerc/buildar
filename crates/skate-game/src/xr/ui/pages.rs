@@ -346,10 +346,13 @@ fn ar_widgets(world: &World) -> Vec<Widget> {
     if let Some(problem) = world.resource::<RoomLight>().problem(s.room_light) {
         w.push(Widget::info(problem));
     }
-    // (developers: Roomtone's session, recorded while this row shows, saved to replay at a desk)
+    // (developers: Roomtone's session, recorded from the start when asked for, saved to replay at a desk)
     if s.room_light && super::sound_lab::dev(world) {
         if let Some(session) = world.get_resource::<crate::xr::room_light::session::RoomSession>() {
-            w.push(Widget::button("room_light_save", "Save the Roomtone session"));
+            w.push(Widget::toggle("room_record", "Record Roomtone for captures (applies on restart)", s.room_record));
+            if session.recording() {
+                w.push(Widget::button("room_light_save", "Save the Roomtone session"));
+            }
             let status = session.status();
             if !status.is_empty() {
                 w.push(Widget::info(status));
@@ -462,6 +465,7 @@ fn ar_act(widget: &str, world: &mut World) -> Outcome {
         "hud_left" => s.hud_hand = HudHand::Left,
         "hud_right" => s.hud_hand = HudHand::Right,
         "room_light" => s.room_light = !s.room_light,
+        "room_record" => s.room_record = !s.room_record,
         "contact_shadows" => s.contact_shadows = !s.contact_shadows,
         "occlusion" => s.occlusion = s.occlusion.toggled(),
         "occlusion_edges" => s.occlusion_edges = !s.occlusion_edges,

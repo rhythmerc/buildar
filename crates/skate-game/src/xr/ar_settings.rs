@@ -115,6 +115,10 @@ pub(crate) struct ArSettings {
     /// Developer's pages in the menu (the sound lab). No row turns it on: it is set in the file.
     #[serde(default)]
     pub dev: bool,
+    /// Developers: Roomtone's session is recorded, to be saved and replayed at a desk
+    /// (`xr::room_light::session`). Read at start: a change applies on the next.
+    #[serde(default)]
+    pub room_record: bool,
     #[serde(skip)]
     pub revision: u64,
 }
@@ -143,6 +147,7 @@ impl Default for ArSettings {
             occlusion_controllers: false,
             hud_depth_at_controller: false,
             dev: false,
+            room_record: false,
             revision: 0,
         }
     }

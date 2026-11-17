@@ -3,12 +3,14 @@
 //!
 //! Roomtone builds its estimate from everything it has been given since it
 //! started (or last started over), so a recording from the moment something
-//! looks wrong wouldn't make the same light. While the developer setting is
-//! on, the capture's [`Room`] records every input it is given (the camera,
+//! looks wrong wouldn't make the same light. With "Record Roomtone for
+//! captures" on (a developer row, `ArSettings::room_record`) when the app
+//! starts, the capture's [`Room`] records every input it is given (the camera,
 //! each frame and its depth image, the points the light is made for) into
-//! `roomtone-session/` in [`crate::xr::XrFiles`], from a clean start: turning
-//! the setting on starts Roomtone over. Off, nothing is recorded and the
-//! session's files are deleted.
+//! `roomtone-session/` in [`crate::xr::XrFiles`], from Roomtone's start. The
+//! setting is read at start only: turned on, it applies from the next start
+//! (recording costs about 124 KB/s). Off at start, nothing is recorded and a
+//! session left from before is deleted.
 //!
 //! "Save the Roomtone session" (the AR settings page's developer rows)
 //! saves everything recorded so far into `captures/roomtone-<seconds>/`:
@@ -85,6 +87,11 @@ impl RoomSession {
         self.shared.status.lock().unwrap().clone()
     }
 
+    /// Whether a session is being recorded (the save button is shown).
+    pub(crate) fn recording(&self) -> bool {
+        !self.shared.parts.lock().unwrap().is_empty()
+    }
+
     /// Starts `room` over and records it from there, in place of any session before.
     fn start(&self, room: &mut Room) -> Result<(), String> {
         self.stop(room);
@@ -114,7 +121,7 @@ impl RoomSession {
     /// thread of their own, which says how it went in [`RoomSession::status`].
     pub(crate) fn save(&self, room: &mut Room, folder: PathBuf, mut note: Value) -> Result<std::thread::JoinHandle<()>, String> {
         if !room.recording() {
-            return Err("Roomtone isn't being recorded (turn the developer setting on).".into());
+            return Err("Roomtone isn't being recorded (turn \"Record Roomtone for captures\" on and restart).".into());
         }
         let parts = {
             let mut parts = self.shared.parts.lock().unwrap();
@@ -195,17 +202,18 @@ pub(crate) fn note(settings: &ArSettings) -> Value {
     })
 }
 
-/// Records while the developer setting is on, and starts over when the
-/// session gets too large.
+/// Records when the setting was on at start (`SK8_ROOM_RECORD` too), and
+/// starts over when the session gets too large.
 pub(super) fn keep_recording(
     session: Res<RoomSession>,
     capture: Res<RoomCapture>,
     settings: Res<ArSettings>,
     mut checked: Local<Option<Instant>>,
     mut failed: Local<bool>,
+    mut at_start: Local<Option<bool>>,
 ) {
-    // (as the settings page's developer rows are shown)
-    let wanted = settings.dev || std::env::var_os("SK8_DEV").is_some();
+    // (read once: the settings are loaded before the first frame)
+    let wanted = *at_start.get_or_insert_with(|| settings.room_record || std::env::var_os("SK8_ROOM_RECORD").is_some());
     let first = checked.is_none();
     let due = checked.is_none_or(|at| at.elapsed() >= CHECK_EVERY);
     // The capture may be busy on its own thread: next frame.
