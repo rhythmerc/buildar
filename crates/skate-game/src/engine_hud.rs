@@ -51,6 +51,7 @@ impl Plugin for EngineHudPlugin {
         // (not without a renderer: tests)
         if app.is_plugin_added::<bevy::render::RenderPlugin>() {
             embedded_asset!(app, "engine_hud.wgsl");
+            embedded_asset!(app, "engine_hud_panel.wgsl");
             app.add_plugins((Material2dPlugin::<HudPaint>::default(), bevy::pbr::MaterialPlugin::<PanelMaterial>::default()))
                 .init_resource::<EngineHuds>();
         }
@@ -58,14 +59,20 @@ impl Plugin for EngineHudPlugin {
 }
 
 /// What a part's panel is drawn with in the room: its picture, unlit, over everything (a HUD isn't hidden by what's in
-/// front of it, virtual or real: no depth test, nothing written to depth).
+/// front of it, virtual or real). No depth test; where it has paint it writes the near plane's depth
+/// (`engine_hud_panel.wgsl`), which the room's occlusion pass never hides: that pass hides pixels by the scene's
+/// depth, and with nothing written, a panel over a virtual piece that a real thing hid was hidden with it.
 pub(crate) type PanelMaterial = bevy::pbr::ExtendedMaterial<StandardMaterial, OnTop>;
 
-/// [`PanelMaterial`]'s part: drawn without a depth test.
+/// [`PanelMaterial`]'s part: drawn without a depth test, at the near plane's depth where painted.
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug, Default)]
 pub(crate) struct OnTop {}
 
 impl bevy::pbr::MaterialExtension for OnTop {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "embedded://skate_game/engine_hud_panel.wgsl".into()
+    }
+
     fn specialize(
         _: &bevy::pbr::MaterialExtensionPipeline,
         descriptor: &mut RenderPipelineDescriptor,
@@ -74,7 +81,7 @@ impl bevy::pbr::MaterialExtension for OnTop {
     ) -> Result<(), SpecializedMeshPipelineError> {
         if let Some(depth) = &mut descriptor.depth_stencil {
             depth.depth_compare = bevy::render::render_resource::CompareFunction::Always;
-            depth.depth_write_enabled = false;
+            depth.depth_write_enabled = true;
         }
         Ok(())
     }

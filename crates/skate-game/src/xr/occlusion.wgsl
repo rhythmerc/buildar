@@ -97,8 +97,9 @@ fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
 #else
     let depth = textureLoad(scene_depth, vec2<i32>(position.xy), 0);
 #endif
-    // Nothing solid here (the menu and other see-through things are left alone).
-    if depth <= 0.0 {
+    // Nothing solid here (the menu and other see-through things are left alone), or a HUD panel (at the near plane:
+    // engine_hud_panel.wgsl), which nothing hides.
+    if depth <= 0.0 || depth >= 1.0 {
         return vec4(1.0);
     }
     let uv = (position.xy - view.viewport.xy) / view.viewport.zw;
