@@ -80,6 +80,7 @@ pub(crate) fn install(app: &mut App, files: &Path) {
         .resource_mut::<crate::xr::ui::ControlsSheet>()
         .set(Engine::Thug2, thug2_engine::input::CONTROLS.to_vec());
     crate::engine_hud::install(app);
+    app.init_resource::<engine_api::PlayerBodies>();
     engines::add_engine(app, Engine::Thug2, available, |app| {
         app.init_resource::<Thug2>()
             .init_resource::<Thug2Sounds>()
@@ -93,7 +94,7 @@ pub(crate) fn install(app: &mut App, files: &Path) {
             )
             .add_systems(
                 PostUpdate,
-                (place_stand_in, pose_skater)
+                (place_stand_in, pose_skater.in_set(engine_api::BodiesSet))
                     .before(bevy::transform::TransformSystems::Propagate)
                     .in_set(EngineSet(Engine::Thug2)),
             );
@@ -648,6 +649,8 @@ fn place_stand_in(
 struct SkaterJoints {
     joints: Vec<Entity>,
     root: Entity,
+    /// Its bodies (`thug2_engine::model::board`: the board alone; the C API gives no parents for the rider's bones).
+    groups: Vec<engine_core::model::BodyGroup>,
 }
 
 /// The skater's model (`thug2_engine::model::source`: bind-pose meshes in game units with plain materials) spawned as
@@ -657,7 +660,7 @@ fn spawn_skater(world: &mut World, model: &t2::SkaterModel) {
     let model = thug2_engine::model::source(model);
     let engine_core::ModelSource::Meshes { meshes, textures, joint_count } = &model.source else { return };
     let crate::model::FlatModel { root, joints } = crate::model::spawn_meshes(world, "THUG2 skater", meshes, textures, *joint_count);
-    world.insert_resource(SkaterJoints { joints, root });
+    world.insert_resource(SkaterJoints { joints, root, groups: model.groups.clone() });
 }
 
 /// The skater where the game's pose has it, in our world (`thug2_engine::model::pose`: the draw matrix and palette
@@ -668,6 +671,7 @@ fn pose_skater(
     joints: Option<Res<SkaterJoints>>,
     mut q: Query<(&mut Transform, &mut Visibility)>,
     mut pose: Local<engine_core::Pose>,
+    mut bodies: ResMut<engine_api::PlayerBodies>,
 ) {
     let Some(joints) = joints else { return };
     let shown = thug2.placed && thug2.current.is_some() && !thug2.pose.palette.is_empty();
@@ -675,6 +679,7 @@ fn pose_skater(
         *visibility = if shown { Visibility::Inherited } else { Visibility::Hidden };
     }
     if !shown {
+        bodies.set(Engine::Thug2, Vec::new());
         return;
     }
     let now = thug2.current.unwrap();
@@ -693,6 +698,7 @@ fn pose_skater(
             *transform = Transform::from_matrix(matrix);
         }
     }
+    bodies.set(Engine::Thug2, crate::model::bodies(&joints.groups, &[], |p| pose.point(p)));
 }
 
 /// How far back from where the game's last frame has the skater (game units) it is drawn, `alpha` of the way from the
@@ -862,6 +868,13 @@ mod tests {
         assert!((root_at.scale.x - 0.5 / t2::INCHES_PER_METRE).abs() < 1e-4, "half size: {root_at:?}");
         let joint_at = app.world().get::<Transform>(joint).unwrap().translation;
         assert!((joint_at - there).length() < 1.5, "its joints on it: {joint_at} vs {there}");
+        // Its board's body, from the joints only the board's parts are skinned to: where the skater link puts the
+        // board, along the way it faces.
+        let link = app.world().resource::<SkaterLink>().board.unwrap();
+        let bodies = app.world().resource::<engine_api::PlayerBodies>().of(Engine::Thug2).to_vec();
+        let [engine_api::BodyShape::Footprint { middle, along, .. }] = bodies.as_slice() else { panic!("the board alone: {bodies:?}") };
+        assert!((*middle - link.position).length() < 0.15, "the board's middle {middle} at the board {}", link.position);
+        assert!(along.dot(link.forward.with_y(0.0).normalize()).abs() > 0.9, "along it: {along} vs {}", link.forward);
         let mut q = app.world_mut().query_filtered::<&Visibility, With<StandIn>>();
         assert_eq!(*q.single(app.world()).unwrap(), Visibility::Hidden);
         // Away to the other engine: the game waits, its stand-in hidden.

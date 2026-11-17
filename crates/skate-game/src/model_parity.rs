@@ -166,6 +166,47 @@ mod skate3 {
         assert_eq!(got, RECORDED_SKATE3_REAL);
     }
 
+    /// The real game's bodies (`SKATE3_ASSET_ROOT`; skipped without it): the board's footprint where the sim's deck
+    /// is and along it, and the rider's bones, each joined to its parent.
+    #[cfg(feature = "xr")]
+    #[test]
+    fn skate3_bodies_are_where_the_sim_has_them() {
+        let Some(root) = std::env::var_os("SKATE3_ASSET_ROOT") else {
+            eprintln!("SKATE3_ASSET_ROOT not set: skipped");
+            return;
+        };
+        let root = std::path::Path::new(&root);
+        let bundle = skate3_sim::Bundle::open(root, &mut |_| {}).expect("the bundle");
+        let config =
+            skate3_sim::SimConfig { difficulty: skate3_sim::difficulty::Difficulty::Easy, map: None, spawn_offset: 0.0 };
+        let mut sim = skate3_sim::Sim::load(&bundle, &config, &mut |_| {}).expect("the sim");
+        sim.load_camera(root).expect("its camera");
+        for _ in 0..60 {
+            sim.tick(true).expect("a tick");
+        }
+        let model = skate3_engine::model::model("private/skater.glb", &sim.skater);
+        let mut pose = Pose::default();
+        skate3_engine::model::pose(&sim.skater, sim.camera_frame().expect("a camera frame"), &mut pose);
+        let bodies = crate::model::bodies(&model.groups, &model.parents, |p| pose.point(p));
+        let deck = sim.link();
+        let mut segments = 0;
+        for body in &bodies {
+            match body {
+                engine_api::BodyShape::Footprint { middle, along, .. } => {
+                    assert!((*middle - deck.deck).length() < 0.1, "the board's middle {middle} at its deck {}", deck.deck);
+                    assert!(along.dot(deck.deck_forward.with_y(0.0).normalize()).abs() > 0.95, "along it: {along}");
+                }
+                engine_api::BodyShape::Segments(s) => {
+                    segments = s.len();
+                    assert!(s.iter().all(|(a, b)| a.distance(*b) < 0.6 && (*a - deck.deck).length() < 2.0), "{s:?}");
+                }
+            }
+        }
+        eprintln!("skate3 bodies: {} ({segments} rider bones)", bodies.len());
+        assert_eq!(bodies.len(), 2);
+        assert!(segments >= 20, "{segments} rider bones");
+    }
+
     /// The GLB's skins bound as `animation::bind` binds them (its nodes as entities under a model root).
     #[cfg(feature = "xr")]
     fn glb_bindings(path: &std::path::Path, names: &[String]) -> Vec<(usize, Option<usize>)> {

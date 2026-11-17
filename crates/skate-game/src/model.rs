@@ -10,12 +10,45 @@
 //!   ([`flat_joints`]); not blended.
 //! - **Carrying a pose between steps** ([`PoseHistory`]): the last two steps' poses, taken once each; a cut, a change
 //!   of the engine's step or of its joint count starts the pair again, so nothing is blended across them.
+//! - **Its bodies** ([`bodies`]): each body group placed by the pose, for the contact shadows
+//!   ([`engine_api::PlayerBodies`]).
 //!
 //! The per-engine systems that feed these (when a pose is taken, which entities are whose) are still each engine's
 //! adapter's until one generic driver replaces them (`docs/game-code-out-plan.md`, step 8).
 use bevy::prelude::*;
-use engine_core::model::{AlphaMode, Lighting, MaterialDesc, MeshData, Pose};
+use engine_api::BodyShape;
+use engine_core::model::{AlphaMode, BodyGroup, Cast, Lighting, MaterialDesc, MeshData, Point, Pose};
 use std::time::Duration;
+
+// ---- Its bodies ----
+
+/// A model's body groups placed in the world (`point`: where a joint's point is now): a footprint between its two
+/// points, or a segment for each of a group's joints whose parent (`parents`) is in the group too.
+pub(crate) fn bodies(groups: &[BodyGroup], parents: &[Option<u16>], point: impl Fn(Point) -> Option<Vec3>) -> Vec<BodyShape> {
+    let origin = |joint: u16| point(Point { joint, at: Vec3::ZERO });
+    groups
+        .iter()
+        .filter_map(|group| match &group.cast {
+            Cast::Footprint { back, front, ellipses } => {
+                let (back, front) = (point(*back)?, point(*front)?);
+                let along = (front - back).with_y(0.0).try_normalize()?;
+                Some(BodyShape::Footprint { middle: (back + front) / 2.0, along, ellipses: ellipses.clone() })
+            }
+            Cast::Segments => {
+                let segments: Vec<(Vec3, Vec3)> = group
+                    .joints
+                    .iter()
+                    .filter_map(|&joint| {
+                        let parent = parents.get(usize::from(joint)).copied().flatten()?;
+                        group.joints.contains(&parent).then_some(())?;
+                        Some((origin(parent)?, origin(joint)?))
+                    })
+                    .collect();
+                (!segments.is_empty()).then_some(BodyShape::Segments(segments))
+            }
+        })
+        .collect()
+}
 
 // ---- Carrying a pose between steps ----
 

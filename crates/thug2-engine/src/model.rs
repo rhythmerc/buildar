@@ -10,11 +10,16 @@
 //!   product would drop the translations of the matrices before it. The root is (game to contract) x (draw matrix);
 //!   the joints are the palette (a joint's inverse bind times its posed matrix), so skinning needs no inverse binds.
 //!
+//! - **Bodies** ([`board`]): the board is the parts lying flat and long under the skater in the bind pose; its
+//!   joints are those only they are skinned to. It casts the skate mode's board footprint along its length.
+//!
 //! The C API gives no joint names, no parents and no joint positions (only the palette), so the model has no
-//! skeleton shape: [`engine_core::model::Model::parents`] is empty.
+//! skeleton shape: [`engine_core::model::Model::parents`] is empty, and the rider casts no shadow of its own (a
+//! segment needs its joints' parents and positions).
 use engine_core::glam::{Mat4, Vec3};
 use engine_core::hud::Rgba8;
-use engine_core::model::{AlphaMode, Lighting, MaterialDesc, MeshData, Model, ModelSource, Pose};
+use engine_core::model::{AlphaMode, BodyGroup, Cast, Lighting, MaterialDesc, MeshData, Model, ModelSource, Point, Pose};
+use engine_core::skate::body;
 use thug2_sys as t2;
 
 /// The joints the skater is posed with (the palette's most).
@@ -29,8 +34,73 @@ pub fn source(model: &t2::SkaterModel) -> Model {
             joint_count: JOINTS,
         },
         parents: Vec::new(),
-        groups: Vec::new(),
+        groups: board(&model.meshes).into_iter().collect(),
     }
+}
+
+/// A board part lies under this in the bind pose (game units: inches over the skater's feet)...
+pub const BOARD_UNDER: f32 = 8.0;
+/// ... and is at least this long, level (a deck is about 32 inches, a truck with its wheels 24 across its ends).
+pub const BOARD_LONG: f32 = 20.0;
+/// A joint is a part's when it weighs this much in one of its vertices.
+const WEIGHED: f32 = 0.01;
+
+/// The board's body: its parts (flat and long under the skater in the bind pose, [`BOARD_UNDER`], [`BOARD_LONG`]), its
+/// joints (those only board parts are skinned to), cast along its length from its back end to its front (each end a
+/// point of the bind pose carried by the board joint weighing most near it). None when no part looks like a board.
+pub fn board(parts: &[t2::SkaterMesh]) -> Option<BodyGroup> {
+    let joints_of = |part: &t2::SkaterMesh| {
+        let mut mask = [false; 256];
+        for v in &part.vertices {
+            for k in 0..3 {
+                if v.weights[k] > WEIGHED {
+                    mask[usize::from(v.bones[k])] = true;
+                }
+            }
+        }
+        mask
+    };
+    let bounds = |part: &t2::SkaterMesh| {
+        part.vertices.iter().fold((Vec3::MAX, Vec3::MIN), |(lo, hi), v| (lo.min(v.position.into()), hi.max(v.position.into())))
+    };
+    let is_board = |part: &t2::SkaterMesh| {
+        let (lo, hi) = bounds(part);
+        !part.indices.is_empty() && hi.y < BOARD_UNDER && (hi.x - lo.x).max(hi.z - lo.z) >= BOARD_LONG
+    };
+    let (mut board, mut rest) = ([false; 256], [false; 256]);
+    for part in parts.iter().filter(|p| !p.indices.is_empty()) {
+        let into = if is_board(part) { &mut board } else { &mut rest };
+        for (j, used) in joints_of(part).into_iter().enumerate() {
+            into[j] |= used;
+        }
+    }
+    let joints: Vec<u16> = (0..256u16).filter(|&j| board[usize::from(j)] && !rest[usize::from(j)]).collect();
+    if joints.is_empty() {
+        return None;
+    }
+    // (its length: along x or z, whichever is longer; its ends a quarter of it from each end's middle)
+    let vertices: Vec<&t2::ffi::Thug2Vertex> = parts.iter().filter(|p| is_board(p)).flat_map(|p| &p.vertices).collect();
+    let (lo, hi) = vertices.iter().fold((Vec3::MAX, Vec3::MIN), |(lo, hi), v| (lo.min(v.position.into()), hi.max(v.position.into())));
+    let axis = if hi.z - lo.z >= hi.x - lo.x { Vec3::Z } else { Vec3::X };
+    let middle = (lo + hi) / 2.0;
+    let half = (hi - lo).dot(axis) / 2.0;
+    let end = |sign: f32| {
+        let mut weight = [0.0f32; 256];
+        for v in &vertices {
+            if (Vec3::from(v.position) - middle).dot(axis) * sign > half * 0.5 {
+                for k in 0..3 {
+                    weight[usize::from(v.bones[k])] += v.weights[k];
+                }
+            }
+        }
+        let joint = joints.iter().copied().max_by(|a, b| weight[usize::from(*a)].total_cmp(&weight[usize::from(*b)]))?;
+        Some(Point { joint, at: middle + axis * (half * sign) })
+    };
+    Some(BodyGroup {
+        id: body::BOARD,
+        cast: Cast::Footprint { back: end(-1.0)?, front: end(1.0)?, ellipses: body::BOARD_FOOTPRINT.to_vec() },
+        joints,
+    })
 }
 
 /// A part of the model (one for each of the game's, those with no triangles too: the runtime draws none of them).
@@ -141,6 +211,25 @@ mod tests {
         assert_eq!(m.material.base_color, [1.0, 0.5, 1.0, 1.0]);
         assert_eq!(m.material.alpha, AlphaMode::Mask(64.0 / 255.0));
         assert!(mesh(&t2::SkaterMesh::default()).indices.is_empty());
+    }
+
+    /// The board: the flat, long parts under the skater, and the joints only they are skinned to; a leg reaching
+    /// down to it is not the board, nor is the joint it shares with it.
+    #[test]
+    fn the_board_is_what_lies_flat_and_long_under_the_feet() {
+        let at = |p: [f32; 3], joint: u8| t2::ffi::Thug2Vertex { position: p, bones: [joint, 0, 0, 0], weights: [1.0, 0.0, 0.0, 0.0], ..Default::default() };
+        let part = |vertices: Vec<t2::ffi::Thug2Vertex>| t2::SkaterMesh { indices: vec![0, 1, 2], vertices, ..Default::default() };
+        let deck = part(vec![at([-5.0, 4.0, -18.0], 46), at([5.0, 4.0, -18.0], 46), at([0.0, 5.0, 18.0], 48), at([1.0, 5.0, 18.0], 48)]);
+        let wheels = part(vec![at([-5.0, 0.0, -12.0], 47), at([5.0, 0.0, 12.0], 49), at([0.0, 2.0, 12.0], 9)]);
+        let leg = part(vec![at([0.0, 3.0, 0.0], 9), at([0.0, 30.0, 0.0], 8), at([1.0, 30.0, 0.0], 8)]);
+        let shoe = part(vec![at([0.0, 3.0, -4.0], 9), at([0.0, 7.0, 6.0], 9), at([1.0, 5.0, 0.0], 9)]);
+        let group = board(&[deck, wheels, leg, shoe]).expect("a board");
+        assert_eq!(group.id, body::BOARD);
+        assert_eq!(group.joints, [46, 47, 48, 49]);
+        let Cast::Footprint { back, front, .. } = group.cast else { panic!("a footprint") };
+        assert_eq!((back.joint, back.at.z), (46, -18.0));
+        assert_eq!((front.joint, front.at.z), (48, 18.0));
+        assert!(board(&[]).is_none());
     }
 
     /// The root carries the model from game units at the offset to metres; the joints are the palette, w fixed.

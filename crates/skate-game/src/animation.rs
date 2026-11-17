@@ -117,6 +117,7 @@ fn present(
     animation: Res<AnimationStatus>,
     mut nodes: Query<&mut Transform>,
     mut live: Local<Vec<Mat4>>,
+    bodies: Option<ResMut<engine_api::PlayerBodies>>,
 ) {
     if !animation.ready {
         return;
@@ -137,5 +138,15 @@ fn present(
         if let Ok(mut node) = nodes.get_mut(binding.entity) {
             *node = transform;
         }
+    }
+    // (its bodies where they are drawn: each point between the two ticks, carried by the root between them)
+    if let Some(mut bodies) = bodies {
+        let root = model::blend(previous.root, current.root, alpha);
+        let point = |p: engine_core::model::Point| {
+            let j = usize::from(p.joint);
+            let (a, b) = (previous.joints.get(j)?.transform_point3(p.at), current.joints.get(j)?.transform_point3(p.at));
+            Some(root.transform_point(a.lerp(b, alpha)))
+        };
+        bodies.set(engine_api::Engine::Skate3, model::bodies(&model.0.groups, &model.0.parents, point));
     }
 }

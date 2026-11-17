@@ -6,7 +6,7 @@
 //! what every mode shares:
 //! - **To the engine:** the controllers ([`LatestTouch`]) and whether the shared layer has them ([`PadHeld`]); the
 //!   stage ([`CurrentStage`]); where to put the player ([`PlacePlayer`]).
-//! - **From the engine:** where its player is ([`PlayerFocus`]), its own HUD panels ([`HandHud`], drawn by an
+//! - **From the engine:** where its player is ([`PlayerFocus`]) and its bodies ([`PlayerBodies`]), its own HUD panels ([`HandHud`], drawn by an
 //!   [`EngineHudCamera`]), the settings a course keeps ([`CourseSettings`]).
 //! - **Ownership:** an engine's per-frame systems are those in its [`EngineSet`]; what they spawn is
 //!   [`EngineOwned`], hidden and silenced while another engine runs. [`EngineSwitched`] and [`BeforeSwitch`] mark a
@@ -169,6 +169,39 @@ impl PlayerFocus {
     pub fn of(&self, engine: Engine) -> Option<engine_core::Focus> {
         self.0.get(&engine).copied()
     }
+}
+
+/// Where each engine's player's bodies are now, in the world (from its model's body groups and pose: the app's model
+/// layer fills it): what their contact shadows are cast from. None for an engine: one body, cast from its focus.
+#[derive(Resource, Default)]
+pub struct PlayerBodies(HashMap<Engine, Vec<BodyShape>>);
+
+impl PlayerBodies {
+    pub fn set(&mut self, engine: Engine, bodies: Vec<BodyShape>) {
+        if bodies.is_empty() {
+            self.0.remove(&engine);
+        } else {
+            self.0.insert(engine, bodies);
+        }
+    }
+
+    pub fn of(&self, engine: Engine) -> &[BodyShape] {
+        self.0.get(&engine).map_or(&[], Vec::as_slice)
+    }
+}
+
+/// The systems that set [`PlayerBodies`] late in a frame (in `PostUpdate`) run in this set; what reads them then runs
+/// after it.
+#[derive(SystemSet, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct BodiesSet;
+
+/// A body as its contact shadow casts it, in the world ([`engine_core::model::Cast`] placed by a pose).
+#[derive(Clone, Debug, PartialEq)]
+pub enum BodyShape {
+    /// Fixed ellipses laid level from `middle` along `along` (a unit vector), in units of the player's focus height.
+    Footprint { middle: Vec3, along: Vec3, ellipses: Vec<engine_core::model::Ellipse> },
+    /// Bones, each from a joint to its parent.
+    Segments(Vec<(Vec3, Vec3)>),
 }
 
 // ---- HUDs ----
