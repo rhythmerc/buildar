@@ -67,7 +67,7 @@ pub(crate) fn present(
             runtime.set_aspect_ratio(width / height);
         }
     }
-    let Some((previous, current, alpha)) = history.view(&replay, hold.alpha(&time)) else {
+    let Some((previous, current, alpha)) = history.view_at(&replay, hold.now(&time)) else {
         return;
     };
     for (mut camera, mut transform, mut projection) in &mut cameras {

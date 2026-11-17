@@ -166,16 +166,20 @@ fn wound_backwards(part: &t2::SkaterMesh) -> bool {
     against > 0
 }
 
-/// The game's pose after a step as the contract's, at world size `scale`, the whole moved by `shift` (game units:
-/// the host's, to draw it between the game's last two frames; zero for the step as it is).
-pub fn pose(game: &t2::Pose, scale: f32, shift: Vec3, generation: u64, out: &mut Pose) {
+/// How long the game's steps are: one frame of its main loop, at its 60 Hz.
+pub const PERIOD: std::time::Duration = std::time::Duration::from_nanos(16_666_667);
+
+/// The skater: the game's one model.
+pub const SKATER: engine_core::ModelId = 0;
+
+/// The game's pose after a step as the contract's root and joints, at world size `scale` (which model, its numbering,
+/// its cuts and its step are the driver's: the game's frames are its steps). The runtime draws between steps.
+pub fn pose(game: &t2::Pose, scale: f32, out: &mut Pose) {
     let to_ours =
         Mat4::from_scale(Vec3::splat(1.0 / (t2::INCHES_PER_METRE * scale))) * Mat4::from_translation(-crate::stage::OFFSET);
     let mut draw = game.draw;
     (draw[3], draw[7], draw[11], draw[15]) = (0.0, 0.0, 0.0, 1.0);
-    out.generation = generation;
-    out.discontinuity = false;
-    out.root = to_ours * Mat4::from_translation(shift) * Mat4::from_cols_array(&draw);
+    out.root = to_ours * Mat4::from_cols_array(&draw);
     out.joints.clear();
     out.joints.extend(game.palette.iter().map(|m| {
         let mut m = *m;
@@ -240,8 +244,7 @@ mod tests {
         (draw[3], draw[15]) = (9.0, 0.0);
         let game = t2::Pose { palette: vec![draw], draw };
         let mut out = Pose::default();
-        pose(&game, 1.0, Vec3::ZERO, 7, &mut out);
-        assert_eq!(out.generation, 7);
+        pose(&game, 1.0, &mut out);
         let at = out.root.transform_point3(Vec3::ZERO);
         assert!((at - Vec3::X).length() < 1e-3, "{at}");
         assert_eq!(out.joints.len(), 1);

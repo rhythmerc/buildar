@@ -5,8 +5,9 @@
 //!   a bone count change, an unchanged generation) at fixed alphas (outside 0..1 too), and the fallback before there
 //!   is a pair. Synthetic always; on the real game too with `SKATE3_ASSET_ROOT` (its skeleton bound to its GLB, its
 //!   own ticks).
-//! - **THUG2:** each joint's matrix from a fixed palette and draw matrix (a short palette, junk w columns, world sizes
-//!   1 and 2.5, moving and not) and the model's parts as meshes and materials. Synthetic always; on the real game in
+//! - **THUG2:** each joint's matrix and the root between two steps' palettes and draw matrices (a short palette, junk
+//!   w columns, world sizes 1 and 2.5, a cut and not, the clock at fixed points of a step: re-recorded with generic
+//!   pose interpolation) and the model's parts as meshes and materials. Synthetic always; on the real game in
 //!   [`thug2::real`] (ignored: the game boots once a process).
 use bevy::prelude::*;
 
@@ -84,7 +85,9 @@ mod skate3 {
         b.n(joints.len());
         joints.iter().for_each(|&(_, t)| b.t(t));
         for tick in ticks {
-            history.0.offer(&tick.pose, tick.shot, tick.period);
+            let mut pose = tick.pose.clone();
+            pose.step.period = tick.period;
+            history.0.offer(&pose, tick.shot);
             for alpha in ALPHAS {
                 let (previous, current, alpha) = history.view(&replay, alpha).expect("a pair");
                 b.t(blend(previous.root, current.root, alpha));
@@ -109,6 +112,7 @@ mod skate3 {
                         discontinuity: g == 4,
                         root: matrix(s * 0.37 + 2.0) * Mat4::from_translation(Vec3::new(s * 0.1, 0.0, 0.0)),
                         joints: (0..count).map(|i| matrix(s * 0.21 + i as f32 * 0.77)).collect(),
+                        ..Default::default()
                     },
                     shot: Shot { camera: Transform::from_matrix(matrix(s + 9.0)), fov: 1.0 + s * 0.01 },
                     period: Duration::from_micros(if g >= 6 { 33_333 } else { 16_667 }),
@@ -263,20 +267,61 @@ pub(crate) mod thug2 {
     use super::*;
     use thug2_sys as t2;
 
-    /// Each joint's matrix and the root's at world sizes 1 and 2.5, at alphas 0, 0.4 and 1, standing and moving.
-    pub(crate) fn posed(pose: &t2::Pose, before: [f32; 3], now: [f32; 3]) -> String {
+    /// Each joint's matrix and the root's between two steps' poses as the model layer draws them, at world sizes 1 and
+    /// 2.5, with the game's clock 0, 0.4, 0.5 and 1 of a step after the newer one (and the newer alone, a cut).
+    pub(crate) fn posed(before: &t2::Pose, now: &t2::Pose) -> String {
+        use engine_core::Step;
+        use std::time::Duration;
+        let period = thug2_engine::model::PERIOD;
         let mut b = Bytes::default();
         for scale in [1.0, 2.5] {
-            for (from, alpha) in [(now, 0.0), (before, 0.0), (before, 0.4), (before, 1.0)] {
-                let mut contract = engine_core::Pose::default();
-                thug2_engine::model::pose(pose, scale, crate::thug2::shift(from, now, alpha), 0, &mut contract);
-                let (root, joints) = crate::model::flat_joints(&contract, 64);
-                b.m(root);
-                b.n(joints.len());
-                joints.into_iter().for_each(|m| b.m(m));
+            for cut in [false, true] {
+                let mut history = crate::model::PoseHistories::<()>::default();
+                for (generation, game) in [(1, before), (2, now)] {
+                    let mut contract = engine_core::Pose::default();
+                    thug2_engine::model::pose(game, scale, &mut contract);
+                    contract.generation = generation;
+                    contract.discontinuity = cut && generation == 2;
+                    contract.step = Step { at: period * generation as u32, period };
+                    history.offer(&contract, ());
+                }
+                let history = history.get(thug2_engine::model::SKATER).expect("its history");
+                for since in [0.0, 0.4, 0.5, 1.0] {
+                    let (previous, current, alpha) =
+                        history.view_at(period * 2 + Duration::from_secs_f64(period.as_secs_f64() * since)).expect("a pair");
+                    let (root, joints) = crate::model::flat_blend(previous, current, alpha, 64);
+                    b.m(root);
+                    b.n(joints.len());
+                    joints.into_iter().for_each(|m| b.m(m));
+                }
             }
         }
         b.digest()
+    }
+
+    /// What the palette and draw matrix are made of: how many of their matrices are mirrored or won't come apart into
+    /// a move, a turn and a scale (`model::separable`, w columns fixed), their scales' range, and the most shear (the
+    /// largest cosine between two of a matrix's axes).
+    pub(crate) fn makeup(pose: &t2::Pose) -> (usize, usize, f32, f32, f32) {
+        let mut contract = engine_core::Pose::default();
+        thug2_engine::model::pose(pose, 1.0, &mut contract);
+        let (mut mirrored, mut broken, mut least, mut most, mut shear) = (0, 0, f32::MAX, 0.0f32, 0.0f32);
+        let draw = contract.root * Mat4::from_scale(Vec3::splat(t2::INCHES_PER_METRE));
+        for m in contract.joints.iter().copied().chain([draw]) {
+            match crate::model::separable(m) {
+                Some(true) => mirrored += 1,
+                Some(false) => {}
+                None => broken += 1,
+            }
+            let axes = [m.x_axis.truncate(), m.y_axis.truncate(), m.z_axis.truncate()];
+            for a in axes {
+                (least, most) = (least.min(a.length()), most.max(a.length()));
+            }
+            for (i, j) in [(0, 1), (1, 2), (0, 2)] {
+                shear = shear.max(axes[i].normalize_or_zero().dot(axes[j].normalize_or_zero()).abs());
+            }
+        }
+        (mirrored, broken, least, most, shear)
     }
 
     /// The model's parts as meshes and materials: every attribute, the indices, and the material's fields.
@@ -377,8 +422,13 @@ pub(crate) mod thug2 {
 
     #[test]
     fn thug2_draws_exactly_what_it_did() {
-        let pose = t2::Pose { palette: (0..40).map(|i| palette(i as f32 * 0.61)).collect(), draw: palette(3.3) };
-        let got = [posed(&pose, [100.0, 2.0, -40.0], [112.0, 3.0, -38.0]), built(&model())];
+        let pose = |seed: f32| {
+            let mut draw = palette(3.3 + seed);
+            // (in game units, moved a step: 12 inches along x)
+            (draw[12], draw[13], draw[14]) = (100.0 + seed * 120.0, 2.0 + seed * 10.0, -40.0 + seed * 20.0);
+            t2::Pose { palette: (0..40).map(|i| palette(i as f32 * 0.61 + seed)).collect(), draw }
+        };
+        let got = [posed(&pose(0.0), &pose(0.1)), built(&model())];
         eprintln!("thug2 synthetic: {got:?}");
         assert_eq!(got, RECORDED_THUG2);
     }
@@ -400,8 +450,8 @@ pub(crate) mod thug2 {
             t2::Triangle { v: [[cx - 400.0, 0.0, cz - 400.0], [cx + 400.0, 0.0, cz + 400.0], [cx + 400.0, 0.0, cz - 400.0]], flags: t2::face::SKATABLE, terrain: 0 },
         ];
         engine.set_world(&floor, Some(t2::Spawn { point: [cx, 20.0, cz - 300.0], heading_degrees: 0.0 }));
-        let mut previous = None;
-        let mut current = None;
+        let (mut previous, mut current) = (t2::Pose::default(), t2::Pose::default());
+        let (mut mirrored, mut broken, mut least, mut most, mut shear) = (0, 0, f32::MAX, 0.0f32, 0.0f32);
         for frame in 0..90 {
             let mut pad = t2::PAD_AT_REST;
             if frame >= 20 {
@@ -410,19 +460,28 @@ pub(crate) mod thug2 {
             if (60..=64).contains(&frame) {
                 pad.buttons |= t2::buttons::CROSS;
             }
-            previous = current;
-            current = engine.step(&pad).expect("step");
+            engine.step(&pad).expect("step");
+            std::mem::swap(&mut previous, &mut current);
+            assert!(engine.skater_pose(&mut current));
+            let (m, b, l, h, s) = makeup(&current);
+            (mirrored, broken, least, most, shear) = (mirrored + m, broken + b, least.min(l), most.max(h), shear.max(s));
         }
-        let (before, now) = (previous.expect("a skater").position, current.expect("a skater").position);
         let model = engine.skater_model().expect("its model");
-        let mut pose = t2::Pose::default();
-        assert!(engine.skater_pose(&mut pose));
-        let got = [posed(&pose, before, now), built(&model)];
-        eprintln!("thug2 real: {got:?} ({} parts, {} joints, {before:?} -> {now:?})", model.meshes.len(), pose.palette.len());
+        let got = [posed(&previous, &current), built(&model)];
+        eprintln!("thug2 real: {got:?} ({} parts, {} joints)", model.meshes.len(), current.palette.len());
+        eprintln!(
+            "thug2 real palettes and draw matrices, 90 steps: {mirrored} mirrored, {broken} not separable, axis lengths \
+             {least}..{most}, most shear (cosine) {shear}"
+        );
         assert_eq!(got, RECORDED_THUG2_REAL);
     }
 
-    /// Recorded at 8773c47, as Skate 3's.
-    const RECORDED_THUG2: [&str; 2] = ["33344 bytes 9f9943545708ccca", "1028 bytes 5cf400bfb29176e8"];
-    const RECORDED_THUG2_REAL: [&str; 2] = ["33344 bytes f6763fb9dcb1e942", "568712 bytes 88922c8caceb6a32"];
+    /// Recorded at 8773c47, as Skate 3's (the poses: ["33344 bytes 9f9943545708ccca"] synthetic,
+    /// ["33344 bytes f6763fb9dcb1e942"] real). Re-recorded with generic pose interpolation, on purpose: the poses are
+    /// now drawn between the game's last two steps' poses (root and every joint blended by the model layer), not the
+    /// newest pose slid back by the skater's move, so `posed` takes two poses and its digests changed; the parts
+    /// (`built`) are unchanged. The real game's palettes and draw matrices over the run: none mirrored, none that won't
+    /// come apart, axes 0.81..1.03 long, no shear (cosines under 1e-6).
+    const RECORDED_THUG2: [&str; 2] = ["66688 bytes d9a041747b850d5b", "1028 bytes 5cf400bfb29176e8"];
+    const RECORDED_THUG2_REAL: [&str; 2] = ["66688 bytes de9d8b900e1813cc", "568712 bytes 88922c8caceb6a32"];
 }

@@ -34,8 +34,8 @@ pub(crate) const SKATE3: EngineSet = EngineSet(Engine::Skate3);
 #[derive(Resource, Default, Debug)]
 pub(crate) struct Hold {
     paused: bool,
-    /// The blend between the last two fixed ticks' snapshots when it paused.
-    alpha: f32,
+    /// The fixed clock's time now (`now`) when it paused.
+    now: std::time::Duration,
 }
 
 impl Hold {
@@ -43,7 +43,7 @@ impl Hold {
     #[cfg_attr(not(any(feature = "xr", test)), allow(dead_code))]
     pub(crate) fn set(&mut self, paused: bool, fixed: &Time<Fixed>) {
         if paused && !self.paused {
-            self.alpha = fixed.overstep_fraction();
+            self.now = Self::clock(fixed);
         }
         self.paused = paused;
     }
@@ -52,10 +52,15 @@ impl Hold {
         self.paused
     }
 
-    /// How far to blend from the previous fixed tick's snapshot to the last one: the fixed clock's overstep, or
-    /// where it was when Skate 3 paused.
-    pub(crate) fn alpha(&self, fixed: &Time<Fixed>) -> f32 {
-        if self.paused { self.alpha } else { fixed.overstep_fraction() }
+    /// Skate 3's clock now, to draw its ticks' poses by (`crate::model::PoseHistory::alpha`): the fixed clock's time
+    /// and its leftover towards the next tick (so the time since the last tick is the overstep), or where it was when
+    /// Skate 3 paused.
+    pub(crate) fn now(&self, fixed: &Time<Fixed>) -> std::time::Duration {
+        if self.paused { self.now } else { Self::clock(fixed) }
+    }
+
+    fn clock(fixed: &Time<Fixed>) -> std::time::Duration {
+        fixed.elapsed() + fixed.overstep()
     }
 }
 
@@ -225,6 +230,12 @@ mod tests {
     struct Seen {
         ticks: u32,
         alphas: Vec<f32>,
+        /// The last tick's step on the fixed clock, as `presentation::capture` stamps a pose.
+        step: engine_core::Step,
+        /// Frames where the generic alpha (`Step::alpha` at `Hold::now`) and the fixed clock's overstep fraction
+        /// differ in any bit, while running.
+        unequal: Vec<(f32, f32)>,
+        compared: u32,
     }
 
     /// Skate 3 registered as the headset does it: a fixed-tick system and a drawing one in its set.
@@ -237,14 +248,32 @@ mod tests {
             .init_resource::<Seen>();
         crate::engines::add_engine(&mut app, Engine::Skate3, |_| Ok(()), |app| {
             hold(app);
-            app.add_systems(FixedUpdate, (|mut seen: ResMut<Seen>| seen.ticks += 1).in_set(SKATE3))
-                .add_systems(
-                    Update,
-                    (|hold: Res<Hold>, fixed: Res<Time<Fixed>>, mut seen: ResMut<Seen>| {
-                        seen.alphas.push(hold.alpha(&fixed))
-                    })
-                    .in_set(SKATE3),
-                );
+            app.add_systems(
+                FixedUpdate,
+                (|mut seen: ResMut<Seen>, mut fixed: ResMut<Time<Fixed>>| {
+                    seen.ticks += 1;
+                    // (the sim sets its cadence each tick, as `physics::advance` does: here 10 or 12 ms)
+                    let next = std::time::Duration::from_millis(if seen.ticks % 7 < 4 { 10 } else { 12 });
+                    fixed.set_timestep(next);
+                    seen.step = engine_core::Step { at: fixed.elapsed(), period: fixed.timestep() };
+                })
+                .in_set(SKATE3),
+            )
+            .add_systems(
+                Update,
+                (|hold: Res<Hold>, fixed: Res<Time<Fixed>>, mut seen: ResMut<Seen>| {
+                    let alpha = seen.step.alpha(hold.now(&fixed));
+                    if !hold.paused() && seen.ticks > 0 {
+                        seen.compared += 1;
+                        let old = fixed.overstep_fraction();
+                        if old.to_bits() != alpha.to_bits() {
+                            seen.unequal.push((old, alpha));
+                        }
+                    }
+                    seen.alphas.push(alpha)
+                })
+                .in_set(SKATE3),
+            );
         });
         app
     }
@@ -284,5 +313,20 @@ mod tests {
         assert!(ticks <= 2, "the first frame back steps as any 15 ms frame does, not 1.5 s worth: {ticks}");
         let (ticks, _) = frames(&mut app, 20);
         assert!((20..=40).contains(&ticks), "{ticks}");
+    }
+
+    /// The generic alpha (the time since the last tick's step, in its period, at Skate 3's clock now) is the fixed
+    /// clock's overstep fraction, the old alpha, in every bit, through cadence changes.
+    #[test]
+    fn skate3s_alpha_is_the_fixed_clocks_overstep_exactly() {
+        let mut app = app();
+        // (frames of 15 ms then 7 ms then 4 ms: none, one or two ticks a frame)
+        for ms in [15, 7, 4] {
+            app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(ms)));
+            frames(&mut app, 60);
+        }
+        let seen = app.world().resource::<Seen>();
+        assert!(seen.compared > 150, "{}", seen.compared);
+        assert!(seen.unequal.is_empty(), "{:?}", seen.unequal);
     }
 }
