@@ -34,23 +34,6 @@ pub(crate) struct Options {
     pub files: std::path::PathBuf,
 }
 
-/// Whether this launch builds the clean app (no Skate 3 data to load).
-#[cfg(feature = "retail")]
-pub(crate) fn wanted() -> bool {
-    #[cfg(target_os = "android")]
-    {
-        // With imported data the app carries Skate 3 (beside SK8 and THUG2: switched in the menu).
-        match crate::android::files_dir() {
-            Ok(files) => !files.join("assets/private/game.json").is_file(),
-            Err(_) => true,
-        }
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        std::env::args().any(|a| a == "--clean")
-    }
-}
-
 fn options() -> Result<Options, String> {
     let mut o = Options::default();
     #[cfg(target_os = "android")]
@@ -114,6 +97,16 @@ fn build(options: Options) -> App {
         settings::{Backends, InstanceFlags, RenderCreation, WgpuSettings},
     };
     let mut app = App::new();
+    // Skate 3, carried when the player's data is there (the headset, or `--xr` with it): its data an asset source,
+    // which has to be there before the plugins.
+    #[cfg(all(feature = "xr", feature = "retail"))]
+    let skate3 = options.xr.and_then(|_| crate::skate3::assets(&options.files));
+    #[cfg(not(all(feature = "xr", feature = "retail")))]
+    let skate3: Option<std::path::PathBuf> = None;
+    #[cfg(all(feature = "xr", feature = "retail"))]
+    if let Some(assets) = &skate3 {
+        crate::skate3::register_assets(&mut app, assets);
+    }
     let plugins = DefaultPlugins
         .set(WindowPlugin {
             primary_window: Some(Window {
@@ -146,9 +139,16 @@ fn build(options: Options) -> App {
     let xr = options.xr.is_some();
     #[cfg(feature = "xr")]
     if let Some(xr_options) = options.xr {
+        // (with Skate 3, the room's floor goes where its test course's landing floor is, for every engine)
+        #[cfg(feature = "retail")]
+        if skate3.is_some() {
+            app.insert_resource(crate::xr::rig::WorldOrigin(Vec3::new(0.0, skate3_sim::physics::ground::FLOOR_HEIGHT, 0.0)));
+        }
         app.add_plugins(crate::xr::XrPlugin { options: xr_options, files: options.files.clone() });
-        add_xr_engines(&mut app, &options.files, crate::engines::Engine::Sk8);
+        add_xr_engines(&mut app, &options.files, skate3);
     }
+    #[cfg(not(feature = "xr"))]
+    let _ = skate3;
     // SK8_ROOM_LIGHT: the room light on the desktop park (see `xr::room_light`).
     #[cfg(feature = "xr")]
     if !xr && let Some(source) = crate::xr::room_light::preview_source() {
@@ -198,15 +198,23 @@ fn build(options: Options) -> App {
     app
 }
 
-/// The headset app's engines: SK8, and THUG2 when the app is built with it (Skate 3, when its data is there, is
-/// added by its own app: `crate::app`). The engine to start on is the one last played (`engine.txt` in `files`),
-/// else `first`; a Skate 3 import just finished (`use-retail-data`, the importer's mark) starts on Skate 3 once.
+/// The headset app's engines: Skate 3 when the player's data is there (`skate3`: its `assets`), SK8, and THUG2 when
+/// the app is built with it. The engine to start on is the one last played (`engine.txt` in `files`), else Skate 3
+/// if it is carried, else SK8; a Skate 3 import just finished (`use-retail-data`, the importer's mark) starts on
+/// Skate 3 once.
 #[cfg(feature = "xr")]
-pub(crate) fn add_xr_engines(app: &mut App, files: &std::path::Path, first: crate::engines::Engine) {
+pub(crate) fn add_xr_engines(app: &mut App, files: &std::path::Path, skate3: Option<std::path::PathBuf>) {
     use crate::engines::{Engine, Engines};
     let sk8_files = files.to_path_buf();
-    // (the skating sounds are shared, not SK8's own: installed first, outside the engine)
+    // (the skating sounds are shared, not an engine's own: installed first, outside the engines)
     crate::skate_audio::clean::install(app);
+    let first = if skate3.is_some() { Engine::Skate3 } else { Engine::Sk8 };
+    #[cfg(feature = "retail")]
+    if let Some(assets) = skate3 {
+        crate::skate3::install(app, files, assets);
+    }
+    #[cfg(not(feature = "retail"))]
+    let _ = skate3;
     crate::engines::add_engine(app, Engine::Sk8, |_| Ok(()), move |app| add_sk8(app, &sk8_files, true));
     #[cfg(feature = "thug2")]
     crate::thug2::install(app, files);

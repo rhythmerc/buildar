@@ -300,7 +300,7 @@ the same way skate's park annotations do. Nothing in core has to change.
 | 5 | World, teleport, link and trick text into the engines (grind deferral; THUG2 face classes and units) | S-M |
 | 6 | Model and pose: generic binding and blending; engines provide the source and pose | M |
 | 7 | Audio: voices, pull stream and events; the dead decode path removed | M |
-| 8 | One generic driver replaces `thug2.rs`, `link_retail.rs` and `add_retail`; one host builder; Skate 3 boots lazily; the Android asset-source hack goes | L |
+| 8 | One generic driver replaces `thug2.rs`, `link_retail.rs` and `add_retail`; one host builder; Skate 3 boots lazily; the Android asset-source hack goes (done 2026-11-17) | L |
 | 9 | A generic data installer and pages | S |
 | 10 | `thug2-sys` moves into thug2-headless | S |
 | 11 | Optional: SK8 onto the contract | M |
@@ -560,6 +560,36 @@ physics, presentation, the XR adapter) headless, a tick a frame: a floor and a r
 flicked into an ollie, held 25 frames; each tick's link, trick text and pose (root, joints, cut) digested
 (`b605958c0fd9cde4`, the same run to run). The script is by frame; the adapter takes the stage and placements in the
 frame's update after its tick, so its harness gives them a frame early.
+
+**8.3 and 8.4, as done (2026-11-17):** Skate 3 is hosted by the driver like THUG2; there is one host builder, and
+nothing loads before the app.
+- **Skate 3** (`skate3_engine::engine`): the sim made on the driver's worker from the player's data (its camera, the
+  skater's model as its GLB, its trick display, its own sound graph or the carried sounds), the pad collected and the
+  default preferences applied each frame, the player's eyes as the off-board view, the stage and park (not
+  mid-grind), placing, each tick with its pose, HUD advance, multiplier sound and audio observation; the link, trick
+  text and skating sounds as the skate mode's. Checked by `skate3_gate`: hosted by the driver, the scripted run's
+  digest is the old adapter's (`b605958c0fd9cde4`), all 214 ticks.
+- **The driver** gained glTF models (the scene loaded from the engine's asset source, its skins bound to the pose's
+  joints by name once in, posed bone-local between steps with its bodies; the old drawing before the first tick is
+  gone: a model shows from its first pair), an engine's own stream (made on its thread, played from the player and
+  held with the engine), and settings (`EngineCore::set_setting`: the player's choices given to the engine each time
+  it is made, and as they change).
+- **Skate 3's option** (the user, 2026-11-17): the trick display's multiplier circle (`multiplier_mc`, its timer and
+  background) always shown, on by default (`skate3.json`, the "Skate 3: HUD" page). Retail fades it out when a line
+  ends (`clear`, `clearlong`); held, its parts keep their first frame's colours after every advance of the movie,
+  its timer and values still running (`skate3_engine::hud::Hud::set_circle_always`).
+- **One host builder** (`clean::build`): Skate 3 is carried when the player's data is there (`skate3::assets`: the
+  headset's `files/assets`, or `--assets`/`SKATE3_ASSET_ROOT`, with `private/game.json`), its data registered as the
+  `skate3` asset source before the plugins (in place of the Android default-source override), the room's floor at its
+  test course's height, and Skate 3 the first engine; it loads when first picked.
+- **Gone:** the flat desktop Skate 3 run and the retail app builder (`app.rs`, `physics`, `presentation`, `animation`,
+  `world`, `input`, `camera`, `replay`, `grind_world`, `graph_runtime`, `assets`, `skate3_hud`, `logging`, `setup`,
+  `player_audio`, `xr::link_retail`, the retail `Config`), `Hold` (the driver holds every engine), the model layer's
+  per-snapshot `extra` (the desktop camera's shot), and the APK's bundled-pack path (`clean_pack`,
+  `android::asset_root`: unreachable since the app chose its tier by `files/assets/private/game.json`). The desktop
+  keeps `--clean` and `--xr`; `skate3rust.exe` in the import guide is the upstream engine's Windows build.
+- **Parity:** the clean sounds' Skate 3 digest unchanged (`skate3_engine::sound::Heard` fed as the adapter fed it);
+  `model_parity` unchanged (its drawings through the generic histories; the fallback joints kept for the digest only).
 
 Shared policies: the driver steps an engine only while `PadHeld.pause` is off (both engines' hold); a step error marks
 the engine failed (THUG2's way; Skate 3 exited the app); whether an engine steps before it has a stage is its own.

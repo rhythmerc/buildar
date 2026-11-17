@@ -101,15 +101,6 @@ pub(crate) struct XrPlugin {
     pub files: std::path::PathBuf,
 }
 
-/// The faithful port's adapter and controls: added as the Skate 3 engine's.
-#[cfg(feature = "retail")]
-pub(crate) fn add_retail_link(app: &mut App) {
-    app.add_plugins(link::RetailLinkPlugin);
-    app.world_mut()
-        .resource_mut::<ui::ControlsSheet>()
-        .set(crate::engines::Engine::Skate3, skate3_engine::input::CONTROLS.to_vec());
-}
-
 impl Plugin for XrPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(XrFiles(self.files.clone()))

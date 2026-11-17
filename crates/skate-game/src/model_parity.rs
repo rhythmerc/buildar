@@ -54,14 +54,13 @@ fn matrix(seed: f32) -> Mat4 {
 mod skate3 {
     use super::*;
     use crate::model::{JointBinding, blend};
-    use crate::presentation::{Presentation, Shot};
     use engine_core::Pose;
     use std::time::Duration;
 
-    /// A completed tick as the engine gives it, with the desktop camera's shot of it and the step's period.
+    /// A completed tick as the engine gives it, and the step's period. (Recorded with the desktop camera's shot of
+    /// each tick beside it, which was never drawn into these: the flat run is gone.)
     pub(crate) struct Tick {
         pub pose: Pose,
-        pub shot: Shot,
         pub period: Duration,
     }
 
@@ -77,19 +76,18 @@ mod skate3 {
             .iter()
             .map(|&(joint, parent)| JointBinding { entity: world.spawn_empty().id(), joint, parent })
             .collect();
-        let replay = crate::replay::Replay::default();
-        let mut history = Presentation::default();
+        let mut history = crate::model::PoseHistories::default();
         // (no pair yet: the live pose, unblended)
-        assert!(history.view(&replay, 0.5).is_none());
+        assert!(history.get(0).and_then(|h| h.view(0.5)).is_none());
         let joints = crate::model::joint_transforms(&bindings, fallback, basis);
         b.n(joints.len());
         joints.iter().for_each(|&(_, t)| b.t(t));
         for tick in ticks {
             let mut pose = tick.pose.clone();
             pose.step.period = tick.period;
-            history.0.offer(&pose, tick.shot);
+            history.offer(&pose);
             for alpha in ALPHAS {
-                let (previous, current, alpha) = history.view(&replay, alpha).expect("a pair");
+                let (previous, current, alpha) = history.get(0).and_then(|h| h.view(alpha)).expect("a pair");
                 b.t(blend(previous.root, current.root, alpha));
                 let locals = crate::model::joint_locals(&bindings, &previous.joints, &current.joints, basis, alpha);
                 b.n(locals.len());
@@ -114,7 +112,6 @@ mod skate3 {
                         joints: (0..count).map(|i| matrix(s * 0.21 + i as f32 * 0.77)).collect(),
                         ..Default::default()
                     },
-                    shot: Shot { camera: Transform::from_matrix(matrix(s + 9.0)), fov: 1.0 + s * 0.01 },
                     period: Duration::from_micros(if g >= 6 { 33_333 } else { 16_667 }),
                 }
             })
@@ -159,7 +156,6 @@ mod skate3 {
             skate3_engine::model::pose(&sim.skater, &frame, &mut pose);
             ticks.push(Tick {
                 pose,
-                shot: Shot { camera: crate::presentation::camera_transform(frame), fov: frame.field_of_view_degrees.to_radians() },
                 period: if i == 100 { Duration::from_micros(1) } else { sim.period() },
             });
         }
@@ -275,14 +271,14 @@ pub(crate) mod thug2 {
         let period = thug2_engine::model::PERIOD;
         let mut b = Bytes::default();
         for cut in [false, true] {
-            let mut history = crate::model::PoseHistories::<()>::default();
+            let mut history = crate::model::PoseHistories::default();
             for (generation, game) in [(1, before), (2, now)] {
                 let mut contract = engine_core::Pose::default();
                 thug2_engine::model::pose(game, &mut contract);
                 contract.generation = generation;
                 contract.discontinuity = cut && generation == 2;
                 contract.step = Step { at: period * generation as u32, period };
-                history.offer(&contract, ());
+                history.offer(&contract);
             }
             let history = history.get(thug2_engine::model::SKATER).expect("its history");
             for since in [0.0, 0.4, 0.5, 1.0] {

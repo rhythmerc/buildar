@@ -17,11 +17,12 @@
 //! engine's (hidden and paused while another runs), and its start-up runs when the engine is first picked.
 use crate::engine_audio::{Heard, VoiceEmitter, VoicePcm, Voices};
 use crate::engines::{Engine, EngineSet};
-use crate::model::{FlatModel, PoseHistories};
+use crate::model::{FlatModel, JointBinding, PoseHistories};
 use crate::xr::link::{CurrentPark, CurrentStage, PlacePlayer, SkaterLink};
 use bevy::prelude::*;
 use engine_core::audio::Voice;
 use engine_core::model::BodyGroup;
+use std::collections::BTreeMap;
 use engine_core::{EngineCore, EngineFactory, Focus, ModelSource, Pose, Step};
 use std::marker::PhantomData;
 use std::path::PathBuf;
@@ -62,7 +63,7 @@ pub(crate) struct Driver<M: Hosted> {
     /// Its clock against real time (1: the game's own speed), and its sounds' level: the adapter's settings.
     pub(crate) speed: f32,
     pub(crate) volume: f32,
-    poses: PoseHistories<()>,
+    poses: PoseHistories,
     scratch: Vec<Pose>,
     heard: Heard,
     voices: Voices,
@@ -71,13 +72,19 @@ pub(crate) struct Driver<M: Hosted> {
     focus: [Option<Focus>; 2],
     /// A placement asked before the engine ran.
     pending: Option<PlacePlayer>,
-    model: Option<(FlatModel, Vec<BodyGroup>)>,
+    model: Option<Drawn>,
+    /// Where its glTF models load from (an asset source the host registered for its data).
+    assets: Option<&'static str>,
+    /// The player's choices of its settings, and those not given to it yet.
+    settings: BTreeMap<String, f32>,
+    unsaid: Vec<String>,
+    stream: Option<crate::engine_audio::EngineStream>,
     hud: engine_core::hud::HudFrame,
     _engine: PhantomData<M>,
 }
 
 impl<M: Hosted> Driver<M> {
-    fn new(factory: EngineFactory, marker: Option<PathBuf>) -> Self {
+    fn new(factory: EngineFactory, marker: Option<PathBuf>, assets: Option<&'static str>) -> Self {
         Self {
             phase: Mutex::new(Phase::Idle(Some(factory))),
             marker,
@@ -95,8 +102,20 @@ impl<M: Hosted> Driver<M> {
             focus: [None; 2],
             pending: None,
             model: None,
+            assets,
+            settings: BTreeMap::new(),
+            unsaid: Vec::new(),
+            stream: None,
             hud: default(),
             _engine: PhantomData,
+        }
+    }
+
+    /// One of the engine's settings, as the player chose it: given to it now, or once it is made.
+    pub(crate) fn set_setting(&mut self, key: &str, value: f32) {
+        if self.settings.get(key) != Some(&value) {
+            self.settings.insert(key.to_owned(), value);
+            self.unsaid.push(key.to_owned());
         }
     }
 
@@ -114,7 +133,7 @@ impl<M: Hosted> Driver<M> {
     }
 
     #[cfg(test)]
-    pub(crate) fn poses(&self) -> &PoseHistories<()> {
+    pub(crate) fn poses(&self) -> &PoseHistories {
         &self.poses
     }
 
@@ -142,7 +161,10 @@ impl<M: Hosted> Driver<M> {
 
     #[cfg(test)]
     pub(crate) fn model(&self) -> Option<&FlatModel> {
-        self.model.as_ref().map(|(m, _)| m)
+        match &self.model {
+            Some(Drawn::Flat(m, _)) => Some(m),
+            _ => None,
+        }
     }
 
     /// Where the player was after the last two steps.
@@ -152,16 +174,24 @@ impl<M: Hosted> Driver<M> {
     }
 }
 
-/// Hosts the engine `M` made by `factory` (`marker`: the file there while it starts). Call it inside the engine's
-/// `engines::add_engine`.
-pub(crate) fn install<M: Hosted>(app: &mut App, factory: EngineFactory, marker: Option<PathBuf>) {
+/// A model spawned: given as meshes, or a glTF scene (its skins bound to the pose's joints by name once loaded).
+enum Drawn {
+    Flat(FlatModel, Vec<BodyGroup>),
+    Gltf { root: Entity, names: Vec<String>, basis: Mat4, parents: Vec<Option<u16>>, groups: Vec<BodyGroup>, bindings: Option<Vec<JointBinding>> },
+}
+
+/// Hosts the engine `M` made by `factory` (`marker`: the file there while it starts; `assets`: the asset source its
+/// glTF models load from). Call it inside the engine's `engines::add_engine`.
+pub(crate) fn install<M: Hosted>(app: &mut App, factory: EngineFactory, marker: Option<PathBuf>, assets: Option<&'static str>) {
     crate::engine_audio::add_voice_source(app);
-    app.insert_resource(Driver::<M>::new(factory, marker))
+    crate::engine_audio::add_stream_source(app);
+    app.insert_resource(Driver::<M>::new(factory, marker, assets))
         .add_systems(Startup, (boot::<M>, spawn_stand_in::<M>))
         .add_systems(
             Update,
             (
                 finish_boot::<M>,
+                bind_gltf::<M>,
                 input::<M>,
                 place::<M>,
                 offer::<M>,
@@ -169,6 +199,7 @@ pub(crate) fn install<M: Hosted>(app: &mut App, factory: EngineFactory, marker: 
                 step::<M>,
                 publish::<M>.before(crate::skate_audio::clean::SkaterSoundSet),
                 play::<M>,
+                play_stream::<M>,
                 draw_hud::<M>,
             )
                 .chain()
@@ -236,18 +267,39 @@ fn finish_boot<M: Hosted>(world: &mut World) {
     match made {
         Ok(mut core) => {
             let mut spawned = None;
-            for model in core.models() {
-                match &model.source {
-                    ModelSource::Meshes { meshes, textures, joint_count } if spawned.is_none() => {
-                        let flat = crate::model::spawn_meshes(world, &format!("{name} player"), meshes, textures, *joint_count);
-                        spawned = Some((flat, model.groups.clone()));
+            let assets = world.resource::<Driver<M>>().assets;
+            for model in core.models().into_iter().take(1) {
+                spawned = match model.source {
+                    ModelSource::Meshes { meshes, textures, joint_count } => {
+                        let flat = crate::model::spawn_meshes(world, &format!("{name} player"), &meshes, &textures, joint_count);
+                        Some(Drawn::Flat(flat, model.groups))
                     }
-                    _ => warn!("{name}: a model the driver can't draw yet"),
-                }
+                    ModelSource::Gltf { path, joint_names, basis } => {
+                        let mut at = bevy::asset::AssetPath::from(path);
+                        if let Some(source) = assets {
+                            at = at.with_source(source);
+                        }
+                        let scene = world.resource::<AssetServer>().load(GltfAssetLabel::Scene(0).from_asset(at));
+                        let root = world
+                            .spawn((Transform::default(), Visibility::Hidden, Name::new(format!("{name} player"))))
+                            .with_children(|p| {
+                                p.spawn(SceneRoot(scene));
+                            })
+                            .id();
+                        Some(Drawn::Gltf { root, names: joint_names, basis, parents: model.parents, groups: model.groups, bindings: None })
+                    }
+                };
             }
+            let stream = core.stream().map(|factory| crate::engine_audio::EngineStream::start(name, factory));
             let pending = {
                 let mut driver = world.resource_mut::<Driver<M>>();
                 driver.model = spawned;
+                driver.stream = stream;
+                // (the player's choices of its settings, each time it is made)
+                for (key, value) in &driver.settings {
+                    core.set_setting(key, *value);
+                }
+                driver.unsaid.clear();
                 let pending = driver.pending.take();
                 if let Some(place) = pending {
                     core.place_player(place.0);
@@ -283,7 +335,13 @@ fn input<M: Hosted>(
     eyes: Query<&Transform, With<bevy_mod_xr::camera::XrCamera>>,
     mut driver: ResMut<Driver<M>>,
 ) {
+    let driver = &mut *driver;
     let Some(core) = running::<M>(&mut driver.phase) else { return };
+    for key in driver.unsaid.drain(..) {
+        if let Some(value) = driver.settings.get(&key) {
+            core.set_setting(&key, *value);
+        }
+    }
     core.set_input(&touch.0, **held);
     let view = rig.and_then(|r| r.root_transform()).zip(eyes.iter().next()).map(|(root, eye)| {
         let turn = root.rotation * eye.rotation;
@@ -355,7 +413,7 @@ fn step<M: Hosted>(time: Res<Time<Real>>, held: Res<engine_api::PadHeld>, mut dr
         for pose in &mut d.scratch {
             pose.generation = d.steps;
             pose.step = Step { at: d.clock, period };
-            d.poses.offer(pose, ());
+            d.poses.offer(pose);
         }
         d.focus = [d.focus[1], core.focus()];
         d.heard_now.clear();
@@ -426,37 +484,128 @@ fn draw_hud<M: Hosted>(mut driver: ResMut<Driver<M>>, mut renderer: crate::engin
     }
 }
 
-/// The models where the engine's poses have them, between its last two steps ([`crate::model::flat_blend`]), and
-/// their bodies with them.
+/// A glTF model's skins bound to the pose's joints once its scene is in (each visible rig, its authored inverse binds
+/// kept; a skinned mesh isn't culled by its bind-pose bounds).
+#[allow(clippy::type_complexity)]
+fn bind_gltf<M: Hosted>(
+    mut commands: Commands,
+    mut driver: ResMut<Driver<M>>,
+    skins: Query<(Entity, &bevy::mesh::skinning::SkinnedMesh, Has<bevy::camera::visibility::NoFrustumCulling>)>,
+    nodes: Query<(&Name, &Transform)>,
+    parents: Query<&ChildOf>,
+    visibility: Query<&Visibility>,
+) {
+    let Some(Drawn::Gltf { root, names, bindings: bindings @ None, .. }) = &mut driver.model else { return };
+    let root = *root;
+    let under = |e: Entity| parents.iter_ancestors(e).any(|a| a == root);
+    for (entity, _, unculled) in &skins {
+        if !unculled && under(entity) {
+            commands.entity(entity).insert(bevy::camera::visibility::NoFrustumCulling);
+        }
+    }
+    let rigs = skins.iter().filter_map(|(entity, skin, _)| {
+        let shown = !parents
+            .iter_ancestors(entity)
+            .take_while(|a| *a != root)
+            .any(|a| visibility.get(a).is_ok_and(|v| *v == Visibility::Hidden));
+        (under(entity) && shown).then_some(skin.joints.as_slice())
+    });
+    match crate::model::bind_skins(
+        names,
+        rigs,
+        |e| nodes.get(e).ok().map(|(name, transform)| (name.as_str().to_owned(), transform.to_matrix())),
+        |e| parents.iter_ancestors(e).collect(),
+        |e| e == root,
+    ) {
+        Ok(bound) if bound.is_empty() => {}
+        Ok(bound) => {
+            info!("{}: its model bound ({} joints)", M::ENGINE.name(), bound.len());
+            *bindings = Some(bound);
+        }
+        Err(why) => {
+            error!("{}: its model can't be drawn: {why}", M::ENGINE.name());
+            *bindings = Some(Vec::new());
+        }
+    }
+}
+
+/// The model where the engine's poses have it, between its last two steps, and its bodies with it: as meshes, each
+/// joint's matrix ([`crate::model::flat_blend`]); as a glTF, its root and its bound joints' local transforms
+/// ([`crate::model::joint_locals`]).
 fn pose_models<M: Hosted>(
     mut driver: ResMut<Driver<M>>,
     mut q: Query<(&mut Transform, &mut Visibility)>,
     mut bodies: ResMut<engine_api::PlayerBodies>,
 ) {
     let d = &mut *driver;
-    let Some((model, groups)) = &d.model else { return };
-    let view = d.poses.get(0).and_then(|h| h.view_at(d.clock + Duration::from_secs_f32(d.accum.max(0.0))));
-    let shown = d.focus[1].is_some() && view.is_some();
-    if let Ok((_, mut visibility)) = q.get_mut(model.root) {
+    let now = d.clock + Duration::from_secs_f32(d.accum.max(0.0));
+    let Some(model) = &d.model else { return };
+    let view = d.poses.get(0).and_then(|h| h.view_at(now));
+    let (root, ready) = match model {
+        Drawn::Flat(flat, _) => (flat.root, true),
+        Drawn::Gltf { root, bindings, .. } => (*root, bindings.as_ref().is_some_and(|b| !b.is_empty())),
+    };
+    let shown = ready && d.focus[1].is_some() && view.is_some();
+    if let Ok((_, mut visibility)) = q.get_mut(root) {
         *visibility = if shown { Visibility::Inherited } else { Visibility::Hidden };
     }
     let (true, Some((previous, current, alpha))) = (shown, view) else {
         bodies.set(M::ENGINE, Vec::new());
         return;
     };
-    let (placed, matrices) = crate::model::flat_blend(previous, current, alpha, model.joints.len());
-    // (the parts' own transform - the root's - is where the model is: skinning ignores it, but culling places the
-    // parts' bind-pose bounds with it)
-    if let Ok((mut t, _)) = q.get_mut(model.root) {
-        *t = Transform::from_matrix(placed);
-    }
-    // (its bodies where they are drawn: each point carried by its joint as blended)
-    let point = |p: engine_core::model::Point| Some(matrices.get(usize::from(p.joint))?.transform_point3(p.at));
-    bodies.set(M::ENGINE, crate::model::bodies(groups, &[], point));
-    for (&joint, matrix) in model.joints.iter().zip(&matrices) {
-        if let Ok((mut transform, _)) = q.get_mut(joint) {
-            *transform = Transform::from_matrix(*matrix);
+    match model {
+        Drawn::Flat(flat, groups) => {
+            let (placed, matrices) = crate::model::flat_blend(previous, current, alpha, flat.joints.len());
+            // (the parts' own transform - the root's - is where the model is: skinning ignores it, but culling places
+            // the parts' bind-pose bounds with it)
+            if let Ok((mut t, _)) = q.get_mut(flat.root) {
+                *t = Transform::from_matrix(placed);
+            }
+            // (its bodies where they are drawn: each point carried by its joint as blended)
+            let point = |p: engine_core::model::Point| Some(matrices.get(usize::from(p.joint))?.transform_point3(p.at));
+            bodies.set(M::ENGINE, crate::model::bodies(groups, &[], point));
+            for (&joint, matrix) in flat.joints.iter().zip(&matrices) {
+                if let Ok((mut transform, _)) = q.get_mut(joint) {
+                    *transform = Transform::from_matrix(*matrix);
+                }
+            }
         }
+        Drawn::Gltf { root, basis, parents, groups, bindings, .. } => {
+            let bindings = bindings.as_deref().unwrap_or_default();
+            let placed = crate::model::blend(previous.root, current.root, alpha);
+            if let Ok((mut t, _)) = q.get_mut(*root) {
+                *t = placed;
+            }
+            let locals = crate::model::joint_locals(bindings, &previous.joints, &current.joints, *basis, alpha);
+            for (binding, transform) in bindings.iter().zip(locals) {
+                if let Ok((mut node, _)) = q.get_mut(binding.entity) {
+                    *node = transform;
+                }
+            }
+            // (its bodies where they are drawn: each point between the two steps, carried by the root between them)
+            let point = |p: engine_core::model::Point| {
+                let j = usize::from(p.joint);
+                let (a, b) = (previous.joints.get(j)?.transform_point3(p.at), current.joints.get(j)?.transform_point3(p.at));
+                Some(placed.transform_point(a.lerp(b, alpha)))
+            };
+            bodies.set(M::ENGINE, crate::model::bodies(groups, parents, point));
+        }
+    }
+}
+
+/// The engine's own mix, from where the player is (in AR a spatial emitter there); held with the engine.
+fn play_stream<M: Hosted>(
+    mut commands: Commands,
+    held: Res<engine_api::PadHeld>,
+    spatial: Option<Res<crate::skate_audio::clean::SpatialSkateAudio>>,
+    mut assets: ResMut<Assets<crate::live_pcm::LivePcm>>,
+    mut transforms: Query<&mut Transform>,
+    mut driver: ResMut<Driver<M>>,
+) {
+    let d = &mut *driver;
+    let at = d.focus[1].map(|f| f.feet);
+    if let Some(stream) = &mut d.stream {
+        stream.update(&mut commands, &mut assets, held.pause, at, spatial.is_some(), &mut transforms);
     }
 }
 

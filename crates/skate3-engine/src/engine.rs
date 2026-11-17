@@ -21,6 +21,13 @@ use std::time::Duration;
 /// Its one model, the skater.
 pub const SKATER: engine_core::ModelId = 0;
 
+/// Its settings' keys ([`EngineCore::set_setting`]).
+pub mod settings {
+    /// The trick display's multiplier circle always shown (1, the default), or fading in and out with the line as
+    /// retail has it (0): `crate::hud::Hud::set_circle_always`.
+    pub const CIRCLE_ALWAYS: &str = "hud_circle_always";
+}
+
 /// Skate 3 made on the runtime's worker from the player's imported data (`assets`: the converted installation's
 /// `assets` folder). `own_sound`: its own sound graph (the decoded sound banks are there), else the skating sounds the
 /// runtime carries.
@@ -36,7 +43,10 @@ pub fn factory(assets: PathBuf, difficulty: Difficulty, own_sound: bool) -> Engi
         // (its trick display: without the HUD files, none, and the runtime's corner readout shows the tricks)
         let root = hud::root(&assets);
         let hud = match hud::Hud::load(&root, sim.skater.scoring.hud_input()) {
-            Ok(hud) => Some(hud),
+            Ok(mut hud) => {
+                hud.set_circle_always(true);
+                Some(hud)
+            }
             Err(e) => {
                 eprintln!("Skate 3: its scoring HUD could not load from {}: {e}", root.display());
                 None
@@ -206,6 +216,14 @@ impl EngineCore for Skate3 {
 
     fn hud_texture(&mut self, id: TextureId) -> Option<Rgba8> {
         self.hud.as_mut()?.texture(id)
+    }
+
+    fn set_setting(&mut self, key: &str, value: f32) {
+        if key == settings::CIRCLE_ALWAYS
+            && let Some(hud) = &mut self.hud
+        {
+            hud.set_circle_always(value > 0.5);
+        }
     }
 
     fn skate(&mut self) -> Option<&mut dyn SkateMode> {

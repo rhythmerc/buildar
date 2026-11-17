@@ -41,7 +41,33 @@ pub struct Hud {
     failed: bool,
     /// Advanced since it was last drawn (or not drawn yet).
     changed: bool,
+    /// The multiplier's circle (its clip, `multiplier_mc`): how it is when shown (its first frame, `all`: each depth's
+    /// colour), and whether it is held so ([`Hud::set_circle_always`]).
+    circle: Option<Circle>,
+    circle_always: bool,
 }
+
+/// The multiplier's circle: its clip's character, and each depth's colour when it is shown.
+struct Circle {
+    character: i32,
+    shown: BTreeMap<i32, [u8; 8]>,
+}
+
+/// The clip placed as `multiplier_mc`, and its first frame's colours.
+fn circle(movie: &skate3_sim::apt_movie::Movie) -> Option<Circle> {
+    let character = movie
+        .characters
+        .values()
+        .flat_map(|c| c.frames.iter().flat_map(|f| f.controls.iter()))
+        .find(|c| c.name.as_deref() == Some(CIRCLE))
+        .and_then(|c| c.character_id)?;
+    let first = movie.characters.get(&character)?.frames.first()?;
+    let shown = first.controls.iter().filter_map(|c| Some((c.depth, c.color_transform?))).collect();
+    Some(Circle { character, shown })
+}
+
+/// The multiplier's clip, its circle and timer: shown while a line runs, faded out (`clear`, `clearlong`) once it ends.
+pub const CIRCLE: &str = "multiplier_mc";
 
 impl Hud {
     /// Reads the HUD from `root` (all but the GPU's part, so it can be done off the main thread: it takes seconds),
@@ -70,7 +96,35 @@ impl Hud {
             ids.insert(path, textures.len() as TextureId);
             textures.push(Some(Rgba8 { width: size[0], height: size[1], pixels }));
         }
-        Ok(Hud { runtime, shapes, ids, textures, failed: false, changed: true })
+        let circle = circle(&runtime.bindings.movie);
+        Ok(Hud { runtime, shapes, ids, textures, failed: false, changed: true, circle, circle_always: false })
+    }
+
+    /// The multiplier's circle always shown (`true`), or fading in and out with the line as retail has it. Its
+    /// animations still run (the timer, the multiplier's values); only its fades are held at full.
+    pub fn set_circle_always(&mut self, always: bool) {
+        if self.circle_always != always {
+            self.circle_always = always;
+            self.changed = true;
+            self.hold_circle();
+        }
+    }
+
+    /// The circle's parts at their shown colours, where its timeline has put them (each frame sets them again).
+    fn hold_circle(&mut self) {
+        let (Some(circle), true) = (&self.circle, self.circle_always) else { return };
+        let movie = &mut self.runtime.bindings.movie;
+        let clips: Vec<usize> = movie.instances.iter().filter(|(_, i)| i.character == circle.character).map(|(id, _)| *id).collect();
+        for clip in clips {
+            let children: Vec<(i32, usize)> = movie.instances[&clip].children.iter().map(|(d, c)| (*d, *c)).collect();
+            for (depth, child) in children {
+                if let (Some(color), Some(placement)) =
+                    (circle.shown.get(&depth), movie.instances.get_mut(&child).and_then(|i| i.placement.as_mut()))
+                {
+                    placement.color = *color;
+                }
+            }
+        }
     }
 
     /// A tick of the scoring: the movie advanced with its `input` and what happened (a new trick, the trick modified,
@@ -80,7 +134,9 @@ impl Hud {
             return Ok(());
         }
         self.changed = true;
-        self.runtime.update(input, new, modified, close).inspect_err(|_| self.failed = true)
+        self.runtime.update(input, new, modified, close).inspect_err(|_| self.failed = true)?;
+        self.hold_circle();
+        Ok(())
     }
 
     /// The trick display as it is now, into `out` (its buffers kept), if it has advanced since it was last drawn:
@@ -162,6 +218,58 @@ mod tests {
         let Placement::Hand { metres_per_px, offset, anchor, hand, on_left } = part.placement else { panic!() };
         assert!((metres_per_px * part.size.x - WIDTH_M).abs() < 1e-6);
         assert_eq!((offset, anchor, hand, on_left), (OFFSET, Vec2::new(-0.5, -0.5), None, None));
+    }
+
+    fn input() -> hud_runtime::Input {
+        hud_runtime::Input {
+            sequence_score: 0,
+            line_score: 0,
+            sequence_timer: 0,
+            line_time: 0.0,
+            line_capacity: 0.0,
+            multiplier: 1.0,
+            clean: false,
+            sketchy: false,
+            stance: [false; 4],
+            trick_name: String::new(),
+            trick_metrics: Default::default(),
+            context_tricks: Vec::new(),
+        }
+    }
+
+    /// The real trick display (`SKATE3_ASSET_ROOT`; skipped without it): its circle faded out (`cleared`, the end of
+    /// `clear`) is invisible as retail has it, and shown with the option, at its first frame's colours.
+    #[test]
+    fn the_circle_can_stay_shown() {
+        let Some(assets) = std::env::var_os("SKATE3_ASSET_ROOT") else {
+            eprintln!("SKATE3_ASSET_ROOT not set: skipped");
+            return;
+        };
+        let mut hud = Hud::load(&root(Path::new(&assets)), input()).expect("the HUD");
+        let character = hud.circle.as_ref().expect("its circle").character;
+        let alphas = |hud: &Hud| -> Vec<u8> {
+            let movie = &hud.runtime.bindings.movie;
+            let clip = movie.instances.iter().find(|(_, i)| i.character == character).map(|(id, _)| *id).expect("placed");
+            movie.instances[&clip].children.values().filter_map(|c| movie.instances.get(c)?.placement.as_ref().map(|p| p.color[0])).collect()
+        };
+        let cleared = |hud: &mut Hud| {
+            let movie = &mut hud.runtime.bindings.movie;
+            let clip = movie.instances.iter().find(|(_, i)| i.character == character).map(|(id, _)| *id).unwrap();
+            let frame = movie.characters[&character].frames.len().min(43) - 1;
+            movie.seek(&mut hud.runtime.vm, clip, frame, 0).expect("seek");
+        };
+        cleared(&mut hud);
+        assert!(alphas(&hud).iter().all(|&a| a == 0), "retail's: faded out {:?}", alphas(&hud));
+        hud.set_circle_always(true);
+        let shown: Vec<u8> = hud.circle.as_ref().unwrap().shown.values().map(|c| c[0]).collect();
+        assert!(shown.iter().filter(|&&a| a == 255).count() >= 3, "{shown:?}");
+        assert!(alphas(&hud).iter().filter(|&&a| a == 255).count() >= 3, "held shown {:?}", alphas(&hud));
+        // (and through a tick of the movie, which sets them again)
+        cleared(&mut hud);
+        hud.advance(input(), false, false, false).expect("a tick");
+        assert!(alphas(&hud).iter().filter(|&&a| a == 255).count() >= 3, "after a tick {:?}", alphas(&hud));
+        let mut frame = HudFrame::default();
+        assert!(hud.frame(&mut frame).expect("drawn"));
     }
 
     /// Without its files it says where it looked.

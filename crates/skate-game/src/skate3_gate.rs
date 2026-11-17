@@ -1,7 +1,8 @@
 //! Skate 3 hosted, digested: the real game (`SKATE3_ASSET_ROOT`; skipped without it) given a floor and a rail, put
 //! down, pushed, steered, flicked into an ollie and held a while, one tick a frame; each tick's link, trick text and
 //! pose (root, joints, cut) written down and digested. Recorded through the app's own Skate 3 plugins and adapter
-//! (`xr::link_retail`) before step 8 moves Skate 3 onto the generic driver, to check the move against.
+//! (`xr::link_retail`, at 5f8cd2e: a tick a frame, the stage and placements given in a frame's update after its tick)
+//! before step 8 moved Skate 3 onto the generic driver; hosted by the driver it is the same, tick for tick.
 //!
 //! The script is by frame ([`Script::at`]): a tick each, but none while held. What it gives takes effect before that
 //! frame's tick; each host says when to give it for that.
@@ -63,117 +64,13 @@ pub(crate) fn fnv(text: &str) -> u64 {
     text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
 }
 
-/// The run's digest, recorded through today's adapter (at 5f8cd2e: placed at tick 2, pushing from tick 40, an ollie
+/// The run's digest, recorded through the old adapter (at 5f8cd2e: placed at tick 2, pushing from tick 40, an ollie
 /// landed around tick 175, on the floor at its 8.7 cm deck height).
 pub(crate) const RECORDED: u64 = 0xb605_958c_0fd9_cde4;
 
 /// The real game's data root, if given.
 pub(crate) fn root() -> Option<std::path::PathBuf> {
     std::env::var_os("SKATE3_ASSET_ROOT").map(Into::into)
-}
-
-/// Through the app's Skate 3 plugins (its input, physics and presentation, and the XR adapter), as the headset hosts
-/// it: a tick a frame.
-#[cfg(test)]
-mod adapter {
-    use super::*;
-    use crate::xr::link::{CurrentPark, CurrentStage, PlacePlayer, SkaterLink};
-    use bevy::time::TimeUpdateStrategy;
-
-    #[derive(Resource, Default)]
-    struct Written {
-        out: String,
-        ticks: u32,
-    }
-
-    fn write_tick(
-        physics: Res<crate::physics::GamePhysics>,
-        skater: Res<crate::physics::SkaterRuntime>,
-        camera: Res<crate::camera::CameraRuntime>,
-        mut written: ResMut<Written>,
-        mut pose: Local<engine_core::Pose>,
-    ) {
-        let Some(frame) = camera.frame else { return };
-        skate3_engine::model::pose(&skater, &frame, &mut pose);
-        let link = skate3_engine::stage::link(&physics, &skater);
-        let trick = skate3_engine::trick::text(&skater);
-        let tick = written.ticks;
-        line(&mut written.out, tick, &link, &trick, &pose);
-        written.ticks += 1;
-    }
-
-    #[test]
-    fn skate3_hosted_by_its_adapter() {
-        let Some(root) = root() else {
-            eprintln!("SKATE3_ASSET_ROOT not set: skipped");
-            return;
-        };
-        let bundle = skate3_sim::Bundle::open(&root, &mut |_| {}).expect("the bundle");
-        let config = skate3_sim::SimConfig { difficulty: skate3_sim::difficulty::Difficulty::Easy, map: None, spawn_offset: 0.0 };
-        let mut sim = skate3_sim::Sim::load(&bundle, &config, &mut |_| {}).expect("the sim");
-        sim.load_camera(&root).expect("its camera");
-        let parts = sim.into_parts();
-        let period = parts.physics.period();
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .insert_resource(TimeUpdateStrategy::ManualDuration(period))
-            .insert_resource(crate::config::Config {
-                asset_root: root.clone(),
-                difficulty: crate::difficulty::Difficulty::Easy,
-                check_assets: false,
-                xr: None,
-            })
-            .insert_resource(crate::graph_runtime::StockGraphs(parts.graphs))
-            .insert_resource(crate::physics::GamePhysics(parts.physics))
-            .insert_resource(crate::physics::SkaterRuntime(parts.skater))
-            .insert_resource(crate::camera::CameraRuntime(parts.camera.expect("its camera")))
-            .insert_resource(crate::xr::rig::Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: None })
-            .init_resource::<CurrentStage>()
-            .init_resource::<CurrentPark>()
-            .init_resource::<SkaterLink>()
-            .init_resource::<engine_api::LatestTouch>()
-            .init_resource::<engine_api::PadHeld>()
-            .init_resource::<crate::xr::ui::hud::TrickHud>()
-            .init_resource::<Written>()
-            .add_message::<PlacePlayer>()
-            .add_message::<crate::skate_audio::PlayerAudioObservation>()
-            .configure_sets(
-                FixedUpdate,
-                (crate::app::SimulationSet::Input, crate::app::SimulationSet::Controls, crate::app::SimulationSet::Physics)
-                    .chain()
-                    .in_set(crate::app::SKATE3),
-            );
-        crate::app::hold_for_tests(&mut app);
-        app.init_resource::<crate::replay::Replay>()
-            .add_plugins((crate::input::InputPlugin, crate::physics::PhysicsPlugin, crate::presentation::PresentationPlugin, crate::xr::link::RetailLinkPlugin))
-            .add_systems(FixedUpdate, write_tick.after(crate::app::SimulationSet::Physics).in_set(crate::app::SKATE3));
-        let (stage, park) = Script::stage();
-        // (a tick a frame, but none while held: the script is by frame)
-        for frame in 0..TICKS {
-            let script = Script::at(frame);
-            // (the stage and placements are taken in the frame's update, after its tick: given a frame early)
-            let next = Script::at(frame + 1);
-            if next.stage {
-                app.insert_resource(CurrentStage(stage.clone()));
-                **app.world_mut().resource_mut::<CurrentPark>() = park.clone();
-            }
-            if let Some(place) = next.place {
-                app.world_mut().write_message(PlacePlayer(place));
-            }
-            app.world_mut().resource_mut::<engine_api::LatestTouch>().0 = script.touch;
-            **app.world_mut().resource_mut::<engine_api::PadHeld>() = script.held;
-            app.world_mut().resource_mut::<crate::input::ExternalPad>().set_input(&script.touch, script.held);
-            app.update();
-        }
-        let written = app.world().resource::<Written>();
-        eprintln!("skate3 hosted: {} ticks over {TICKS} frames, digest {:016x}", written.ticks, fnv(&written.out));
-        // (none the first frame: no time has passed)
-        assert_eq!(written.ticks, TICKS - HELD.len() as u32 - 1, "a tick a frame, none held");
-        if let Some(path) = std::env::var_os("SKATE3_GATE_DUMP") {
-            std::fs::write(path, &written.out).unwrap();
-        }
-        assert_eq!(fnv(&written.out), RECORDED);
-    }
 }
 
 /// Through the generic driver (`crate::engine_driver`), Skate 3 as an `engine_core::EngineCore`
@@ -210,6 +107,8 @@ mod driver {
             .init_asset::<StandardMaterial>()
             .init_asset::<Image>()
             .init_asset::<bevy::mesh::skinning::SkinnedMeshInverseBindposes>()
+            // (its GLB is asked for: nothing here loads it, so its skater isn't drawn)
+            .init_asset::<bevy::scene::Scene>()
             .add_plugins(bevy::audio::AudioPlugin::default())
             .insert_resource(TimeUpdateStrategy::ManualDuration(period))
             .insert_resource(crate::xr::rig::Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: None })
@@ -226,7 +125,7 @@ mod driver {
         crate::engine_hud::install(&mut app);
         let factory = skate3_engine::engine::factory(root.clone(), skate3_sim::difficulty::Difficulty::Easy, false);
         crate::engines::add_engine(&mut app, Engine::Skate3, |_| Ok(()), |app| {
-            crate::engine_driver::install::<Skate3>(app, factory, None);
+            crate::engine_driver::install::<Skate3>(app, factory, None, None);
         });
         app.world_mut().resource_mut::<Engines>().request(Engine::Skate3);
         // (the frame it is made in, it ticks: that is the adapter's first tick, its frame 1's, with the stage)

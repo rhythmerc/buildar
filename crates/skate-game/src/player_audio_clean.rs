@@ -1123,37 +1123,31 @@ mod parity {
     #[cfg(feature = "retail")]
     #[test]
     fn skate3s_sounds_are_decided_as_recorded() {
-        use crate::skate_audio::player::{Skate3Heard, feed_clean};
-        use crate::skate_audio::{FrontEndSoundRequest, PlayerAudioObservation};
         let mut world = World::new();
-        world.init_resource::<Messages<PlayerAudioObservation>>();
-        world.init_resource::<Messages<FrontEndSoundRequest>>();
         world.insert_resource(bare());
         world.insert_resource(hints());
         world.insert_resource(Time::<bevy::time::Real>::default());
-        world.insert_resource(Time::<bevy::time::Virtual>::default());
-        world.init_resource::<Skate3Heard>();
         world.init_resource::<SkaterSounds>();
-        let feed = world.register_system(feed_clean);
         let drive = world.register_system(drive);
+        // (as Skate 3's adapter fed it: each tick observed, the front-end sounds one chime, a frame's sounds taken)
+        let mut heard = skate3_engine::sound::Heard::default();
         let mut out = String::new();
         for (frame, ticks) in ticks().into_iter().enumerate() {
             let frame = frame as u64;
             world.resource_mut::<Time<bevy::time::Real>>().update_with_duration(FRAME);
-            let mut virtual_time = world.resource_mut::<Time<bevy::time::Virtual>>();
-            if paused(frame) { virtual_time.pause() } else { virtual_time.unpause() }
             for t in ticks {
-                world.write_message(PlayerAudioObservation(observation(t)));
+                heard.observe(&observation(t));
             }
             if frame == 120 || frame == 121 || frame == 250 {
-                world.write_message(FrontEndSoundRequest(7));
-                world.write_message(FrontEndSoundRequest(8));
+                heard.front_end();
             }
-            world.run_system(feed).unwrap();
+            world.insert_resource(SkaterSounds {
+                engine: Some(crate::engines::Engine::Skate3),
+                paused: paused(frame),
+                sounds: heard.take(),
+            });
             world.run_system(drive).unwrap();
             frame_line(&mut out, frame, &mut world.resource_mut::<CleanAudio>());
-            world.resource_mut::<Messages<PlayerAudioObservation>>().update();
-            world.resource_mut::<Messages<FrontEndSoundRequest>>().update();
         }
         let shots = out.matches(|c| c == '"').count() / 2;
         eprintln!("skate3 clean sounds: {} shots, digest {:016x}", shots, fnv(&out));

@@ -74,7 +74,7 @@ pub(crate) fn install(app: &mut App, files: &Path) {
     crate::engine_hud::install(app);
     app.init_resource::<engine_api::PlayerBodies>();
     engines::add_engine(app, Engine::Thug2, available, |app| {
-        crate::engine_driver::install::<Thug2>(app, factory, Some(marker));
+        crate::engine_driver::install::<Thug2>(app, factory, Some(marker), None);
         app.add_systems(Startup, hud_parts).add_systems(Update, tune.in_set(engines::EngineSet(Engine::Thug2)));
     });
     // (outside THUG2's systems: it shoots whichever engine's skater - another's skinned skater, to compare)

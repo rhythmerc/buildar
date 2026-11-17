@@ -8,18 +8,13 @@
 //!   running engine fills the [`SkaterLink`] (rider and board); the running skate engine's focus is the link's
 //!   ([`focus_from_link`]: the rider, else the board).
 //!
-//! Each engine has an adapter that offers it the stage and park, places the player and fills the link: Skate 3's is
-//! [`RetailLinkPlugin`] here, SK8's lives in `crate::clean::sim`, THUG2's in `crate::thug2`.
+//! The engines hosted by the generic driver (Skate 3, THUG2: `crate::engine_driver`) are offered the stage and park,
+//! placed and read by it; SK8's adapter lives in `crate::clean`.
 use crate::engines::{BeforeSwitch, Engine, EngineSwitched, Engines};
 use bevy::prelude::*;
 pub(crate) use engine_api::skate::{CurrentPark, SkaterLink};
 pub(crate) use engine_api::{CurrentStage, PlacePlayer, PlayerFocus};
 
-#[cfg(feature = "retail")]
-#[path = "link_retail.rs"]
-mod retail;
-#[cfg(feature = "retail")]
-pub(crate) use retail::RetailLinkPlugin;
 
 #[cfg(all(test, feature = "retail", feature = "thug2"))]
 #[path = "stage_parity.rs"]
