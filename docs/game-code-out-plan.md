@@ -419,3 +419,9 @@ sorting rule.
    models draw them.
 3. **`engine-core` lives in its own repo**, pinned by revision like skate3-headless.
 4. **THUG2's game knowledge is Rust,** in a crate in thug2-headless that also takes in `thug2-sys`.
+
+## Noted for later (headset check, 2026-11-16)
+
+- **Spawn facing:** the spawn aiming circle gets a triangle off its edge showing which way the player will face, turned
+  with a twist of the wrist.
+- **Controls page:** revisit it; as it stands it is hard to use.
