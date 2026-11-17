@@ -20,7 +20,7 @@ bevy = { version = "=0.18.1", default-features = false, features = [
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # The engine contract: https://github.com/rhythmerc/buildar-engine-core (Bevy-free; engine-api wraps it for Bevy).
-engine-core = { git = "https://github.com/rhythmerc/buildar-engine-core", rev = "ee2cb555cb0e70fa8fdb8aa5ba982641732daafb" }
+engine-core = { git = "https://github.com/rhythmerc/buildar-engine-core", rev = "b5fa39444f1aa0358ae9924d1e7dbc33b62c050e" }
 # The Skate 3 engine's simulation: https://github.com/rhythmerc/skate3-headless (Bevy-free; the app renders).
 # Bump all three revs together. To build against a local checkout instead, uncomment the [patch] block below.
 skate3-sim = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
@@ -40,9 +40,6 @@ opt-level = 3
 # Local buildar-engine-core checkout (a sibling of this repo):
 # [patch."https://github.com/rhythmerc/buildar-engine-core"]
 # engine-core = { path = "../buildar-engine-core" }
-# (worktree branch: the engine-core branch pose-timing, cloned in .local; repin to its rev once it is on GitHub)
-[patch."https://github.com/rhythmerc/buildar-engine-core"]
-engine-core = { path = ".local/buildar-engine-core" }
 
 # Local skate3-headless checkout (a sibling of this repo):
 # [patch."https://github.com/rhythmerc/skate3-headless"]
