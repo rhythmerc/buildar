@@ -51,7 +51,7 @@ impl Plugin for LinkPlugin {
             .add_systems(PreUpdate, carry_over)
             .add_systems(
                 PostUpdate,
-                focus_from_link.in_set(FocusSet).before(bevy::transform::TransformSystems::Propagate),
+                (focus_from_link.in_set(FocusSet).before(bevy::transform::TransformSystems::Propagate), keep_spot_on_rescale.after(FocusSet)),
             );
         app.world_mut().resource_mut::<BeforeSwitch>().0.push(note_spot);
     }
@@ -64,10 +64,55 @@ fn focus_from_link(engines: Option<Res<Engines>>, link: Res<SkaterLink>, mut foc
     }
 }
 
-/// The running engine's player, as the shared layer follows it.
-pub(crate) fn running_focus(world: &World) -> Option<engine_core::Focus> {
-    let running = world.get_resource::<Engines>()?.current()?;
-    world.resource::<PlayerFocus>().of(running)
+/// How long the world scale is left alone before the player is put back: one placement for a whole slider drag.
+const RESCALE_SETTLE_S: f32 = 0.25;
+
+/// A world-scale change in progress: the scale and root last seen, and the player's spot in the room (tracking space)
+/// from before it began.
+#[derive(Default)]
+struct Rescale {
+    seen: Option<(f32, Transform)>,
+    spot: Option<(Vec3, Vec3)>,
+    changed_at: f32,
+}
+
+/// The world rescaled (any menu's slider): the player is put back on the same real spot once the scale settles. The
+/// spot is taken once, from the focus before the change: while a slider moves, the engine hasn't yet taken the last
+/// placement (Skate 3 turns one down while another is pending), so a focus read then is the old one, in a world
+/// that has since been rescaled.
+fn keep_spot_on_rescale(
+    rig: Res<super::rig::Rig>,
+    engines: Option<Res<Engines>>,
+    focus: Res<PlayerFocus>,
+    time: Res<Time<Real>>,
+    mut state: Local<Rescale>,
+    mut place: MessageWriter<PlacePlayer>,
+) {
+    let Some(root) = rig.root_transform() else {
+        state.seen = None;
+        return;
+    };
+    let now = time.elapsed_secs();
+    match state.seen {
+        Some((scale, before)) if scale != rig.scale => {
+            if state.spot.is_none() {
+                let to_room = before.compute_affine().inverse();
+                state.spot = engines
+                    .and_then(|e| e.current())
+                    .and_then(|e| focus.of(e))
+                    .map(|f| (to_room.transform_point3(f.feet), to_room.transform_vector3(f.forward)));
+            }
+            state.changed_at = now;
+        }
+        _ => {
+            if now - state.changed_at >= RESCALE_SETTLE_S
+                && let Some((spot, forward)) = state.spot.take()
+            {
+                place.write(PlacePlayer::new(root.transform_point(spot), root.rotation * forward));
+            }
+        }
+    }
+    state.seen = Some((rig.scale, root));
 }
 
 /// Where the player was when its engine was left: the next engine puts its player there.

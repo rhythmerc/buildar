@@ -490,17 +490,10 @@ fn park_from_slider(v: f32) -> f32 {
     (MIN_PARK_SCALE * ((MAX_PARK_SCALE / MIN_PARK_SCALE).ln() * v).exp()).clamp(MIN_PARK_SCALE, MAX_PARK_SCALE)
 }
 
+/// The world's scale (the player is put back on the same real spot once it settles: `xr::link`).
 pub(crate) fn set_world_scale(world: &mut World, scale: f32) {
-    let before = world.resource::<Rig>().root_transform();
-    let focus = crate::xr::link::running_focus(world);
     world.resource_mut::<Rig>().scale = scale;
     world.resource_mut::<PlacedPieces>().revision += 1; // saves the layout (it carries the scale)
-    let after = world.resource::<Rig>().root_transform();
-    if let (Some(before), Some(after), Some(focus)) = (before, after, focus) {
-        let inverse = before.compute_affine().inverse();
-        let (spot, dir) = (inverse.transform_point3(focus.feet), inverse.transform_vector3(focus.forward));
-        world.write_message(PlacePlayer::new(after.transform_point(spot), after.rotation * dir));
-    }
 }
 
 fn build_widgets(world: &World) -> Vec<Widget> {
