@@ -22,7 +22,8 @@
 //!
 //! `SK8_ROOM_LIGHT=lamp|lamp-room|window|<recording>` shows it on the desktop park
 //! without a headset: a synthetic room, or a session recorded with
-//! Roomtone's `Recorder` (`--clean`, no `--xr`).
+//! Roomtone's `Recorder` (`--clean`, no `--xr`), such as one the headset
+//! saved (`session`).
 use super::ar_settings::ArSettings;
 use super::build::PlacedPieces;
 use super::link::CurrentStage;
@@ -43,6 +44,7 @@ pub(crate) mod camera;
 mod depth;
 mod feed;
 mod reduce;
+pub(crate) mod session;
 mod shade;
 
 /// Seconds for the room's light to fade in over the tier's own (and out).
@@ -93,6 +95,11 @@ impl Plugin for RoomLightPlugin {
             #[cfg(target_os = "android")]
             camera::spawn(feed.0.clone(), capture.0.clone());
             app.add_systems(Update, (feed_head, feed_surfaces).before(place_points));
+            // (developers: the session recorded, to be saved)
+            if let Some(files) = app.world().get_resource::<super::XrFiles>() {
+                let session = session::RoomSession::new(&files.0);
+                app.insert_resource(session).add_systems(Update, session::keep_recording);
+            }
         }
         app.insert_resource(capture)
             .insert_resource(feed)
@@ -151,6 +158,11 @@ fn preview(room: &mut Room, what: &str) {
         path => {
             if !room.replay(std::path::Path::new(path)) {
                 warn!("Room light: couldn't read the recording {path}");
+            }
+            // A session the headset saved: its note says what the headset made (before the
+            // desktop's own make and points change it).
+            if let Some(said) = session::compare_with_note(room, std::path::Path::new(path)) {
+                info!("Room light: {said}");
             }
             room.make();
         }

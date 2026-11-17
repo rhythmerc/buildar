@@ -11,7 +11,11 @@
 //!
 //! Coordinates are OpenXR tracking space: metres, +Y up. A `Room` is `Send`
 //! but not `Sync`: put it behind a mutex to share it.
+//!
+//! A room can also write what it is given to a [`Recorder`] ([`Room::record`]),
+//! which [`Room::replay`] (or Roomtone's `tools/roomtone_replay`) plays back.
 use std::ffi::{CString, c_char, c_int};
+use std::io::{Read, Write};
 use std::path::Path;
 
 #[repr(C)]
@@ -212,6 +216,11 @@ mod ffi {
     }
 
     #[repr(C)]
+    pub struct Recorder {
+        _private: [u8; 0],
+    }
+
+    #[repr(C)]
     pub struct Frame {
         pub cells: *const f32,
         pub cols: i32,
@@ -271,11 +280,76 @@ mod ffi {
         pub fn roomtone_room_spots(room: *const Room, out: *mut Spot, capacity: usize) -> usize;
         pub fn roomtone_room_summary(room: *const Room, buffer: *mut c_char, capacity: usize) -> usize;
         pub fn roomtone_replay_file(path: *const c_char, room: *mut Room) -> c_int;
+        pub fn roomtone_recorder_open(path: *const c_char) -> *mut Recorder;
+        pub fn roomtone_recorder_close(recorder: *mut Recorder);
+        pub fn roomtone_recorder_camera(recorder: *mut Recorder, camera: *const Camera);
+        pub fn roomtone_recorder_frame(recorder: *mut Recorder, frame: *const Frame);
+        pub fn roomtone_recorder_hit(recorder: *mut Recorder, origin: Vec3, point: Vec3);
+        pub fn roomtone_recorder_depth(recorder: *mut Recorder, image: *const DepthImage);
+        pub fn roomtone_recorder_moved(recorder: *mut Recorder, p0: Vec3, yaw0: f32, p1: Vec3, yaw1: f32);
+        pub fn roomtone_recorder_points(recorder: *mut Recorder, points: *const Vec3, count: usize, time_ns: i64);
+        pub fn roomtone_recorder_reset(recorder: *mut Recorder);
     }
 }
 
+/// A recording being written (Roomtone's `Recorder`): a room's inputs, in
+/// the order it was given them. Closed when dropped. Each frame is flushed
+/// to the file as it is written (an app is often killed, not closed).
+pub struct Recorder(*mut ffi::Recorder);
+
+// The recorder owns its file and has no thread affinity.
+unsafe impl Send for Recorder {}
+
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        unsafe { ffi::roomtone_recorder_close(self.0) }
+    }
+}
+
+impl Recorder {
+    /// A new recording at `path` (replacing what was there); `None` if it
+    /// couldn't be made.
+    pub fn create(path: &Path) -> Option<Self> {
+        let path = path.to_str().and_then(|p| CString::new(p).ok())?;
+        let raw = unsafe { ffi::roomtone_recorder_open(path.as_ptr()) };
+        (!raw.is_null()).then_some(Self(raw))
+    }
+}
+
+/// The bytes every recording starts with.
+const MAGIC: &[u8; 8] = b"RTONE001";
+
+/// Joins recordings made one after another of one room (each a
+/// [`Room::continue_recording`] of the one before) into one at `out`, as if
+/// a single recorder had written them all. Returns its size in bytes.
+pub fn join_recordings(parts: &[impl AsRef<Path>], out: &Path) -> std::io::Result<u64> {
+    let mut to = std::io::BufWriter::new(std::fs::File::create(out)?);
+    to.write_all(MAGIC)?;
+    let mut size = MAGIC.len() as u64;
+    for part in parts {
+        let mut from = std::io::BufReader::new(std::fs::File::open(part)?);
+        let mut magic = [0u8; 8];
+        from.read_exact(&mut magic)?;
+        if &magic != MAGIC {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "not a Roomtone recording"));
+        }
+        size += std::io::copy(&mut from, &mut to)?;
+    }
+    to.flush()?;
+    Ok(size)
+}
+
 /// A room's capture and the light made from it.
-pub struct Room(*mut ffi::Room);
+pub struct Room {
+    raw: *mut ffi::Room,
+    /// What a recording started now begins with (a reset keeps the camera
+    /// but not the points).
+    camera: Option<Camera>,
+    points: Vec<Vec3>,
+    /// The last frame's, for a points record.
+    time_ns: i64,
+    recorder: Option<Recorder>,
+}
 
 // The room owns everything it points at and has no thread affinity.
 unsafe impl Send for Room {}
@@ -288,26 +362,77 @@ impl Default for Room {
 
 impl Drop for Room {
     fn drop(&mut self) {
-        unsafe { ffi::roomtone_room_free(self.0) }
+        unsafe { ffi::roomtone_room_free(self.raw) }
     }
 }
 
 impl Room {
     pub fn new() -> Self {
-        Self(unsafe { ffi::roomtone_room_new() })
+        Self { raw: unsafe { ffi::roomtone_room_new() }, camera: None, points: Vec::new(), time_ns: 0, recorder: None }
+    }
+
+    /// Records everything the room is given from now on into `recorder`,
+    /// from a clean start: what the room had seen is dropped, and the
+    /// recording begins with its camera and points, so that a replay of it
+    /// (into a new room) makes exactly the light this room makes.
+    /// ([`Room::make`] isn't recorded: a replay makes where the room did on
+    /// its own.)
+    pub fn record(&mut self, mut recorder: Recorder) {
+        // (a recording already running ends here)
+        self.recorder = None;
+        // A new room, not a reset: a reset room isn't a new one to the last
+        // bit (its light can differ from a replay's in the last places).
+        unsafe {
+            ffi::roomtone_room_free(self.raw);
+            self.raw = ffi::roomtone_room_new();
+        }
+        if let Some(camera) = self.camera {
+            self.set_camera(&camera);
+        }
+        let points = std::mem::take(&mut self.points);
+        self.set_points(&points);
+        if let Some(camera) = &self.camera {
+            unsafe { ffi::roomtone_recorder_camera(recorder.0, camera) };
+        }
+        record_points(&mut recorder, &points, self.time_ns);
+        self.recorder = Some(recorder);
+    }
+
+    /// Carries on recording into `next` with nothing dropped: `next` follows
+    /// the recording so far, which is closed (whole) and returned. The two
+    /// joined ([`join_recordings`]) are one recording.
+    pub fn continue_recording(&mut self, next: Recorder) -> Option<Recorder> {
+        self.recorder.replace(next)
+    }
+
+    /// Stops recording; the recording is closed when the result is dropped.
+    pub fn stop_recording(&mut self) -> Option<Recorder> {
+        self.recorder.take()
+    }
+
+    pub fn recording(&self) -> bool {
+        self.recorder.is_some()
     }
 
     /// Drops everything seen (a new capture).
     pub fn reset(&mut self) {
-        unsafe { ffi::roomtone_room_reset(self.0) }
+        unsafe { ffi::roomtone_room_reset(self.raw) }
+        self.points.clear();
+        if let Some(r) = &self.recorder {
+            unsafe { ffi::roomtone_recorder_reset(r.0) }
+        }
     }
 
     pub fn set_camera(&mut self, camera: &Camera) {
-        unsafe { ffi::roomtone_room_set_camera(self.0, camera) }
+        unsafe { ffi::roomtone_room_set_camera(self.raw, camera) }
+        self.camera = Some(*camera);
+        if let Some(r) = &self.recorder {
+            unsafe { ffi::roomtone_recorder_camera(r.0, camera) }
+        }
     }
 
     pub fn has_camera(&self) -> bool {
-        unsafe { ffi::roomtone_room_has_camera(self.0) != 0 }
+        unsafe { ffi::roomtone_room_has_camera(self.raw) != 0 }
     }
 
     /// Adds a frame; every few frames the light is made again.
@@ -325,13 +450,20 @@ impl Room {
             head: frame.head,
             time_ns: frame.time_ns,
         };
-        let r = unsafe { ffi::roomtone_room_add_frame(self.0, &raw) };
+        if let Some(r) = &self.recorder {
+            unsafe { ffi::roomtone_recorder_frame(r.0, &raw) }
+        }
+        self.time_ns = frame.time_ns;
+        let r = unsafe { ffi::roomtone_room_add_frame(self.raw, &raw) };
         FrameResult { used: r.used != 0, restarted: r.restarted != 0, change: r.change, black: r.black != 0 }
     }
 
     /// A depth hit along a ray from `origin` (a raycast): gives the lights a place.
     pub fn add_hit(&mut self, origin: Vec3, point: Vec3) {
-        unsafe { ffi::roomtone_room_add_hit(self.0, origin, point) }
+        if let Some(r) = &self.recorder {
+            unsafe { ffi::roomtone_recorder_hit(r.0, origin, point) }
+        }
+        unsafe { ffi::roomtone_room_add_hit(self.raw, origin, point) }
     }
 
     /// The latest depth image: the room's surfaces get a place (frames after
@@ -355,87 +487,109 @@ impl Room {
             view: image.view,
             time_ns: image.time_ns,
         };
-        unsafe { ffi::roomtone_room_add_depth(self.0, &raw) }
+        if let Some(r) = &self.recorder {
+            unsafe { ffi::roomtone_recorder_depth(r.0, &raw) }
+        }
+        unsafe { ffi::roomtone_room_add_depth(self.raw, &raw) }
     }
 
     /// The tracking space moved under the room (a recenter): (p0, yaw0) to
     /// (p1, yaw1), yaw about +Y. True when the light was made again.
     pub fn moved(&mut self, p0: Vec3, yaw0: f32, p1: Vec3, yaw1: f32) -> bool {
-        unsafe { ffi::roomtone_room_moved(self.0, p0, yaw0, p1, yaw1) != 0 }
+        if let Some(r) = &self.recorder {
+            unsafe { ffi::roomtone_recorder_moved(r.0, p0, yaw0, p1, yaw1) }
+        }
+        unsafe { ffi::roomtone_room_moved(self.raw, p0, yaw0, p1, yaw1) != 0 }
     }
 
     /// Makes the light from what's been seen now.
     pub fn make(&mut self) {
-        unsafe { ffi::roomtone_room_make(self.0) }
+        unsafe { ffi::roomtone_room_make(self.raw) }
     }
 
     pub fn made(&self) -> bool {
-        unsafe { ffi::roomtone_room_made(self.0) != 0 }
+        unsafe { ffi::roomtone_room_made(self.raw) != 0 }
     }
 
     pub fn frames(&self) -> u32 {
-        unsafe { ffi::roomtone_room_frames(self.0) }
+        unsafe { ffi::roomtone_room_frames(self.raw) }
     }
 
     pub fn hits(&self) -> usize {
-        unsafe { ffi::roomtone_room_hits(self.0) }
+        unsafe { ffi::roomtone_room_hits(self.raw) }
     }
 
     pub fn voxels(&self) -> usize {
-        unsafe { ffi::roomtone_room_voxels(self.0) }
+        unsafe { ffi::roomtone_room_voxels(self.raw) }
     }
 
     /// Whether a make is due for a moved point.
     pub fn stale(&self) -> bool {
-        unsafe { ffi::roomtone_room_stale(self.0) != 0 }
+        unsafe { ffi::roomtone_room_stale(self.raw) != 0 }
     }
 
     /// The seen room's median brightness as passthrough shows it (0-1; 0 before a make).
     pub fn seen_median(&self) -> f32 {
-        unsafe { ffi::roomtone_room_seen_median(self.0) }
+        unsafe { ffi::roomtone_room_seen_median(self.raw) }
     }
 
     /// The points the light is made for (where the content is); the first
     /// sets the level's exposure. Cheap; the next frame or [`Room::make`]
     /// makes the light there.
     pub fn set_points(&mut self, points: &[Vec3]) {
-        unsafe { ffi::roomtone_room_set_points(self.0, points.as_ptr(), points.len()) }
+        unsafe { ffi::roomtone_room_set_points(self.raw, points.as_ptr(), points.len()) }
+        self.points.clear();
+        self.points.extend_from_slice(points);
+        if let Some(r) = &mut self.recorder {
+            record_points(r, points, self.time_ns);
+        }
     }
 
     /// The light at the `index`th of the points set (past the last: the
     /// last's); `None` while none is made.
     pub fn light_at(&self, index: usize) -> Option<Lighting> {
         let mut out = Lighting::default();
-        (unsafe { ffi::roomtone_room_light_at_index(self.0, index, &mut out) } != 0).then_some(out)
+        (unsafe { ffi::roomtone_room_light_at_index(self.raw, index, &mut out) } != 0).then_some(out)
     }
 
     /// Every bright spot as the light was last made, brightest first.
     pub fn spots(&self) -> Vec<Spot> {
-        let count = unsafe { ffi::roomtone_room_spots(self.0, std::ptr::null_mut(), 0) };
+        let count = unsafe { ffi::roomtone_room_spots(self.raw, std::ptr::null_mut(), 0) };
         let mut out = vec![Spot::default(); count];
-        let written = unsafe { ffi::roomtone_room_spots(self.0, out.as_mut_ptr(), out.len()) };
+        let written = unsafe { ffi::roomtone_room_spots(self.raw, out.as_mut_ptr(), out.len()) };
         out.truncate(written);
         out
     }
 
     /// A line of diagnostics (coverage, lights, level, brightest cells).
     pub fn summary(&self) -> String {
-        let length = unsafe { ffi::roomtone_room_summary(self.0, std::ptr::null_mut(), 0) };
+        let length = unsafe { ffi::roomtone_room_summary(self.raw, std::ptr::null_mut(), 0) };
         let mut buffer = vec![0u8; length + 1];
-        unsafe { ffi::roomtone_room_summary(self.0, buffer.as_mut_ptr() as *mut c_char, buffer.len()) };
+        unsafe { ffi::roomtone_room_summary(self.raw, buffer.as_mut_ptr() as *mut c_char, buffer.len()) };
         buffer.truncate(length);
         String::from_utf8_lossy(&buffer).into_owned()
     }
 
+    /// The points last set (none after a reset).
+    pub fn points(&self) -> &[Vec3] {
+        &self.points
+    }
+
     /// Feeds a recording (Roomtone's `Recorder`, `roomtone_replay`'s input)
-    /// into the room. False if it couldn't be read.
+    /// into the room. False if it couldn't be read. (Not itself recorded,
+    /// and the room keeps no camera or points of it for a recording.)
     pub fn replay(&mut self, path: &Path) -> bool {
         let Some(path) = path.to_str().and_then(|p| CString::new(p).ok()) else {
             return false;
         };
-        let ok: c_int = unsafe { ffi::roomtone_replay_file(path.as_ptr(), self.0) };
+        let ok: c_int = unsafe { ffi::roomtone_replay_file(path.as_ptr(), self.raw) };
         ok != 0
     }
+}
+
+fn record_points(recorder: &mut Recorder, points: &[Vec3], time_ns: i64) {
+    // (an empty one isn't recorded)
+    unsafe { ffi::roomtone_recorder_points(recorder.0, points.as_ptr(), points.len(), time_ns) }
 }
 
 /// Synthetic captures, for tests and for trying the room light without a headset.
@@ -657,6 +811,86 @@ mod tests {
         assert!(key.dir.x < -0.95 && !lit.lights[1].lit(), "one light, the window: {:?}", lit.lights);
         let toward = (lit.irradiance([-1.0, 0.0, 0.0])[1] + key.color[1]) / lit.mean;
         assert!(toward > 10.0 * shown(&dark, [-1.0, 0.0, 0.0]), "toward the window: {toward}");
+    }
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!("roomtone-sys-{name}-{}", std::process::id()))
+    }
+
+    /// Every point's light, for comparing two rooms.
+    fn lights(room: &Room) -> Vec<Option<Lighting>> {
+        (0..room.points().len()).map(|i| room.light_at(i)).collect()
+    }
+
+    /// A room recorded part of the way through (what it saw before is
+    /// dropped), in two parts, replays into the light it made.
+    #[test]
+    fn a_recording_in_parts_replays_into_the_same_light() {
+        let (first, second, joined) = (temp("first.rtone"), temp("second.rtone"), temp("joined.rtone"));
+        let lamp = lamp();
+        let mut room = Room::new();
+        room.set_points(&[Vec3 { x: 0.0, y: -0.3, z: -0.7 }, Vec3 { x: 1.0, y: 0.0, z: 0.0 }]);
+        let mut frames = 0;
+        synthetic::sweep_with(
+            &mut room,
+            |d| {
+                let v = if dot(d, lamp) > 0.12f32.cos() { 1.0 } else { 0.08 + 0.04 * d[1] };
+                [v, v, v]
+            },
+            |room, frame| {
+                frames += 1;
+                match frames {
+                    // Seen before the recording: dropped by it.
+                    40 => room.record(Recorder::create(&first).unwrap()),
+                    200 => {
+                        drop(room.continue_recording(Recorder::create(&second).unwrap()));
+                        // (in the second part)
+                        room.add_hit(Vec3::default(), lamp.map(|c| c * 2.0).into());
+                    }
+                    _ => {}
+                }
+                room.add_frame(frame);
+            },
+        );
+        assert!(room.recording());
+        drop(room.stop_recording());
+        let bytes = join_recordings(&[&first, &second], &joined).unwrap();
+        assert_eq!(bytes, std::fs::metadata(&first).unwrap().len() + std::fs::metadata(&second).unwrap().len() - 8);
+        let mut replayed = Room::new();
+        assert!(replayed.replay(&joined));
+        // (the sweep's last make isn't recorded)
+        replayed.make();
+        assert_eq!(replayed.frames(), room.frames());
+        assert_eq!(replayed.hits(), 1);
+        let made = lights(&room);
+        assert!(made.iter().all(Option::is_some));
+        let replayed_lights: Vec<Option<Lighting>> = (0..2).map(|i| replayed.light_at(i)).collect();
+        assert_eq!(replayed_lights, made);
+        // The first part alone is a recording too (cut where it was).
+        let mut part = Room::new();
+        assert!(part.replay(&first), "first part");
+        assert_eq!((part.frames(), part.hits()), (160, 0));
+        for p in [first, second, joined] {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    /// A room recorded from its start (as the app's is when the developer
+    /// setting is on at launch: no camera or points yet) replays too.
+    #[test]
+    fn a_room_recorded_from_nothing_replays_into_the_same_light() {
+        let path = temp("fresh.rtone");
+        let mut room = Room::new();
+        room.record(Recorder::create(&path).unwrap());
+        room.set_points(&[Vec3 { x: 0.0, y: -0.3, z: -0.7 }]);
+        synthetic::sweep(&mut room, |d| [0.1 + 0.05 * d[1]; 3]);
+        drop(room.stop_recording());
+        let mut replayed = Room::new();
+        assert!(replayed.replay(&path));
+        replayed.make();
+        assert!(room.light_at(0).is_some());
+        assert_eq!(replayed.light_at(0), room.light_at(0));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

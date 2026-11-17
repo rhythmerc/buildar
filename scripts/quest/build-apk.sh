@@ -28,6 +28,11 @@ fi
 # The workspace compiles at opt-level 3 and rustc needs a large stack for
 # the game crate (see the desktop build notes).
 export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
+# The commit, for developer captures' notes (`-dirty` with changes not in it).
+if [ -z "${SK8_COMMIT:-}" ] && SK8_COMMIT="$(git rev-parse --short HEAD 2>/dev/null)"; then
+  git diff --quiet HEAD 2>/dev/null || SK8_COMMIT="$SK8_COMMIT-dirty"
+fi
+export SK8_COMMIT="${SK8_COMMIT:-}"
 cargo apk build -p skate-quest --release --lib
 APK="$(ls -t "${CARGO_TARGET_DIR:-target}"/release/apk/skate3ar*.apk | grep -v unaligned | head -1)"
 echo "APK: $APK"

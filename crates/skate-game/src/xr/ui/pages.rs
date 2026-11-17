@@ -346,6 +346,16 @@ fn ar_widgets(world: &World) -> Vec<Widget> {
     if let Some(problem) = world.resource::<RoomLight>().problem(s.room_light) {
         w.push(Widget::info(problem));
     }
+    // (developers: Roomtone's session, recorded while this row shows, saved to replay at a desk)
+    if s.room_light && super::sound_lab::dev(world) {
+        if let Some(session) = world.get_resource::<crate::xr::room_light::session::RoomSession>() {
+            w.push(Widget::button("room_light_save", "Save the Roomtone session"));
+            let status = session.status();
+            if !status.is_empty() {
+                w.push(Widget::info(status));
+            }
+        }
+    }
     w.push(Widget::toggle("contact_shadows", "Contact shadows (board and park pieces)", s.contact_shadows));
     w.push(Widget::toggle("occlusion", "Real things hide the skater and park", s.occlusion.on()));
     if s.occlusion.on() {
@@ -408,6 +418,25 @@ fn ar_act(widget: &str, world: &mut World) -> Outcome {
             });
             let said = match world.resource::<crate::xr::occlusion_capture::Capture>().start(folder, start) {
                 Ok(()) => "Recording: look at edges that go wrong".to_string(),
+                Err(why) => why,
+            };
+            return Outcome::Say(said);
+        }
+        "room_light_save" => {
+            let folder = world.resource::<crate::xr::XrFiles>().0.join("captures").join(format!(
+                "roomtone-{}",
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+            ));
+            let note = crate::xr::room_light::session::note(world.resource::<ArSettings>());
+            let (Some(session), Some(capture)) = (
+                world.get_resource::<crate::xr::room_light::session::RoomSession>(),
+                world.get_resource::<crate::xr::room_light::RoomCapture>(),
+            ) else {
+                return Outcome::Say("Roomtone isn't running".into());
+            };
+            // (waits out a frame being added on the capture's thread: a few ms at most)
+            let said = match session.save(&mut capture.0.lock().unwrap(), folder, note) {
+                Ok(_) => "Saving the Roomtone session".to_string(),
                 Err(why) => why,
             };
             return Outcome::Say(said);

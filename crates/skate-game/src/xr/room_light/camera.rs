@@ -8,7 +8,9 @@
 //! colour, which goes to Roomtone with the frame's exposure and the head's
 //! pose. The camera shares passthrough's auto exposure, which is how the
 //! light's level follows what the player sees. Frames never leave this
-//! thread; only the grids do, and nothing is stored.
+//! thread; only the grids do, and nothing is stored (except, with the
+//! developer setting on, the grids in Roomtone's session recording:
+//! `session`).
 use super::feed::{CameraState, Feed};
 use super::reduce::{self, GRID, Plane};
 use bevy::log::{info, warn};
