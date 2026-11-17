@@ -427,3 +427,12 @@ sorting rule.
 - **Controls page:** revisit it; as it stands it is hard to use.
 - **Park settings page:** its own page in the Parks page's design language, replacing the legacy one. The size slider
   is poor: the world jumps about while it is dragged (scale on release, or a preview, instead).
+
+## Known bugs (2026-11-16)
+
+- **World scale moves the player.** Changing the skater size slider still leaves the player off their real spot in
+  every engine, even with the single placement after the slider settles (`xr::link::keep_spot_on_rescale`). Left
+  for the park settings page rework.
+- **THUG2: hitting a wall fast enters it.** At speed the skater can go into a wall and skate along its plane. Seen
+  after the wall slab (`thug2_engine::stage::WALL_SKIN`, cb8a75d) fixed wall plants; not known whether it predates
+  that.
