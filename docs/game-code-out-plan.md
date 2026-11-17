@@ -432,7 +432,9 @@ sorting rule.
 
 - **World scale moves the player.** Changing the skater size slider still leaves the player off their real spot in
   every engine, even with the single placement after the slider settles (`xr::link::keep_spot_on_rescale`). Left
-  for the park settings page rework.
+  for the park settings page rework. Reported as new since steps 4-5: the first suspect is step 5's (9701b9d) swap
+  of the deck for `Focus::feet` as the point re-placed (an engine's placement puts its deck or spawn point there, not
+  its rider's feet).
 - **THUG2: hitting a wall fast enters it.** At speed the skater can go into a wall and skate along its plane. Seen
   after the wall slab (`thug2_engine::stage::WALL_SKIN`, cb8a75d) fixed wall plants; not known whether it predates
   that.
