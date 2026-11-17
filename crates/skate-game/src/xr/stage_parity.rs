@@ -158,19 +158,20 @@ fn each_engine_is_given_exactly_what_it_was() {
 }
 
 /// Recorded at 5dc9513 (f37f837 with the engines' inputs taken out as pure functions, no behaviour change), before
-/// the split.
+/// the split. THUG2's re-recorded at cb8a75d: its upright faces a thin slab (`thug2_engine::stage::WALL_SKIN`), so a
+/// wall plant can't put the skater behind a wall.
 const RECORDED: [[&str; 4]; 3] = [
-    ["404 bytes e94bef4d55aae7e3", "480 bytes 58cb0e708af05d9f", "480 bytes 1b3b72a19477a47d", "440 bytes d31134ab8c18d474"],
+    ["404 bytes e94bef4d55aae7e3", "480 bytes 81d2d88f3a6315c7", "480 bytes 5e4a09cc37d611bd", "440 bytes d31134ab8c18d474"],
     [
         "74592 bytes 5748a3e11b86bc44",
-        "148204 bytes 9706442ac69c044b",
-        "148204 bytes a0de1afa96bfb081",
+        "148204 bytes d7d963805da12db0",
+        "148204 bytes 92c38d764e80453c",
         "114444 bytes 52f682f160123635",
     ],
     [
         "74592 bytes d6dfe23a7269df61",
-        "148204 bytes 2f4c6c867e7255be",
-        "148204 bytes 393901bf6febf400",
+        "148204 bytes f2af15ec9ea92d67",
+        "148204 bytes 601f751b7e5ba8e5",
         "114444 bytes 0a010c6448a0c1b1",
     ],
 ];
