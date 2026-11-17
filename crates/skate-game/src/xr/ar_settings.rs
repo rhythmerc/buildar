@@ -108,6 +108,10 @@ pub(crate) struct ArSettings {
     /// (`xr::controller_shapes`): the depth image often misses them.
     #[serde(default)]
     pub occlusion_controllers: bool,
+    /// The games' HUD panels are hidden by real things nearer than the panel (their own depth written), not
+    /// never hidden (`engine_hud::OnTop`): to compare the two.
+    #[serde(default)]
+    pub hud_depth_at_controller: bool,
     /// Developer's pages in the menu (the sound lab). No row turns it on: it is set in the file.
     #[serde(default)]
     pub dev: bool,
@@ -137,6 +141,7 @@ impl Default for ArSettings {
             occlusion_steady: false,
             occlusion_hands: false,
             occlusion_controllers: false,
+            hud_depth_at_controller: false,
             dev: false,
             revision: 0,
         }

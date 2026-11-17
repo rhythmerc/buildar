@@ -23,6 +23,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> PanelOut
     }
     var out: PanelOutput;
     out.color = main_pass_post_lighting_processing(pbr_input, colour);
+#ifdef DEPTH_AT_PANEL
+    // (the AR setting to compare: its own depth, so real things nearer than the panel hide it)
+    out.depth = in.position.z;
+#else
     out.depth = 1.0;
+#endif
     return out;
 }

@@ -54,6 +54,8 @@ impl Plugin for EngineHudPlugin {
             embedded_asset!(app, "engine_hud_panel.wgsl");
             app.add_plugins((Material2dPlugin::<HudPaint>::default(), bevy::pbr::MaterialPlugin::<PanelMaterial>::default()))
                 .init_resource::<EngineHuds>();
+            #[cfg(feature = "xr")]
+            app.add_systems(Update, panel_depth);
         }
     }
 }
@@ -66,7 +68,24 @@ pub(crate) type PanelMaterial = bevy::pbr::ExtendedMaterial<StandardMaterial, On
 
 /// [`PanelMaterial`]'s part: drawn without a depth test, at the near plane's depth where painted.
 #[derive(Asset, TypePath, AsBindGroup, Clone, Debug, Default)]
-pub(crate) struct OnTop {}
+#[bind_group_data(OnTopKey)]
+pub(crate) struct OnTop {
+    /// Its own depth written instead, where it is (by the controller): real things nearer than it hide it (the AR
+    /// setting `hud_depth_at_controller`, to compare the two).
+    pub(crate) at_panel: bool,
+}
+
+/// What of an [`OnTop`] makes its pipeline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct OnTopKey {
+    at_panel: bool,
+}
+
+impl From<&OnTop> for OnTopKey {
+    fn from(on_top: &OnTop) -> Self {
+        Self { at_panel: on_top.at_panel }
+    }
+}
 
 impl bevy::pbr::MaterialExtension for OnTop {
     fn fragment_shader() -> bevy::shader::ShaderRef {
@@ -77,13 +96,31 @@ impl bevy::pbr::MaterialExtension for OnTop {
         _: &bevy::pbr::MaterialExtensionPipeline,
         descriptor: &mut RenderPipelineDescriptor,
         _: &MeshVertexBufferLayoutRef,
-        _: bevy::pbr::MaterialExtensionKey<Self>,
+        key: bevy::pbr::MaterialExtensionKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
+        if key.bind_group_data.at_panel
+            && let Some(fragment) = &mut descriptor.fragment
+        {
+            fragment.shader_defs.push("DEPTH_AT_PANEL".into());
+        }
         if let Some(depth) = &mut descriptor.depth_stencil {
             depth.depth_compare = bevy::render::render_resource::CompareFunction::Always;
             depth.depth_write_enabled = true;
         }
         Ok(())
+    }
+}
+
+/// The panels' depth as the AR settings have it (`hud_depth_at_controller`).
+#[cfg(feature = "xr")]
+fn panel_depth(settings: Option<Res<crate::xr::ar_settings::ArSettings>>, mut materials: ResMut<Assets<PanelMaterial>>) {
+    let Some(settings) = settings else { return };
+    let at_panel = settings.hud_depth_at_controller;
+    let stale: Vec<_> = materials.iter().filter(|(_, m)| m.extension.at_panel != at_panel).map(|(id, _)| id).collect();
+    for id in stale {
+        if let Some(material) = materials.get_mut(id) {
+            material.extension.at_panel = at_panel;
+        }
     }
 }
 
@@ -398,7 +435,7 @@ impl PartSlot {
                 cull_mode: None,
                 ..default()
             },
-            extension: OnTop {},
+            extension: OnTop::default(),
         });
         let panel = commands
             .spawn((
