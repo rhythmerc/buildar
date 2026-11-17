@@ -80,11 +80,22 @@ fn sweep(lip: &[Vec3], profile: &[(Vec2, Vec2)]) -> Mesh {
             uvs.push([along[i], across[k]]);
         }
     }
+    // (each quad wound counter-clockwise seen from the side its normals face, Bevy's front: which way that is turns
+    // on the lip's way round and the profile's, so it is taken from the quad itself. A double-sided material lights
+    // a face seen from its back with its normal flipped, so one wound the other way is lit as if it faced away.)
     let m = profile.len() as u32;
+    let at = |i: u32| Vec3::from_array(positions[i as usize]);
+    let normal_at = |i: u32| Vec3::from_array(normals[i as usize]);
     for i in 0..n as u32 {
         for k in 0..m - 1 {
             let (a, b) = (i * m + k, (i + 1) * m + k);
-            indices.extend([a, b, b + 1, a, b + 1, a + 1]);
+            let face = (at(b) - at(a)).cross(at(b + 1) - at(a)) + (at(b + 1) - at(a)).cross(at(a + 1) - at(a));
+            let normal = normal_at(a) + normal_at(b) + normal_at(b + 1) + normal_at(a + 1);
+            if face.dot(normal) >= 0.0 {
+                indices.extend([a, b, b + 1, a, b + 1, a + 1]);
+            } else {
+                indices.extend([a, b + 1, b, a, a + 1, b + 1]);
+            }
         }
     }
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
@@ -175,7 +186,8 @@ pub(crate) fn drain_mesh(geometry: &PieceGeometry) -> Option<Mesh> {
         positions.push((centre + up * OFF + (across * a.cos() + other * a.sin()) * DRAIN).to_array());
         uvs.push([0.5 + 0.5 * a.cos(), 0.5 + 0.5 * a.sin()]);
     }
-    let indices: Vec<u32> = (1..=SIDES).flat_map(|k| [0, k + 1, k]).collect();
+    // (counter-clockwise seen from `up`: across, other, up is a right-handed basis)
+    let indices: Vec<u32> = (1..=SIDES).flat_map(|k| [0, k, k + 1]).collect();
     let normals = vec![up.to_array(); positions.len()];
     Some(
         Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
@@ -527,5 +539,37 @@ mod tests {
         assert!(tile_mesh(&g).is_some() && ground_mesh(&g, Finish::Concrete).is_some() && drain_mesh(&g).is_some());
         let (image, min, max) = mouth_mask(&g).expect("a mask");
         assert!(min.x < -reach && max.x > reach && image.width() == 128);
+    }
+
+    /// Every dressing triangle is wound counter-clockwise seen from the side its normals face (Bevy's front face):
+    /// a double-sided `StandardMaterial` flips the normal of a fragment seen from its back, so one wound the other
+    /// way is lit as if it faced away from the light.
+    #[test]
+    fn dressing_faces_the_way_its_normals_do() {
+        let g = Piece::new(PieceKind::Bowl).geometry();
+        let meshes = [
+            ("coping", coping_mesh(&g, Finish::Concrete)),
+            ("pipe", coping_mesh(&g, Finish::Wood)),
+            ("tiles", tile_mesh(&g)),
+            ("ground", ground_mesh(&g, Finish::Concrete)),
+            ("drain", drain_mesh(&g)),
+        ];
+        for (name, mesh) in meshes {
+            let mesh = mesh.expect(name);
+            let Some(bevy::mesh::VertexAttributeValues::Float32x3(p)) = mesh.attribute(Mesh::ATTRIBUTE_POSITION) else { panic!() };
+            let Some(bevy::mesh::VertexAttributeValues::Float32x3(n)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL) else { panic!() };
+            let Some(Indices::U32(indices)) = mesh.indices() else { panic!() };
+            let (mut facing, mut away) = (0, 0);
+            for t in indices.chunks_exact(3) {
+                let [a, b, c] = [0, 1, 2].map(|k| Vec3::from_array(p[t[k] as usize]));
+                let face = (b - a).cross(c - a);
+                if face.length() < 1e-9 {
+                    continue;
+                }
+                let normal: Vec3 = t.iter().map(|&i| Vec3::from_array(n[i as usize])).sum();
+                if face.dot(normal) > 0.0 { facing += 1 } else { away += 1 }
+            }
+            assert!(facing > 0 && away == 0, "{name}: {away} of {} triangles wound against their normals", facing + away);
+        }
     }
 }
