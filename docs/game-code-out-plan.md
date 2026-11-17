@@ -425,3 +425,5 @@ sorting rule.
 - **Spawn facing:** the spawn aiming circle gets a triangle off its edge showing which way the player will face, turned
   with a twist of the wrist.
 - **Controls page:** revisit it; as it stands it is hard to use.
+- **Park settings page:** its own page in the Parks page's design language, replacing the legacy one. The size slider
+  is poor: the world jumps about while it is dragged (scale on release, or a preview, instead).
