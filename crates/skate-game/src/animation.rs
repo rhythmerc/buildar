@@ -123,7 +123,7 @@ fn present(
         return;
     }
     let (_, _, basis) = model.gltf();
-    let Some((previous, current, alpha)) = history.view(&replay, hold.alpha(&time)) else {
+    let Some((previous, current, alpha)) = history.view_at(&replay, hold.now(&time)) else {
         // (no tick taken yet: the sim's pose as it is)
         skate3_engine::model::joints(&skater, &mut live);
         for (entity, transform) in model::joint_transforms(&animation.bindings, &live, basis) {

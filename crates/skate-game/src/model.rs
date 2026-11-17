@@ -7,9 +7,13 @@
 //!   not their matrices' entries nor their world positions, so joints keep their hierarchy while limbs turn.
 //! - **Meshes as data** (THUG2's): Bevy meshes ([`mesh`]) with the app's materials ([`material`]: the standard lit one or
 //!   unlit), skinned with identity inverse binds to joints whose transforms are the pose's root times each joint
-//!   ([`flat_joints`]); not blended.
-//! - **Carrying a pose between steps** ([`PoseHistory`]): the last two steps' poses, taken once each; a cut, a change
-//!   of the engine's step or of its joint count starts the pair again, so nothing is blended across them.
+//!   ([`flat_joints`]). With no skeleton's shape (no `parents`), each joint's matrix is blended on its own in the
+//!   model's space ([`flat_blend`], [`blend_matrix`]).
+//! - **Carrying a pose between steps** ([`PoseHistory`], one a model in [`PoseHistories`]): the last two steps' poses,
+//!   taken once each; a cut, a change of the engine's step period or of its joint count starts the pair again, so
+//!   nothing is blended across them. How far between them is drawn is the same for every engine: the time since the
+//!   newer one's step on the engine's clock, in periods ([`PoseHistory::alpha`], `engine_core::model::Step`). The root
+//!   is blended the same way for every model ([`blend`]).
 //! - **Its bodies** ([`bodies`]): each body group placed by the pose, for the contact shadows
 //!   ([`engine_api::PlayerBodies`]).
 //!
@@ -17,7 +21,7 @@
 //! adapter's until one generic driver replaces them (`docs/game-code-out-plan.md`, step 8).
 use bevy::prelude::*;
 use engine_api::BodyShape;
-use engine_core::model::{AlphaMode, BodyGroup, Cast, Lighting, MaterialDesc, MeshData, Point, Pose};
+use engine_core::model::{AlphaMode, BodyGroup, Cast, Lighting, MaterialDesc, MeshData, ModelId, Point, Pose, Step};
 use std::time::Duration;
 
 // ---- Its bodies ----
@@ -52,38 +56,41 @@ pub(crate) fn bodies(groups: &[BodyGroup], parents: &[Option<u16>], point: impl 
 
 // ---- Carrying a pose between steps ----
 
-/// A step's pose as drawn: its root's transform and its joints' matrices, with what an engine's adapter keeps in step
-/// with them (`extra`: Skate 3's desktop camera).
+/// A step's pose as drawn: its root's transform (and its matrix as given) and its joints' matrices, with what an
+/// engine's adapter keeps in step with them (`extra`: Skate 3's desktop camera).
 #[derive(Clone)]
 pub(crate) struct Snapshot<E> {
     pub root: Transform,
+    pub root_matrix: Mat4,
     pub joints: Vec<Mat4>,
     pub extra: E,
 }
 
-/// The last two steps' poses, to draw between.
+/// A model's last two poses, to draw between, and the newer one's step (`engine_core::model::Step`: when it was on
+/// the engine's clock, and its period).
 pub(crate) struct PoseHistory<E> {
     pair: Option<(Snapshot<E>, Snapshot<E>)>,
     generation: u64,
-    period: Duration,
+    step: Step,
 }
 
 impl<E> Default for PoseHistory<E> {
     fn default() -> Self {
-        Self { pair: None, generation: 0, period: Duration::ZERO }
+        Self { pair: None, generation: 0, step: Step::default() }
     }
 }
 
 impl<E: Clone> PoseHistory<E> {
-    /// `pose` as the newest of the pair, made when the engine steps every `period` (a pose already taken: false).
-    pub(crate) fn offer(&mut self, pose: &Pose, extra: E, period: Duration) -> bool {
+    /// `pose` as the newest of the pair (a pose already taken: false).
+    pub(crate) fn offer(&mut self, pose: &Pose, extra: E) -> bool {
         if pose.generation == self.generation {
             return false;
         }
-        let next = Snapshot { root: Transform::from_matrix(pose.root), joints: pose.joints.clone(), extra };
+        let next =
+            Snapshot { root: Transform::from_matrix(pose.root), root_matrix: pose.root, joints: pose.joints.clone(), extra };
         // Snap cuts and cadence changes instead of sweeping through the world or blending poses across different
         // step periods.
-        let reset = pose.discontinuity || self.period != period;
+        let reset = pose.discontinuity || self.step.period != pose.step.period;
         if let Some((previous, current)) = self.pair.as_mut() {
             if reset || current.joints.len() != next.joints.len() {
                 *previous = next.clone();
@@ -95,7 +102,7 @@ impl<E: Clone> PoseHistory<E> {
             self.pair = Some((next.clone(), next));
         }
         self.generation = pose.generation;
-        self.period = period;
+        self.step = pose.step;
         true
     }
 
@@ -103,9 +110,72 @@ impl<E: Clone> PoseHistory<E> {
         self.pair.as_ref().map(|(a, b)| (a, b))
     }
 
+    /// How far from the older pose to the newer to draw with the engine's clock at `now`: the time since the newer
+    /// one's step, in its periods (`Step::alpha`; not kept within 0..1). The same for every engine.
+    pub(crate) fn alpha(&self, now: Duration) -> f32 {
+        self.step.alpha(now)
+    }
+
     /// The pair and how far from the older to the newer to draw (`alpha`, kept within 0..1).
     pub(crate) fn view(&self, alpha: f32) -> Option<(&Snapshot<E>, &Snapshot<E>, f32)> {
         self.pair().map(|(a, b)| (a, b, alpha.clamp(0.0, 1.0)))
+    }
+
+    /// The pair and how far to draw between them with the engine's clock at `now`.
+    #[cfg_attr(not(feature = "thug2"), allow(dead_code))] // (Skate 3 draws through its replay's view)
+    pub(crate) fn view_at(&self, now: Duration) -> Option<(&Snapshot<E>, &Snapshot<E>, f32)> {
+        self.view(self.alpha(now))
+    }
+}
+
+/// The running engine's models' histories, one a model (by [`ModelId`]: every engine has one so far, id 0). A model
+/// left out of a step is forgotten when the next step's poses come (a step: the poses with one [`Step`] time).
+pub(crate) struct PoseHistories<E> {
+    /// Each model's history, and its latest pose's step time.
+    models: Vec<(ModelId, PoseHistory<E>, Duration)>,
+    /// The latest step's time.
+    latest: Option<Duration>,
+}
+
+impl<E> Default for PoseHistories<E> {
+    fn default() -> Self {
+        Self { models: Vec::new(), latest: None }
+    }
+}
+
+impl<E: Clone> PoseHistories<E> {
+    /// `pose` into its model's history (a pose already taken: false).
+    pub(crate) fn offer(&mut self, pose: &Pose, extra: E) -> bool {
+        let at = pose.step.at;
+        match self.latest {
+            // (a new step: the models the last one left out go; never the one posed now)
+            Some(latest) if at > latest => {
+                self.models.retain(|(id, _, seen)| *seen >= latest || *id == pose.model);
+                self.latest = Some(at);
+            }
+            // (the clock started again: what came before it goes)
+            Some(latest) if at < latest => {
+                self.models.clear();
+                self.latest = Some(at);
+            }
+            Some(_) => {}
+            None => self.latest = Some(at),
+        }
+        let i = match self.models.iter().position(|(id, _, _)| *id == pose.model) {
+            Some(i) => i,
+            None => {
+                self.models.push((pose.model, PoseHistory::default(), at));
+                self.models.len() - 1
+            }
+        };
+        let (_, history, seen) = &mut self.models[i];
+        *seen = at;
+        history.offer(pose, extra)
+    }
+
+    /// A model's history (none: no pose of it yet, or it was forgotten).
+    pub(crate) fn get(&self, model: ModelId) -> Option<&PoseHistory<E>> {
+        self.models.iter().find(|(id, _, _)| *id == model).map(|(_, h, _)| h)
     }
 }
 
@@ -314,12 +384,58 @@ pub(crate) fn material(desc: &MaterialDesc, images: &[Handle<Image>]) -> Standar
     }
 }
 
-/// A flat model's root and each of its `count` joints' transforms in the world for `pose` (a joint past the pose's:
-/// the root's).
+/// A flat model's root and each of its `count` joints' matrices in the world for one pose (`root`, `joints`; a joint
+/// past the pose's: the root's).
 #[cfg_attr(not(feature = "thug2"), allow(dead_code))] // (only THUG2 gives meshes as data so far)
-pub(crate) fn flat_joints(pose: &Pose, count: usize) -> (Mat4, Vec<Mat4>) {
-    let joints = (0..count).map(|i| pose.root * pose.joints.get(i).copied().unwrap_or(Mat4::IDENTITY)).collect();
-    (pose.root, joints)
+pub(crate) fn flat_joints(root: Mat4, joints: &[Mat4], count: usize) -> (Mat4, Vec<Mat4>) {
+    (root, (0..count).map(|i| root * joints.get(i).copied().unwrap_or(Mat4::IDENTITY)).collect())
+}
+
+/// A model with no skeleton's shape (no `parents`), `alpha` of the way between two poses: its root blended as every
+/// model's is ([`blend`]), and each joint's matrix in the model's space blended on its own ([`blend_matrix`]); then,
+/// as [`flat_joints`], the root and each of `count` joints in the world. At 0 and 1, the two poses exactly.
+#[cfg_attr(not(feature = "thug2"), allow(dead_code))] // (only THUG2 gives meshes as data so far)
+pub(crate) fn flat_blend<E>(previous: &Snapshot<E>, current: &Snapshot<E>, alpha: f32, count: usize) -> (Mat4, Vec<Mat4>) {
+    if alpha <= 0.0 {
+        return flat_joints(previous.root_matrix, &previous.joints, count);
+    }
+    if alpha >= 1.0 {
+        return flat_joints(current.root_matrix, &current.joints, count);
+    }
+    // (the root as every model's, `blend`, guarded as a joint is: a root that turns mirrored between two steps snaps)
+    let root = blend_matrix(previous.root_matrix, current.root_matrix, alpha);
+    let at = |joints: &[Mat4], i: usize| joints.get(i).copied().unwrap_or(Mat4::IDENTITY);
+    let joints = (0..count).map(|i| root * blend_matrix(at(&previous.joints, i), at(&current.joints, i), alpha)).collect();
+    (root, joints)
+}
+
+/// A matrix `alpha` of the way from `a` to `b`, each taken apart into a move, a turn and a scale ([`blend`]: lerp,
+/// slerp the short way, lerp). Two that won't come apart into the same kind (one mirrored and the other not, or either
+/// flat or not finite: [`separable`]) aren't blended: the nearer one is drawn. At 0 and 1, `a` and `b` exactly.
+pub(crate) fn blend_matrix(a: Mat4, b: Mat4, alpha: f32) -> Mat4 {
+    if alpha <= 0.0 {
+        return a;
+    }
+    if alpha >= 1.0 {
+        return b;
+    }
+    match (separable(a), separable(b)) {
+        (Some(sa), Some(sb)) if sa == sb => blend(Transform::from_matrix(a), Transform::from_matrix(b), alpha).to_matrix(),
+        _ if alpha < 0.5 => a,
+        _ => b,
+    }
+}
+
+/// Whether a matrix comes apart into a move, a turn and a scale, and if so whether it is mirrored (a negative
+/// determinant: taken apart as a negative scale along x). Not: a w row other than (0, 0, 0, 1), an axis too short to
+/// turn (under 1e-6 of the longest), or anything not finite.
+pub(crate) fn separable(m: Mat4) -> Option<bool> {
+    let lengths = [m.x_axis.truncate().length(), m.y_axis.truncate().length(), m.z_axis.truncate().length()];
+    let longest = lengths.iter().copied().fold(0.0, f32::max);
+    let det = m.determinant();
+    let affine = m.row(3) == Vec4::W;
+    (affine && det.is_finite() && m.is_finite() && longest > 0.0 && lengths.iter().all(|&l| l > longest * 1e-6) && det != 0.0)
+        .then_some(det < 0.0)
 }
 
 #[cfg(test)]
@@ -332,7 +448,13 @@ mod tests {
             discontinuity,
             root: Mat4::from_translation(Vec3::X * x),
             joints: vec![Mat4::from_translation(Vec3::Y * x); joints],
+            ..Default::default()
         }
+    }
+
+    fn timed(mut pose: Pose, at_ms: u64, period: Duration) -> Pose {
+        pose.step = Step { at: Duration::from_millis(at_ms), period };
+        pose
     }
 
     /// A pose is taken once; a cut, a new step period or a new joint count isn't blended from the one before.
@@ -341,16 +463,166 @@ mod tests {
         let step = Duration::from_millis(16);
         let mut h = PoseHistory::<()>::default();
         assert!(h.view(0.5).is_none());
-        assert!(h.offer(&pose(1, 0.0, 2, false), (), step));
-        assert!(!h.offer(&pose(1, 5.0, 2, false), (), step), "taken once");
-        h.offer(&pose(2, 1.0, 2, false), (), step);
+        assert!(h.offer(&timed(pose(1, 0.0, 2, false), 0, step), ()));
+        assert!(!h.offer(&timed(pose(1, 5.0, 2, false), 0, step), ()), "taken once");
+        h.offer(&timed(pose(2, 1.0, 2, false), 0, step), ());
         let (a, b, t) = h.view(2.0).unwrap();
         assert_eq!((a.root.translation.x, b.root.translation.x, t), (0.0, 1.0, 1.0));
         for (next, joints, cut, period) in [(3, 2, true, step), (4, 2, false, step * 2), (5, 3, false, step * 2)] {
-            h.offer(&pose(next, next as f32, joints, cut), (), period);
+            h.offer(&timed(pose(next, next as f32, joints, cut), 0, period), ());
             let (a, b) = h.pair().unwrap();
             assert_eq!(a.root.translation.x, b.root.translation.x, "pose {next}: not blended");
         }
+    }
+
+    /// A turned, moved, scaled matrix (`mirror`: x flipped).
+    fn trs(x: f32, turn: f32, scale: f32, mirror: bool) -> Mat4 {
+        let s = Vec3::new(if mirror { -scale } else { scale }, scale, scale);
+        Mat4::from_scale_rotation_translation(s, Quat::from_rotation_y(turn), Vec3::new(x, 0.0, 0.0))
+    }
+
+    fn close(a: Mat4, b: Mat4) -> bool {
+        a.abs_diff_eq(b, 1e-5)
+    }
+
+    /// Two poses of a model with no skeleton's shape, a step apart: a flat model's history.
+    fn flat_pair(a: &Pose, b: &Pose) -> PoseHistory<()> {
+        let mut h = PoseHistory::default();
+        h.offer(a, ());
+        h.offer(b, ());
+        h
+    }
+
+    fn flat(generation: u64, at_ms: u64, root: Mat4, joints: Vec<Mat4>) -> Pose {
+        Pose { generation, root, joints, step: Step { at: Duration::from_millis(at_ms), period: Duration::from_millis(10) }, ..Default::default() }
+    }
+
+    /// Halfway between two matrices: half the move, half the turn, half the scale; the root the same way.
+    #[test]
+    fn a_flat_joint_is_blended_by_its_move_turn_and_scale() {
+        let a = flat(1, 10, Mat4::IDENTITY, vec![trs(0.0, 0.0, 1.0, false)]);
+        let b = flat(2, 20, trs(4.0, 0.0, 1.0, false), vec![trs(2.0, std::f32::consts::FRAC_PI_2, 3.0, false)]);
+        let h = flat_pair(&a, &b);
+        // (5 ms after the newer pose's step, a 10 ms period: halfway)
+        let (p, c, alpha) = h.view_at(Duration::from_millis(25)).unwrap();
+        assert_eq!(alpha, 0.5);
+        let (root, joints) = flat_blend(p, c, alpha, 2);
+        assert!(close(root, trs(2.0, 0.0, 1.0, false)), "{root}");
+        assert!(close(joints[0], root * trs(1.0, std::f32::consts::FRAC_PI_4, 2.0, false)), "{}", joints[0]);
+        assert!(close(joints[1], root), "a joint past the pose's is the root's");
+    }
+
+    /// At 0 and 1, exactly the two poses as drawn unblended (`flat_joints`); the clock past a period stays at the newer.
+    #[test]
+    fn a_flat_blend_at_its_ends_is_each_pose_exactly() {
+        let a = flat(1, 10, trs(0.3, 0.2, 0.9, false), vec![trs(1.0, 0.7, 1.1, false), trs(0.1, -2.0, 0.5, true)]);
+        let b = flat(2, 20, trs(0.7, 1.2, 1.0, false), vec![trs(1.5, 2.9, 1.3, false), trs(0.2, 2.0, 0.6, true)]);
+        let h = flat_pair(&a, &b);
+        let (p, c) = h.pair().unwrap();
+        let bits = |(r, j): (Mat4, Vec<Mat4>)| (r.to_cols_array().map(f32::to_bits), j.iter().map(|m| m.to_cols_array().map(f32::to_bits)).collect::<Vec<_>>());
+        assert_eq!(bits(flat_blend(p, c, 0.0, 2)), bits(flat_joints(a.root, &a.joints, 2)));
+        assert_eq!(bits(flat_blend(p, c, 1.0, 2)), bits(flat_joints(b.root, &b.joints, 2)));
+        assert_eq!(h.view_at(Duration::from_millis(20)).unwrap().2, 0.0);
+        assert_eq!(h.view_at(Duration::from_millis(45)).unwrap().2, 1.0);
+        assert_eq!(h.view_at(Duration::from_millis(5)).unwrap().2, 0.0, "a clock behind the step: the older pose");
+    }
+
+    /// The turn goes the short way: from 170 degrees to -170, through 180, not through 0.
+    #[test]
+    fn a_flat_turn_goes_the_short_way() {
+        let (a, b) = (trs(0.0, 170f32.to_radians(), 1.0, false), trs(0.0, -170f32.to_radians(), 1.0, false));
+        assert!(close(blend_matrix(a, b, 0.5), trs(0.0, std::f32::consts::PI, 1.0, false)), "{}", blend_matrix(a, b, 0.5));
+        // (and when the two quaternions come out on opposite sides)
+        let q = Quat::from_rotation_y(0.1);
+        let (a, b) = (Mat4::from_quat(q), Mat4::from_quat(-Quat::from_rotation_y(0.3)));
+        assert!(close(blend_matrix(a, b, 0.5), Mat4::from_rotation_y(0.2)));
+    }
+
+    /// Mirrored matrices blend with mirrored ones; a mirrored and an unmirrored one, or a flat or broken one, aren't
+    /// blended: the nearer is drawn.
+    #[test]
+    fn a_mirror_or_a_flat_matrix_is_not_blended_through() {
+        let (a, b) = (trs(0.0, 0.0, 1.0, true), trs(2.0, 1.0, 3.0, true));
+        let half = blend_matrix(a, b, 0.5);
+        assert!(close(half, trs(1.0, 0.5, 2.0, true)), "{half}");
+        assert!(half.determinant() < 0.0);
+        let plain = trs(2.0, 1.0, 1.0, false);
+        assert_eq!(blend_matrix(a, plain, 0.4), a);
+        assert_eq!(blend_matrix(a, plain, 0.6), plain);
+        let squashed = Mat4::from_scale(Vec3::new(1.0, 0.0, 1.0));
+        assert_eq!(separable(squashed), None);
+        assert_eq!(blend_matrix(squashed, plain, 0.3), squashed);
+        let mut broken = plain;
+        broken.w_axis.x = f32::NAN;
+        assert_eq!(separable(broken), None);
+        assert_eq!(blend_matrix(plain, broken, 0.3), plain);
+        let mut projective = plain;
+        projective.x_axis.w = 0.5;
+        assert_eq!(separable(projective), None);
+        assert_eq!((separable(plain), separable(a)), (Some(false), Some(true)));
+        // (a root turning mirrored between two steps: the nearer pose's root, its joints carried by it)
+        let p = flat(1, 10, a, vec![Mat4::IDENTITY]);
+        let q = flat(2, 20, plain, vec![Mat4::IDENTITY]);
+        let h = flat_pair(&p, &q);
+        let (prev, cur) = h.pair().unwrap();
+        assert_eq!(flat_blend(prev, cur, 0.3, 1), (a, vec![a]));
+        assert_eq!(flat_blend(prev, cur, 0.7, 1), (plain, vec![plain]));
+        // (the same handedness: the root blended exactly as `blend` blends every model's root)
+        let q = flat(2, 20, trs(2.0, 1.0, 3.0, true), vec![Mat4::IDENTITY]);
+        let h = flat_pair(&p, &q);
+        let (prev, cur) = h.pair().unwrap();
+        assert_eq!(flat_blend(prev, cur, 0.3, 1).0, blend(prev.root, cur.root, 0.3).to_matrix());
+    }
+
+    /// A cut, a new period or a new joint count: drawn as the newer pose whatever the clock says.
+    #[test]
+    fn a_flat_model_snaps_on_a_cut_a_new_period_or_a_new_joint_count() {
+        let a = flat(1, 10, Mat4::IDENTITY, vec![trs(0.0, 0.0, 1.0, false)]);
+        let mut cut = flat(2, 20, trs(5.0, 1.0, 1.0, false), vec![trs(1.0, 1.0, 1.0, false)]);
+        cut.discontinuity = true;
+        let mut slower = cut.clone();
+        (slower.discontinuity, slower.step.period) = (false, Duration::from_millis(20));
+        let mut more = cut.clone();
+        (more.discontinuity, more.joints) = (false, vec![trs(1.0, 1.0, 1.0, false); 2]);
+        for b in [cut, slower, more] {
+            let h = flat_pair(&a, &b);
+            let (p, c, alpha) = h.view_at(Duration::from_millis(23)).unwrap();
+            assert!(alpha > 0.0 && alpha < 1.0);
+            let (root, joints) = flat_blend(p, c, alpha, 1);
+            let (r, j) = flat_joints(b.root, &b.joints, 1);
+            assert!(close(root, r) && close(joints[0], j[0]), "{root} {}", joints[0]);
+        }
+    }
+
+    /// A pose given again (the same generation) isn't taken: the pair and the clock's start stay as they were.
+    #[test]
+    fn a_pose_given_again_does_not_move_the_pair_on() {
+        let a = flat(1, 10, Mat4::IDENTITY, vec![trs(0.0, 0.0, 1.0, false)]);
+        let b = flat(2, 20, trs(2.0, 0.0, 1.0, false), vec![trs(2.0, 0.0, 1.0, false)]);
+        let mut h = flat_pair(&a, &b);
+        let mut again = flat(2, 30, trs(9.0, 0.0, 1.0, false), vec![trs(9.0, 0.0, 1.0, false)]);
+        again.discontinuity = true;
+        assert!(!h.offer(&again, ()));
+        let (p, c, alpha) = h.view_at(Duration::from_millis(25)).unwrap();
+        assert_eq!((p.root_matrix, c.root_matrix, alpha), (a.root, b.root, 0.5));
+    }
+
+    /// One history a model; a model a step leaves out is forgotten when the next step comes; the one posed is kept.
+    #[test]
+    fn each_model_has_its_own_history_and_a_model_left_out_is_dropped() {
+        let mut h = PoseHistories::<()>::default();
+        let of = |model: ModelId, generation: u64, at: u64| Pose { model, ..flat(generation, at, Mat4::IDENTITY, vec![]) };
+        assert!(h.offer(&of(0, 1, 10), ()));
+        assert!(h.offer(&of(1, 1, 10), ()), "model 1's own generation 1");
+        assert!(h.offer(&of(0, 2, 20), ()));
+        assert!(h.get(1).is_some(), "left out of step 20 only once step 30 comes");
+        assert!(h.offer(&of(0, 3, 30), ()));
+        assert!(h.get(1).is_none());
+        assert!(h.get(0).is_some());
+        // (a model posed alone, skipping steps, keeps its history)
+        assert!(h.offer(&of(0, 4, 60), ()));
+        assert_eq!(h.get(0).unwrap().pair().unwrap().0.joints.len(), 0);
+        assert!(!h.offer(&of(0, 4, 70), ()), "taken once");
     }
 
     /// A glTF joint is placed against its parent joint; a parentless one in the model's space.

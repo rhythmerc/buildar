@@ -11,7 +11,8 @@
 //! - World: the stage and the park become its collision and rails (`thug2_engine::stage`: its units, offset and face
 //!   classes; not mid-grind). Offered every frame; the game takes the latest when it can.
 //! - Frames: the game steps at its 60 Hz from the headset's frames (several a frame at most), and waits while a menu
-//!   or build mode has the controllers.
+//!   or build mode has the controllers. Each step's pose is numbered and stamped with the game's clock; the model
+//!   layer draws between the last two (`crate::model::PoseHistories`).
 //! - Pad: the Touch controllers as a PlayStation 2 pad (`thug2_engine::input`).
 use crate::engines::{self, Engine, EngineSet};
 use crate::xr::link::{CurrentPark, CurrentStage, PlacePlayer, SkaterLink};
@@ -21,8 +22,8 @@ use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
 use thug2_sys as t2;
 
-/// The game's frame.
-const STEP: f32 = 1.0 / 60.0;
+/// The game's frame (`thug2_engine::model::PERIOD`), in seconds.
+const STEP: f32 = thug2_engine::model::PERIOD.as_secs_f32();
 const MAX_STEPS_PER_FRAME: u32 = 4;
 /// Game frames run at boot, before the skater is put anywhere (the level puts it at its own start first).
 const SETTLE_FRAMES: u32 = 120;
@@ -132,7 +133,17 @@ struct Thug2 {
     phase: Phase,
     /// Its pad, and whether it waits (a menu or build mode has the controllers).
     input: thug2_engine::input::Input,
+    /// The game's clock: its steps' periods summed (`clock`), and the time towards the next step (`accum`, seconds).
+    clock: std::time::Duration,
     accum: f32,
+    /// The steps run (each pose's generation).
+    steps: u64,
+    /// The skater was put somewhere else (a teleport, our world taken with a place, a new world size): the pose after
+    /// the next step is a cut.
+    cut: bool,
+    /// Its skater's poses, one a step, for the model layer to draw between ([`crate::model::PoseHistories`]).
+    poses: crate::model::PoseHistories<()>,
+    contract: engine_core::Pose,
     previous: Option<t2::Skater>,
     current: Option<t2::Skater>,
     /// What the game has of the stage: its revision and world size (`thug2_engine::stage`).
@@ -148,6 +159,13 @@ struct Thug2 {
     /// The game takes its 2D down (`want_hud`), and the last step's (`draw_hud`).
     hud_on: bool,
     hud: t2::Hud,
+}
+
+impl Thug2 {
+    /// The game's clock now: its last step's time and the time since, towards the next.
+    fn now(&self) -> std::time::Duration {
+        self.clock + std::time::Duration::from_secs_f32(self.accum.max(0.0))
+    }
 }
 
 /// The game's sound effects as its steps leave them.
@@ -429,7 +447,10 @@ fn place_player(mut requests: MessageReader<PlacePlayer>, tuning: Res<Tuning>, m
         let spawn = thug2_engine::stage::spawn(r.point, r.forward, tuning.scale);
         let given = thug2.stage.given().is_some();
         match &mut thug2.phase {
-            Phase::Running(engine) if given => engine.teleport(spawn),
+            Phase::Running(engine) if given => {
+                engine.teleport(spawn);
+                thug2.cut = true;
+            }
             _ => thug2.spawn = Some(spawn),
         }
     }
@@ -445,7 +466,10 @@ fn offer_stage(stage: Res<CurrentStage>, park: Res<CurrentPark>, tuning: Res<Tun
         Phase::Running(engine) => Some(engine),
         _ => None,
     };
+    let (placing, scale) = (thug2.spawn.is_some(), thug2.stage.scale());
     thug2.stage.set_stage(engine, thug2.current.as_ref(), &stage, tuning.scale, &mut thug2.spawn);
+    // (the skater put down with the world, or carried over to a new world size: a cut)
+    thug2.cut |= (placing && thug2.spawn.is_none()) || thug2.stage.scale() != scale;
     if thug2.stage.given() != given {
         info!("THUG2 world: {} faces, {} rails (AR revision {})", thug2.stage.faces, thug2.stage.rails, stage.revision);
     }
@@ -454,8 +478,8 @@ fn offer_stage(stage: Res<CurrentStage>, park: Res<CurrentPark>, tuning: Res<Tun
 fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
     let thug2 = &mut *thug2;
     let Phase::Running(engine) = &mut thug2.phase else { return };
+    // (waiting, its clock stands still: the skater is drawn where it was)
     if thug2.input.hold || thug2.stage.given().is_none() {
-        thug2.accum = 0.0;
         return;
     }
     thug2.accum += time.delta_secs().min(0.1) * tuning.speed;
@@ -467,12 +491,21 @@ fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
             Ok(skater) => {
                 thug2.previous = thug2.current;
                 thug2.current = skater;
-                if steps == MAX_STEPS_PER_FRAME || thug2.accum < STEP {
-                    // (the last step this frame: its pose is the one drawn, and its 2D)
-                    engine.skater_pose(&mut thug2.pose);
-                    if thug2.hud_on {
-                        engine.hud(&mut thug2.hud);
-                    }
+                thug2.clock += thug2_engine::model::PERIOD;
+                thug2.steps += 1;
+                // (every step's pose, numbered and stamped, for the model layer to draw between the last two)
+                if engine.skater_pose(&mut thug2.pose) {
+                    let pose = &mut thug2.contract;
+                    thug2_engine::model::pose(&thug2.pose, thug2.stage.scale(), pose);
+                    pose.model = thug2_engine::model::SKATER;
+                    pose.generation = thug2.steps;
+                    pose.discontinuity = std::mem::take(&mut thug2.cut);
+                    pose.step = engine_core::Step { at: thug2.clock, period: thug2_engine::model::PERIOD };
+                    thug2.poses.offer(pose, ());
+                }
+                if thug2.hud_on && (steps == MAX_STEPS_PER_FRAME || thug2.accum < STEP) {
+                    // (the last step this frame: its 2D)
+                    engine.hud(&mut thug2.hud);
                 }
                 // (the world and the skater's place are taken at the start of a step: from now it is in ours)
                 thug2.placed = true;
@@ -631,7 +664,9 @@ fn place_stand_in(
         return;
     };
     let before = thug2.previous.unwrap_or(now);
-    let alpha = (thug2.accum / STEP).clamp(0.0, 1.0);
+    // (the same time since the last step as the model layer's, in steps)
+    let step = engine_core::Step { at: thug2.clock, period: thug2_engine::model::PERIOD };
+    let alpha = step.alpha(thug2.now()).clamp(0.0, 1.0);
     let scale = thug2.stage.scale();
     let at = from_game(before.position, scale).lerp(from_game(now.position, scale), alpha);
     let up = Vec3::from_array(now.up).normalize_or(Vec3::Y);
@@ -664,47 +699,39 @@ fn spawn_skater(world: &mut World, model: &t2::SkaterModel) {
 }
 
 /// The skater where the game's pose has it, in our world (`thug2_engine::model::pose`: the draw matrix and palette
-/// carried over), the whole moved back by where the skater is between the game's last two frames (not blended
-/// otherwise: the game steps at 60 Hz, the headset draws faster).
+/// carried over), between the game's last two steps as the model layer draws every engine's model
+/// ([`crate::model::flat_blend`]: the game steps at 60 Hz, the headset draws faster).
 fn pose_skater(
     thug2: Res<Thug2>,
     joints: Option<Res<SkaterJoints>>,
     mut q: Query<(&mut Transform, &mut Visibility)>,
-    mut pose: Local<engine_core::Pose>,
     mut bodies: ResMut<engine_api::PlayerBodies>,
 ) {
     let Some(joints) = joints else { return };
-    let shown = thug2.placed && thug2.current.is_some() && !thug2.pose.palette.is_empty();
+    let history = thug2.poses.get(thug2_engine::model::SKATER);
+    let view = history.and_then(|h| h.view_at(thug2.now()));
+    let shown = thug2.placed && thug2.current.is_some() && !thug2.pose.palette.is_empty() && view.is_some();
     if let Ok((_, mut visibility)) = q.get_mut(joints.root) {
         *visibility = if shown { Visibility::Inherited } else { Visibility::Hidden };
     }
-    if !shown {
+    let (true, Some((previous, current, alpha))) = (shown, view) else {
         bodies.set(Engine::Thug2, Vec::new());
         return;
-    }
-    let now = thug2.current.unwrap();
-    let before = thug2.previous.unwrap_or(now);
-    let alpha = (thug2.accum / STEP).clamp(0.0, 1.0);
-    let shift = shift(before.position, now.position, alpha);
-    thug2_engine::model::pose(&thug2.pose, thug2.stage.scale(), shift, u64::from(now.frame), &mut pose);
-    let (placed, matrices) = crate::model::flat_joints(&pose, joints.joints.len());
+    };
+    let (placed, matrices) = crate::model::flat_blend(previous, current, alpha, joints.joints.len());
     // (the parts' own transform - the root's - is where the model is: skinning ignores it, but culling places the
     // parts' bind-pose bounds with it)
     if let Ok((mut t, _)) = q.get_mut(joints.root) {
         *t = Transform::from_matrix(placed);
     }
-    for (&joint, matrix) in joints.joints.iter().zip(matrices) {
+    // (its bodies where they are drawn: each point carried by its joint as blended)
+    let point = |p: engine_core::model::Point| Some(matrices.get(usize::from(p.joint))?.transform_point3(p.at));
+    bodies.set(Engine::Thug2, crate::model::bodies(&joints.groups, &[], point));
+    for (&joint, matrix) in joints.joints.iter().zip(&matrices) {
         if let Ok((mut transform, _)) = q.get_mut(joint) {
-            *transform = Transform::from_matrix(matrix);
+            *transform = Transform::from_matrix(*matrix);
         }
     }
-    bodies.set(Engine::Thug2, crate::model::bodies(&joints.groups, &[], |p| pose.point(p)));
-}
-
-/// How far back from where the game's last frame has the skater (game units) it is drawn, `alpha` of the way from the
-/// frame before to that one.
-pub(crate) fn shift(before: [f32; 3], now: [f32; 3], alpha: f32) -> Vec3 {
-    Vec3::from_array(before).lerp(Vec3::from_array(now), alpha) - Vec3::from_array(now)
 }
 
 /// `THUG2_SHOT=<file.png>` (testing without a headset): a camera put a little way in front of the skater, looking at
@@ -852,11 +879,32 @@ mod tests {
         // A world twice the size: the skater stays where it is in the room, and is drawn half size.
         let here = app.world().resource::<SkaterLink>().board.unwrap().position;
         app.world_mut().resource_mut::<Tuning>().scale = 2.0;
+        // (the first step at the new size: a cut, its pose not blended from the one before)
+        let before = app.world().resource::<Thug2>().steps;
+        let mut snapped = false;
         for _ in 0..3 {
             app.update();
+            let thug2 = app.world().resource::<Thug2>();
+            if !snapped && thug2.steps == before + 1 {
+                let (previous, current) = thug2.poses.get(thug2_engine::model::SKATER).unwrap().pair().unwrap();
+                assert_eq!(previous.root_matrix, current.root_matrix, "a cut at the new size");
+                snapped = true;
+            }
         }
+        assert!(snapped, "a step at the new size");
         let there = app.world().resource::<SkaterLink>().board.unwrap().position;
         assert!((there.xz() - here.xz()).length() < 0.6, "kept its place: {here} -> {there}");
+        // (each step's pose taken, numbered by the steps; the new world size a cut: the pair starts again there, so
+        // its two roots are the same size, not blended from the old size)
+        {
+            let thug2 = app.world().resource::<Thug2>();
+            let history = thug2.poses.get(thug2_engine::model::SKATER).expect("its poses");
+            let (previous, current) = history.pair().expect("a pair");
+            assert_eq!(previous.root.scale, current.root.scale, "not blended across the new size");
+            assert!(thug2.steps > 60 && thug2.contract.generation == thug2.steps);
+            let alpha = history.alpha(thug2.now());
+            assert!((0.0..=1.0).contains(&alpha), "{alpha}");
+        }
         // The game's own skater drawn: its parts skinned to joints that sit on it (half size now, as the world is
         // twice as big), the stand-in not shown.
         let root = app.world().resource::<SkaterJoints>().root;

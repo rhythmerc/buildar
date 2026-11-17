@@ -40,6 +40,9 @@ opt-level = 3
 # Local buildar-engine-core checkout (a sibling of this repo):
 # [patch."https://github.com/rhythmerc/buildar-engine-core"]
 # engine-core = { path = "../buildar-engine-core" }
+# (worktree branch: the engine-core branch pose-timing, cloned in .local; repin to its rev once it is on GitHub)
+[patch."https://github.com/rhythmerc/buildar-engine-core"]
+engine-core = { path = ".local/buildar-engine-core" }
 
 # Local skate3-headless checkout (a sibling of this repo):
 # [patch."https://github.com/rhythmerc/skate3-headless"]

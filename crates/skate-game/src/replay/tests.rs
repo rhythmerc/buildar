@@ -3,6 +3,7 @@ use super::*;
 fn pose(x: f32) -> Snapshot {
     Snapshot {
         root: Transform::from_xyz(x, 0., 0.),
+        root_matrix: Mat4::from_translation(Vec3::X * x),
         joints: vec![Mat4::from_translation(Vec3::X * x)],
         extra: crate::presentation::Shot { camera: Transform::from_xyz(x, 2., 3.), fov: 1.0 },
     }
