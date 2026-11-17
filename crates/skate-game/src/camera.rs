@@ -71,14 +71,14 @@ pub(crate) fn present(
         return;
     };
     for (mut camera, mut transform, mut projection) in &mut cameras {
-        *transform = crate::presentation::blend(previous.camera, current.camera, alpha);
+        *transform = crate::presentation::blend(previous.extra.camera, current.extra.camera, alpha);
         if replay.active {
             if let Some(free) = replay.free_camera {
                 *transform = free;
             }
         }
         if let Projection::Perspective(p) = &mut *projection {
-            p.fov = previous.fov + (current.fov - previous.fov) * alpha;
+            p.fov = previous.extra.fov + (current.extra.fov - previous.extra.fov) * alpha;
         }
         // In XR the eye cameras are the only views (see `xr::headset_only_rendering`).
         camera.is_active = config.xr.is_none();

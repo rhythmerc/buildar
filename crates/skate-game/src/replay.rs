@@ -103,7 +103,7 @@ impl Replay {
         let a = self.frames.get(upper.saturating_sub(1))?;
         let b = self.frames.get(upper).unwrap_or(a);
         // Teleports, camera cuts and cadence changes remain discrete.
-        if b.cut || a.pose.bones.len() != b.pose.bones.len() {
+        if b.cut || a.pose.joints.len() != b.pose.joints.len() {
             return Some((&a.pose, &a.pose, 0.0));
         }
         let alpha = if b.time > a.time {
@@ -118,7 +118,7 @@ impl Replay {
         self.free_camera = if self.free_camera.is_some() {
             None
         } else {
-            self.sample().map(|(a, b, t)| blend(a.camera, b.camera, t))
+            self.sample().map(|(a, b, t)| blend(a.extra.camera, b.extra.camera, t))
         };
     }
 }

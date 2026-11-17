@@ -15,7 +15,8 @@ struct Caster {
 }
 
 struct Params {
-    casters: array<Caster, 4>,
+    // (MAX_CASTERS in contact_shadow.rs)
+    casters: array<Caster, 24>,
     count: u32,
     // 0: the casters' shadows; 1: the vertices' alpha (a piece's contact ring)
     mode: u32,
@@ -43,6 +44,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             let h = c.centre.w;
             let grow = 1.0 + c.shape.z * h / c.shape.w;
             let q = vec2(dot(d, c.nose.xyz) / c.nose.w, dot(d, c.side.xyz) / c.side.w) / grow;
+            // (outside it: nothing, and no exp to pay for)
+            if dot(q, q) >= 1.0 {
+                continue;
+            }
             let fall = 1.0 - smoothstep(0.3, 1.0, length(q));
             a = max(a, fall * c.shape.x * exp(-h / c.shape.y) / grow);
         }

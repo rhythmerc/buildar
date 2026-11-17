@@ -80,6 +80,7 @@ pub(crate) fn install(app: &mut App, files: &Path) {
         .resource_mut::<crate::xr::ui::ControlsSheet>()
         .set(Engine::Thug2, thug2_engine::input::CONTROLS.to_vec());
     crate::engine_hud::install(app);
+    app.init_resource::<engine_api::PlayerBodies>();
     engines::add_engine(app, Engine::Thug2, available, |app| {
         app.init_resource::<Thug2>()
             .init_resource::<Thug2Sounds>()
@@ -93,7 +94,7 @@ pub(crate) fn install(app: &mut App, files: &Path) {
             )
             .add_systems(
                 PostUpdate,
-                (place_stand_in, pose_skater)
+                (place_stand_in, pose_skater.in_set(engine_api::BodiesSet))
                     .before(bevy::transform::TransformSystems::Propagate)
                     .in_set(EngineSet(Engine::Thug2)),
             );
@@ -642,180 +643,68 @@ fn place_stand_in(
     *visibility = Visibility::Inherited;
 }
 
-/// The game's skater drawn: its meshes skinned to joints set from its pose each frame.
+/// The game's skater drawn by the generic model layer ([`crate::model`]): its meshes skinned to joints set from its
+/// pose each frame.
 #[derive(Resource)]
 struct SkaterJoints {
     joints: Vec<Entity>,
     root: Entity,
+    /// Its bodies (`thug2_engine::model::board`: the board alone; the C API gives no parents for the rider's bones).
+    groups: Vec<engine_core::model::BodyGroup>,
 }
 
-#[derive(Component)]
-struct SkaterPart;
-
-/// The skater's model as Bevy meshes: bind-pose vertices (game units), skinned by joints whose matrices are the game's
-/// palette carried into our world (`pose_skater`) - inverse bind poses identity, as the palette has them in.
+/// The skater's model (`thug2_engine::model::source`: bind-pose meshes in game units with plain materials) spawned as
+/// meshes as data, skinned with identity inverse binds to joints whose matrices are the game's palette carried into
+/// our world (`pose_skater`).
 fn spawn_skater(world: &mut World, model: &t2::SkaterModel) {
-    use bevy::asset::RenderAssetUsages;
-    use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
-    use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
-    use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
-    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-    const JOINTS: usize = 64;
-    let images: Vec<Handle<Image>> = {
-        let mut images = world.resource_mut::<Assets<Image>>();
-        model
-            .textures
-            .iter()
-            .map(|t| {
-                let mut image = Image::new(
-                    Extent3d { width: t.width, height: t.height, depth_or_array_layers: 1 },
-                    TextureDimension::D2,
-                    t.rgba.clone(),
-                    TextureFormat::Rgba8UnormSrgb,
-                    RenderAssetUsages::RENDER_WORLD,
-                );
-                image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-                    address_mode_u: ImageAddressMode::Repeat,
-                    address_mode_v: ImageAddressMode::Repeat,
-                    ..ImageSamplerDescriptor::linear()
-                });
-                images.add(image)
-            })
-            .collect()
-    };
-    let bindposes = world
-        .resource_mut::<Assets<SkinnedMeshInverseBindposes>>()
-        .add(SkinnedMeshInverseBindposes::from(vec![Mat4::IDENTITY; JOINTS]));
-    let root = world.spawn((Name::new("THUG2 skater"), Transform::default(), Visibility::Hidden)).id();
-    let joints: Vec<Entity> = (0..JOINTS).map(|_| world.spawn((Transform::default(), Visibility::default())).id()).collect();
-    for part in &model.meshes {
-        if part.indices.is_empty() {
-            continue;
-        }
-        let v = &part.vertices;
-        let mut indices = part.indices.clone();
-        if wound_backwards(part) {
-            for t in indices.chunks_exact_mut(3) {
-                t.swap(1, 2);
-            }
-        }
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::RENDER_WORLD);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, v.iter().map(|v| v.position).collect::<Vec<_>>());
-        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, v.iter().map(|v| v.normal).collect::<Vec<_>>());
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, v.iter().map(|v| v.uv).collect::<Vec<_>>());
-        // (BGRA bytes, 0x80 unchanged: the game doubles them)
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_COLOR,
-            v.iter()
-                .map(|v| {
-                    let [b, g, r, a] = v.color.to_le_bytes();
-                    [r, g, b, a].map(|c| (c as f32 / 128.0).min(1.0))
-                })
-                .collect::<Vec<[f32; 4]>>(),
-        );
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_JOINT_INDEX,
-            VertexAttributeValues::Uint16x4(v.iter().map(|v| [v.bones[0], v.bones[1], v.bones[2], 0].map(u16::from)).collect()),
-        );
-        mesh.insert_attribute(
-            Mesh::ATTRIBUTE_JOINT_WEIGHT,
-            v.iter()
-                .map(|v| {
-                    let sum: f32 = v.weights[..3].iter().sum();
-                    let w = if sum > 1e-6 { v.weights[..3].iter().map(|w| w / sum).collect::<Vec<_>>() } else { vec![1.0, 0.0, 0.0] };
-                    [w[0], w[1], w[2], 0.0]
-                })
-                .collect::<Vec<[f32; 4]>>(),
-        );
-        mesh.insert_indices(Indices::U16(indices));
-        let colour = part.color.map(|c| (c * 2.0).min(1.0));
-        let material = StandardMaterial {
-            base_color: Color::srgba(colour[0], colour[1], colour[2], 1.0),
-            base_color_texture: part.texture.and_then(|t| images.get(t).cloned()),
-            alpha_mode: if part.blended {
-                AlphaMode::Blend
-            } else if part.alpha_ref > 0 {
-                AlphaMode::Mask((part.alpha_ref as f32 / 255.0).max(0.02))
-            } else {
-                AlphaMode::Opaque
-            },
-            double_sided: part.two_sided,
-            cull_mode: if part.two_sided { None } else { Some(bevy::render::render_resource::Face::Back) },
-            perceptual_roughness: 0.85,
-            ..default()
-        };
-        let mesh = world.resource_mut::<Assets<Mesh>>().add(mesh);
-        let material = world.resource_mut::<Assets<StandardMaterial>>().add(material);
-        let part = world
-            .spawn((
-                SkaterPart,
-                Mesh3d(mesh),
-                MeshMaterial3d(material),
-                SkinnedMesh { inverse_bindposes: bindposes.clone(), joints: joints.clone() },
-                // (bounds of the bind pose: a pose reaches past them)
-                bevy::camera::visibility::NoFrustumCulling,
-                Transform::default(),
-            ))
-            .id();
-        world.entity_mut(root).add_child(part);
-    }
-    world.insert_resource(SkaterJoints { joints, root });
+    let model = thug2_engine::model::source(model);
+    let engine_core::ModelSource::Meshes { meshes, textures, joint_count } = &model.source else { return };
+    let crate::model::FlatModel { root, joints } = crate::model::spawn_meshes(world, "THUG2 skater", meshes, textures, *joint_count);
+    world.insert_resource(SkaterJoints { joints, root, groups: model.groups.clone() });
 }
 
-/// A mesh's triangles turned the other way to ours (front: counter-clockwise): most of them face away from their
-/// vertices' normals.
-fn wound_backwards(part: &t2::SkaterMesh) -> bool {
-    let mut against = 0i64;
-    for t in part.indices.chunks_exact(3) {
-        let [a, b, c] = [0, 1, 2].map(|k| &part.vertices[t[k] as usize]);
-        let (pa, pb, pc) = (Vec3::from_array(a.position), Vec3::from_array(b.position), Vec3::from_array(c.position));
-        let geometric = (pb - pa).cross(pc - pa);
-        let normal = Vec3::from_array(a.normal) + Vec3::from_array(b.normal) + Vec3::from_array(c.normal);
-        against += if geometric.dot(normal) < 0.0 { 1 } else { -1 };
-    }
-    against > 0
-}
-
-/// Each joint where the game's pose has its bone, in our world: (game to ours) x (draw matrix) x (palette), the
-/// game's row-vector matrices read as our column ones (transposed); the whole moved by where the skater is between
-/// the game's last two frames.
-fn pose_skater(thug2: Res<Thug2>, joints: Option<Res<SkaterJoints>>, mut q: Query<(&mut Transform, &mut Visibility)>) {
+/// The skater where the game's pose has it, in our world (`thug2_engine::model::pose`: the draw matrix and palette
+/// carried over), the whole moved back by where the skater is between the game's last two frames (not blended
+/// otherwise: the game steps at 60 Hz, the headset draws faster).
+fn pose_skater(
+    thug2: Res<Thug2>,
+    joints: Option<Res<SkaterJoints>>,
+    mut q: Query<(&mut Transform, &mut Visibility)>,
+    mut pose: Local<engine_core::Pose>,
+    mut bodies: ResMut<engine_api::PlayerBodies>,
+) {
     let Some(joints) = joints else { return };
     let shown = thug2.placed && thug2.current.is_some() && !thug2.pose.palette.is_empty();
     if let Ok((_, mut visibility)) = q.get_mut(joints.root) {
         *visibility = if shown { Visibility::Inherited } else { Visibility::Hidden };
     }
     if !shown {
+        bodies.set(Engine::Thug2, Vec::new());
         return;
     }
-    let scale = thug2.stage.scale();
-    let to_ours =
-        Mat4::from_scale(Vec3::splat(1.0 / (t2::INCHES_PER_METRE * scale))) * Mat4::from_translation(-thug2_engine::stage::OFFSET);
-    // (between the last two frames: the game steps at 60 Hz, the headset draws faster)
     let now = thug2.current.unwrap();
     let before = thug2.previous.unwrap_or(now);
     let alpha = (thug2.accum / STEP).clamp(0.0, 1.0);
-    let back = Vec3::from_array(before.position).lerp(Vec3::from_array(now.position), alpha) - Vec3::from_array(now.position);
-    let mut draw = thug2.pose.draw;
-    (draw[3], draw[7], draw[11], draw[15]) = (0.0, 0.0, 0.0, 1.0);
-    let placed = to_ours * Mat4::from_translation(back) * Mat4::from_cols_array(&draw);
+    let shift = shift(before.position, now.position, alpha);
+    thug2_engine::model::pose(&thug2.pose, thug2.stage.scale(), shift, u64::from(now.frame), &mut pose);
+    let (placed, matrices) = crate::model::flat_joints(&pose, joints.joints.len());
     // (the parts' own transform - the root's - is where the model is: skinning ignores it, but culling places the
     // parts' bind-pose bounds with it)
     if let Ok((mut t, _)) = q.get_mut(joints.root) {
         *t = Transform::from_matrix(placed);
     }
-    for (i, &joint) in joints.joints.iter().enumerate() {
-        // (the game clears its palette's w column - its skinning reads only the rest, as for a point: w is 1 again
-        // here, or the product would drop the translations of the matrices before it)
-        let palette = thug2.pose.palette.get(i).map_or(Mat4::IDENTITY, |m| {
-            let mut m = *m;
-            (m[3], m[7], m[11], m[15]) = (0.0, 0.0, 0.0, 1.0);
-            Mat4::from_cols_array(&m)
-        });
+    for (&joint, matrix) in joints.joints.iter().zip(matrices) {
         if let Ok((mut transform, _)) = q.get_mut(joint) {
-            *transform = Transform::from_matrix(placed * palette);
+            *transform = Transform::from_matrix(matrix);
         }
     }
+    bodies.set(Engine::Thug2, crate::model::bodies(&joints.groups, &[], |p| pose.point(p)));
+}
+
+/// How far back from where the game's last frame has the skater (game units) it is drawn, `alpha` of the way from the
+/// frame before to that one.
+pub(crate) fn shift(before: [f32; 3], now: [f32; 3], alpha: f32) -> Vec3 {
+    Vec3::from_array(before).lerp(Vec3::from_array(now), alpha) - Vec3::from_array(now)
 }
 
 /// `THUG2_SHOT=<file.png>` (testing without a headset): a camera put a little way in front of the skater, looking at
@@ -972,13 +861,20 @@ mod tests {
         // twice as big), the stand-in not shown.
         let root = app.world().resource::<SkaterJoints>().root;
         let joint = app.world().resource::<SkaterJoints>().joints[0];
-        let parts = app.world_mut().query_filtered::<(), With<SkaterPart>>().iter(app.world()).count();
+        let parts = app.world_mut().query_filtered::<(), With<crate::model::ModelPart>>().iter(app.world()).count();
         assert!(parts > 10, "{parts} parts");
         let root_at = app.world().get::<Transform>(root).unwrap();
         assert!((root_at.translation.xz() - there.xz()).length() < 0.6, "the model where the skater is: {root_at:?}");
         assert!((root_at.scale.x - 0.5 / t2::INCHES_PER_METRE).abs() < 1e-4, "half size: {root_at:?}");
         let joint_at = app.world().get::<Transform>(joint).unwrap().translation;
         assert!((joint_at - there).length() < 1.5, "its joints on it: {joint_at} vs {there}");
+        // Its board's body, from the joints only the board's parts are skinned to: where the skater link puts the
+        // board, along the way it faces.
+        let link = app.world().resource::<SkaterLink>().board.unwrap();
+        let bodies = app.world().resource::<engine_api::PlayerBodies>().of(Engine::Thug2).to_vec();
+        let [engine_api::BodyShape::Footprint { middle, along, .. }] = bodies.as_slice() else { panic!("the board alone: {bodies:?}") };
+        assert!((*middle - link.position).length() < 0.15, "the board's middle {middle} at the board {}", link.position);
+        assert!(along.dot(link.forward.with_y(0.0).normalize()).abs() > 0.9, "along it: {along} vs {}", link.forward);
         let mut q = app.world_mut().query_filtered::<&Visibility, With<StandIn>>();
         assert_eq!(*q.single(app.world()).unwrap(), Visibility::Hidden);
         // Away to the other engine: the game waits, its stand-in hidden.

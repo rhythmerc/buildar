@@ -148,7 +148,7 @@ pub trait EngineCore: Send {
   Placement = Hand { metres_per_px, offset, anchor, hand: Option<HudHand>, on_left: Option<(Vec2, Vec2)> }
             | AtBody { group, offset, billboard, min_view_share }   // e.g. THUG2's balance meter at the rider
             | HeadCorner
-  // as built: AtPlayer { side, width_per_height, least_view_share, middle, clear } at the Focus (body groups: step 6)
+  // as built: AtPlayer { side, width_per_height, least_view_share, middle, clear } at the Focus (body groups exist since step 6; AtBody not built yet)
   ```
 
 ### HUD
@@ -208,15 +208,16 @@ Both engines can separate the skater from the board: off-board walking, bails, a
   - THUG2's sound emitter.
 
   Only the skate layer (the park builder's rail feeding, the trick readout) keeps reading the skate module.
-  (Step 5: they read the stage and the running engine's `PlayerFocus` now; the contact shadow reads
-  `SkaterLink.board` until step 6.)
+  (Step 5: they read the stage and the running engine's `PlayerFocus` now. Step 6: the contact shadow reads the
+  running engine's body groups, `engine_api::PlayerBodies`; only an engine with none, SK8, falls back to
+  `SkaterLink.board`.)
 - **Both cast contact shadows,** from body groups. Today only the board does: three fixed soft ellipses
   (deck and trucks, `xr/contact_shadow.rs` `casters`), and the rider casts none.
   - The board's group keeps that shape.
   - Every other group casts from its bone segments: each segment (parent to child) becomes a soft ellipse
     on the surface below, fainter and wider with height.
   - It stays analytic, with no shadow map (directional shadows cost the headset 13 fps).
-  - This lands with step 6.
+  - Landed with step 6 (below). THUG2's rider casts none yet: its C API gives no parents or joint positions.
 - **For an engine that draws its board as its own model,** `models()` returns a list, each with its own
   pose. That costs nothing for one-skeleton engines.
 
@@ -372,7 +373,7 @@ sorting rule.
   mid-grind now. Generic consumers read the stage (spawn aiming, build mode, room light, controller shapes, contact
   shadow patches) or the running engine's focus (planes' free-roam floor, the world-scale re-place, carrying the
   player over, `THUG2_SHOT`); a skate-layer system (`xr::link::focus_from_link`) makes the focus from the link. The
-  contact shadow reads `SkaterLink.board` until step 6.
+  contact shadow read `SkaterLink.board` until step 6.
 - **Skate 3** (`skate3_engine::stage`, `::trick`): `StageFeed` (`set_park`, `set_stage` with the grind deferral and
   the sim's `set_real_surfaces`/`set_grind_rails` arguments rebuilt from stage and park), `place_player` (the travel
   matrix, 5 cm up), `link` (board: the deck body; rider: the animation root `animation_to_world`, its stance axes
@@ -391,6 +392,61 @@ sorting rule.
   2.5, SK8's collision triangles with surfaces and its rails) for three worlds: the room alone, the room with a piece
   of every kind, and both through a turned, scaled rig. Through the stage and park they are identical. The meter's
   placement is checked against the old factors exactly (`engine_hud` tests).
+
+**Step 6, as done (2026-11-16):** each engine describes its skater model and gives its pose as plain data; the app
+draws both through one generic layer that doesn't know which engine it is.
+- **Core** (`engine_core::model`): `Model { source, parents, groups }`; `ModelSource::Gltf { path, joint_names, basis }`
+  or `ModelSource::Meshes { meshes, textures, joint_count }` (`MeshData`: positions, normals, uvs, colour multipliers,
+  joints and weights, indices, a `MaterialDesc { base_color, texture, alpha, two_sided, vertex_color, lighting }` with
+  `AlphaMode` and `Lighting::{Standard, Unlit}`; textures are the HUD's `Rgba8`); `Pose { generation, discontinuity,
+  root, joints }`. The skeleton's shape is the model's (`parents`), not each pose's: the one refinement of the sketch
+  above. Body groups (`BodyGroup`, `Cast`, `Point`, `Ellipse`) are in core with neutral `u32` ids;
+  `engine_core::skate::body` names them (`RIDER`, `BOARD`) and holds `BOARD_FOOTPRINT`.
+- **The app** (`skate-game`'s `model.rs`): `PoseHistory` (the last two poses, taken once; a cut, a new step period or
+  joint count restarts the pair) with `blend`; for a glTF source `bind_skins` (skin joints by name, the nearest named
+  ancestor as parent), `joint_locals` (bone-local blending) and `joint_transforms` (unblended); for meshes as data
+  `spawn_meshes`, `mesh`, `material` (the lit or unlit standard material, roughness 0.85) and `flat_joints` (root x
+  joint, identity inverse binds, not blended). The per-engine systems that feed it stay in each adapter until step 8.
+- **Skate 3** (`skate3_engine::model`): `model` (the manifest's GLB, the rig's bone names and parents, `BASIS`, the old
+  `render_basis` to the sign of its zeros) and `pose` (the render pose and animation root; a discontinuity when the
+  gameplay camera cuts or the teleport flag is up: the sim's own flag, so skate3-headless is unchanged). The desktop
+  camera's shot rides in the same `PoseHistory` as the pose, so camera, root and joints keep one interval; the replay
+  (parked) samples the same snapshots.
+- **THUG2** (`thug2_engine::model`): `source` (winding, vertex colours /128, the part colour doubled, weights of three
+  normalised, alpha mode) and `pose` (the w columns fixed, game to ours x draw matrix as the root, the palette as the
+  joints). Its only interpolation, the root moved back by the skater's position between the game's last two frames,
+  stays exactly as it was: the adapter works out the shift (game units) and the engine puts it between the unit
+  conversion and the draw matrix. A generic world-space root blend instead would also turn the root between frames,
+  and would take the motion from the draw matrix rather than the skater's position: the user's call.
+- **Parity:** `model_parity` (recorded at 8773c47, the old maths lifted out as functions unchanged) digests the `f32`
+  bits of what each engine's model is given. Skate 3: joints and root over fixed ticks (a cut, a cadence change, a
+  repeated generation, a bone count change) at six alphas, inside and outside 0..1, and the no-pair fallback; and
+  the real game (`SKATE3_ASSET_ROOT`): 150 of its own ticks bound to its GLB. THUG2: joints from a fixed palette and
+  draw matrix (short palette, junk w columns, world sizes 1 and 2.5, moving and not) and its parts as meshes and
+  materials; and the real game (ignored: the game boots once a process) after a fixed run. All identical through the
+  new path.
+- **Contact shadows from body groups** (`xr/contact_shadow.rs`): the running engine's bodies, placed by the model
+  layer each frame (`model::bodies` into `engine_api::PlayerBodies`; THUG2's after its pose, ordered by
+  `engine_api::BodiesSet`). A footprint body casts its ellipses (the board: `BOARD_FOOTPRINT`, today's deck and two
+  trucks, sizes in focus heights); every other body casts one soft ellipse a bone (parent to child, both in the
+  group), round its line seen from above, under its middle, fainter than the board (0.35 against 0.65) and fainter and
+  wider with height as before. Bones under 6 cm (at size 1) cast nothing; the longest 20 are kept. The shader's array
+  went from 4 casters to 24 (`MAX_CASTERS`): the material's uniform from 272 to 1,552 bytes, and each shadow pixel loops
+  over the casters there are (one past its ellipse skips the `exp`). The patch is cut round all the bodies (at least a
+  size, at most three sizes out; bodies farther apart than that, a board left far behind, keep it round the player's
+  focus, so the rider keeps its shadow). With no bodies (SK8, and before a pose) the board's footprint is cast from
+  `SkaterLink.board` as before: that picture is identical to the old one (`a_picture_of_contact_shadows`, max difference
+  0; `SK8_SHADOW_RIDER=1` adds a standing rider's bones).
+  - **Skate 3** (`skate3_engine::model`): the board is the rig's `SKATEBOARD_ROOT` with its trucks and wheels (the
+    sim's `board_bones` and their parent), cast from the back truck to the front; the rider is the hips' tree (23
+    bones; the trajectory root and the hands and toes reparented to the board for its IK are neither). Checked on the
+    real game: the footprint's middle within 10 cm of the sim's deck body and along it.
+  - **THUG2** (`thug2_engine::model::board`): the board is the parts lying under 8 inches and at least 20 long in the
+    bind pose (the deck, trucks and wheels: five parts), its joints those only they are skinned to (four of the
+    palette's), its ends points of the bind pose carried by the joint weighing most at each. The rider casts nothing:
+    the C API gives no parents and no joint positions (the palette is inverse bind times posed), and guessing a
+    skeleton from shared skin weights is a workaround this step doesn't take. Checked on the real game: the
+    footprint's middle within 15 cm of the board in the link and along it.
 
 ### Risks
 

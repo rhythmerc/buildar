@@ -1,10 +1,14 @@
-//! Contact shadows: the board's on whatever is under it (the real floor and furniture, a park piece), and each park
-//! piece's on the floor it stands on. Cheap, analytic ones - no shadow map (directional shadows cost the headset 13 fps):
+//! Contact shadows: the player's bodies' on whatever is under them (the real floor and furniture, a park piece), and
+//! each park piece's on the floor it stands on. Cheap, analytic ones - no shadow map (directional shadows cost the
+//! headset 13 fps):
 //!
-//! - **The board's.** A patch of the surfaces under the skater (the room's and the pieces' level faces, cut to a
-//!   square around it, the stage), drawn with [`ShadowMaterial`]: soft ellipses under the deck and its two trucks,
-//!   fainter and wider the higher it is over the surface. The patch is made again only when the skater leaves it or
-//!   the world changes; each frame only the casters move.
+//! - **The player's.** A patch of the surfaces under the player (the room's and the pieces' level faces, cut to a
+//!   square around its bodies, the stage), drawn with [`ShadowMaterial`]: soft ellipses, fainter and wider the higher
+//!   what casts them is over the surface. Each of the running engine's bodies casts its own
+//!   ([`engine_api::PlayerBodies`], from its model's body groups): a footprint body (a skate engine's board: the deck
+//!   and its two trucks) its fixed ellipses, every other body an ellipse a bone (parent to child), the longest
+//!   [`MAX_SEGMENTS`] of them. An engine with no bodies (SK8) casts the board's footprint from its skater link. The
+//!   patch is made again only when the bodies leave it or the world changes; each frame only the casters move.
 //! - **The pieces'.** A soft ring round each piece's footprint where it meets the floor ([`piece_ring`], spawned with
 //!   the piece's visual), hidden while the piece isn't standing on the room.
 //!
@@ -16,7 +20,8 @@
 //! Off with the AR settings' "Contact shadows".
 use crate::xr::ar_settings::ArSettings;
 use crate::xr::build::pieces::{PieceGeometry, PieceKind};
-use crate::xr::link::{CurrentStage, SkaterLink};
+use crate::xr::link::{CurrentStage, PlayerFocus, SkaterLink};
+use engine_api::{BodiesSet, BodyShape, PlayerBodies};
 use crate::xr::rig::Rig;
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::mesh::{Indices, MeshVertexBufferLayoutRef, PrimitiveTopology};
@@ -25,10 +30,25 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
 use bevy::shader::ShaderRef;
 
-/// How far round the skater the patch reaches, in skater sizes (a board is about 0.8).
+/// The shadows are made in sizes: a player's focus height over this (metres: a person-sized player is size 1).
+const PERSON_HEIGHT_M: f32 = 1.8;
+/// How far round the bodies the patch reaches at least, and past them, in sizes (a board is about 0.8).
 const PATCH_REACH: f32 = 1.0;
-/// The skater moved this far from the patch's middle (skater sizes): made again.
+const PATCH_PAST: f32 = 0.5;
+/// The farthest the patch reaches (sizes): a body farther from the others casts onto nothing.
+const PATCH_MOST: f32 = 3.0;
+/// The bodies moved this far from the patch's middle (sizes): made again.
 const PATCH_MOVE: f32 = 0.35;
+/// The most casters drawn at once (`contact_shadow.wgsl`'s array: keep the two in step), and of them the most bone
+/// segments (the longest). A caster is 64 bytes of the material's uniform: 24 are 1,536 bytes (4 were 256), and each
+/// shadow pixel loops over those there are.
+const MAX_CASTERS: usize = 24;
+pub(crate) const MAX_SEGMENTS: usize = 20;
+/// A bone shorter than this (sizes) casts nothing (a neck's, a finger's).
+const SHORTEST_SEGMENT: f32 = 0.06;
+/// A bone's shadow: how far round its line it reaches (sizes), and how dark it is right under.
+const SEGMENT_RADIUS: f32 = 0.07;
+const SEGMENT_DARK: f32 = 0.35;
 /// Faces steeper than this aren't under anything (cosine of their slope).
 const LEVEL_ENOUGH: f32 = 0.3;
 /// Shadows lifted off what they lie on, real metres (so they're in front of a piece's face in depth).
@@ -49,7 +69,7 @@ struct Caster {
 
 #[derive(Clone, Copy, Debug, Default, ShaderType)]
 struct Params {
-    casters: [Caster; 4],
+    casters: [Caster; MAX_CASTERS],
     count: u32,
     mode: u32,
     opacity: f32,
@@ -86,21 +106,21 @@ impl Material for ShadowMaterial {
     }
 }
 
-/// The materials: the board's (its casters each frame) and the rings'.
+/// The materials: the player's (its casters each frame) and the rings'.
 #[derive(Resource)]
 pub(crate) struct ShadowAssets {
-    board: Handle<ShadowMaterial>,
+    player: Handle<ShadowMaterial>,
     pub(crate) ring: Handle<ShadowMaterial>,
 }
 
-/// The patch under the skater, and what it was made from.
+/// The patch under the player, and what it was made from.
 #[derive(Component)]
-struct BoardShadow;
+struct PlayerShadow;
 
 #[derive(Resource, Default)]
 struct Patch {
-    /// Its middle, the world's revision and the skater's size it was made for.
-    made: Option<(Vec3, u64, f32)>,
+    /// Its middle, the world's revision, the player's size and how far it reaches.
+    made: Option<(Vec3, u64, f32, f32)>,
     /// Its faces (lifted), for finding the surface under the casters.
     triangles: Vec<[Vec3; 3]>,
 }
@@ -116,83 +136,158 @@ impl Plugin for ContactShadowPlugin {
         embedded_asset!(app, "contact_shadow.wgsl");
         app.add_plugins(MaterialPlugin::<ShadowMaterial>::default())
             .init_resource::<Patch>()
+            .init_resource::<PlayerBodies>()
             .add_systems(Startup, setup)
-            .add_systems(PostUpdate, (board_shadow, ring_standing, pool_grounds).before(bevy::transform::TransformSystems::Propagate));
+            .add_systems(
+                PostUpdate,
+                (player_shadow.after(BodiesSet), ring_standing, pool_grounds).before(bevy::transform::TransformSystems::Propagate),
+            );
     }
 }
 
 fn setup(mut commands: Commands, mut materials: ResMut<Assets<ShadowMaterial>>, mut meshes: ResMut<Assets<Mesh>>) {
-    let board = materials.add(ShadowMaterial { params: Params { opacity: 1.0, ..default() } });
+    let player = materials.add(ShadowMaterial { params: Params { opacity: 1.0, ..default() } });
     let ring = materials.add(ShadowMaterial { params: Params { mode: 1, opacity: 1.0, ..default() } });
     commands.spawn((
-        BoardShadow,
+        PlayerShadow,
         Mesh3d(meshes.add(Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default()))),
-        MeshMaterial3d(board.clone()),
+        MeshMaterial3d(player.clone()),
         Transform::default(),
         Visibility::Hidden,
-        Name::new("Board shadow"),
+        Name::new("Player shadow"),
     ));
-    commands.insert_resource(ShadowAssets { board, ring });
+    commands.insert_resource(ShadowAssets { player, ring });
 }
 
-/// The board's shadow: its casters where the skater is, and the patch under it made again when it has moved off it.
+/// The player's shadow: the running engine's bodies' casters (an engine with none: the board's footprint from the
+/// skater link), and the patch under them made again when they have moved off it.
 #[allow(clippy::too_many_arguments)]
-fn board_shadow(
+fn player_shadow(
     settings: Res<ArSettings>,
     world: Res<CurrentStage>,
+    engines: Option<Res<crate::engines::Engines>>,
+    bodies: Res<PlayerBodies>,
+    focus: Option<Res<PlayerFocus>>,
     link: Res<SkaterLink>,
     rig: Res<Rig>,
     assets: Option<Res<ShadowAssets>>,
     mut patch: ResMut<Patch>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ShadowMaterial>>,
-    mut shadow: Query<(&Mesh3d, &mut Visibility), With<BoardShadow>>,
+    mut shadow: Query<(&Mesh3d, &mut Visibility), With<PlayerShadow>>,
 ) {
     let (Some(assets), Ok((mesh, mut visibility))) = (assets, shadow.single_mut()) else { return };
-    // (the board's frame: it may be away from the rider - a bail, walking - and it casts where it is)
-    let Some((deck, nose)) = link.board.map(|b| (b.position, b.forward)).filter(|_| settings.contact_shadows) else {
+    let running = engines.and_then(|e| e.current());
+    let mut shapes = running.map_or(&[][..], |e| bodies.of(e)).to_vec();
+    // (no bodies: a skate engine's board where its link has it - it may be away from the rider, a bail, walking)
+    if shapes.is_empty()
+        && let Some(board) = link.board
+    {
+        let along = board.forward.with_y(0.0).normalize_or(Vec3::Z);
+        let ellipses = engine_core::skate::body::BOARD_FOOTPRINT.to_vec();
+        shapes.push(BodyShape::Footprint { middle: board.position, along, ellipses });
+    }
+    let focus = running.and_then(|e| focus.as_ref()?.of(e));
+    let size = focus.map_or(link.size(), |f| f.height / PERSON_HEIGHT_M);
+    let Some((centre, needed)) =
+        patch_round(&shapes, focus.map(|f| f.feet), size).filter(|_| settings.contact_shadows && size > 0.0)
+    else {
         visibility.set_if_neq(Visibility::Hidden);
         return;
     };
-    let size = link.size();
-    let stale = patch.made.is_none_or(|(at, revision, made_size)| {
-        revision != world.revision || made_size != size || (at - deck).with_y(0.0).length() > PATCH_MOVE * size
+    let stale = patch.made.is_none_or(|(at, revision, made_size, made_reach)| {
+        let moved = (at - centre).with_y(0.0).length();
+        revision != world.revision || made_size != size || moved > PATCH_MOVE * size || needed + moved > made_reach
     });
     if stale {
         let lift = LIFT_M * rig.scale;
-        let triangles = level_faces_near(&world, deck, PATCH_REACH * size, lift);
+        let reach = patch_reach(needed, size);
+        let triangles = level_faces_near(&world, centre, reach, lift);
         if let Some(m) = meshes.get_mut(&mesh.0) {
             *m = patch_mesh(&triangles);
         }
         patch.triangles = triangles;
-        patch.made = Some((deck, world.revision, size));
+        patch.made = Some((centre, world.revision, size, reach));
     }
-    let casters = casters(deck, nose, size, |p| surface_under(&patch.triangles, p, size));
+    let casters = casters(&shapes, size, |p| surface_under(&patch.triangles, p, size));
     visibility.set_if_neq(if casters.is_empty() { Visibility::Hidden } else { Visibility::Inherited });
-    if let Some(material) = materials.get_mut(&assets.board) {
+    if let Some(material) = materials.get_mut(&assets.player) {
         let mut params = Params { mode: 0, opacity: 1.0, count: casters.len() as u32, ..default() };
         params.casters[..casters.len()].copy_from_slice(&casters);
         material.params = params;
     }
 }
 
-/// The deck's shadow and its trucks', over the surface under each (`under`: its height there); none over nothing.
-fn casters(deck: Vec3, nose: Vec3, size: f32, under: impl Fn(Vec3) -> Option<f32>) -> Vec<Caster> {
-    let along = nose.with_y(0.0).normalize_or(Vec3::Z);
-    let across = Vec3::Y.cross(along);
-    let mut out = Vec::new();
-    // (the deck, then the trucks: smaller and darker, where the wheels meet the ground)
-    for (offset, half_length, half_width, dark) in [(0.0, 0.42, 0.14, 0.65), (0.25, 0.1, 0.12, 0.55), (-0.25, 0.1, 0.12, 0.55)] {
-        let at = deck + along * (offset * size);
-        let Some(ground) = under(at) else { continue };
-        let height = (at.y - ground).max(0.0);
-        out.push(Caster {
-            centre: at.with_y(ground).extend(height),
-            nose: along.extend(half_length * size),
-            side: across.extend(half_width * size),
+/// Where the patch goes round the bodies, and how far it must reach from there (sizes times `size`): the middle of
+/// the box round them, [`PATCH_PAST`] past them. Bodies too far apart for [`PATCH_MOST`] (a board left far behind):
+/// round the player's focus (`focus`), so the player keeps its shadow. None: no bodies.
+fn patch_round(shapes: &[BodyShape], focus: Option<Vec3>, size: f32) -> Option<(Vec3, f32)> {
+    let (centre, half) = extent(shapes)?;
+    let needed = half + PATCH_PAST * size;
+    Some(match focus {
+        Some(feet) if needed > PATCH_MOST * size => (feet, PATCH_MOST * size),
+        _ => (centre, needed.min(PATCH_MOST * size)),
+    })
+}
+
+/// How far a patch is made to reach that must reach `needed`: past it by as far as the bodies may move before it is
+/// made again ([`PATCH_MOVE`]), at least [`PATCH_REACH`] (the board's alone: as it always was), at most [`PATCH_MOST`].
+fn patch_reach(needed: f32, size: f32) -> f32 {
+    (needed + PATCH_MOVE * size).clamp(PATCH_REACH * size, PATCH_MOST * size)
+}
+
+/// Where the bodies are, seen from above: the middle of the box round them and half its larger side (none: no bodies).
+fn extent(shapes: &[BodyShape]) -> Option<(Vec3, f32)> {
+    let points = shapes.iter().flat_map(|s| match s {
+        BodyShape::Footprint { middle, .. } => vec![*middle],
+        BodyShape::Segments(segments) => segments.iter().flat_map(|&(a, b)| [a, b]).collect(),
+    });
+    let (lo, hi) = points.fold((Vec3::MAX, Vec3::MIN), |(lo, hi), p| (lo.min(p), hi.max(p)));
+    (lo.x <= hi.x).then(|| ((lo + hi) / 2.0, ((hi - lo) / 2.0).with_y(0.0).max_element()))
+}
+
+/// The bodies' shadows over the surface under each (`under`: its height there), none over nothing, at most
+/// [`MAX_CASTERS`]: each footprint's ellipses, then the longest [`MAX_SEGMENTS`] bones (none shorter than
+/// [`SHORTEST_SEGMENT`]), each a soft ellipse round its line seen from above, fainter than a footprint.
+fn casters(shapes: &[BodyShape], size: f32, under: impl Fn(Vec3) -> Option<f32>) -> Vec<Caster> {
+    let height = size * PERSON_HEIGHT_M;
+    let caster = |at: Vec3, along: Vec3, half_length: f32, half_width: f32, dark: f32| {
+        let ground = under(at)?;
+        Some(Caster {
+            centre: at.with_y(ground).extend((at.y - ground).max(0.0)),
+            nose: along.extend(half_length),
+            side: Vec3::Y.cross(along).extend(half_width),
             shape: Vec4::new(dark, 1.2 * size, 0.8, size),
-        });
+        })
+    };
+    let mut out = Vec::new();
+    // (the footprints, as the board's always was: the deck, then the trucks, smaller and darker, where the wheels meet
+    // the ground)
+    for shape in shapes {
+        if let BodyShape::Footprint { middle, along, ellipses } = shape {
+            for e in ellipses {
+                let at = *middle + *along * (e.along * height);
+                out.extend(caster(at, *along, e.half_length * height, e.half_width * height, e.dark));
+            }
+        }
     }
+    let mut segments: Vec<(Vec3, Vec3)> = shapes
+        .iter()
+        .flat_map(|s| match s {
+            BodyShape::Segments(segments) => segments.as_slice(),
+            BodyShape::Footprint { .. } => &[],
+        })
+        .copied()
+        .filter(|(a, b)| a.distance(*b) >= SHORTEST_SEGMENT * size)
+        .collect();
+    segments.sort_by(|(a, b), (c, d)| c.distance(*d).total_cmp(&a.distance(*b)));
+    for (a, b) in segments.into_iter().take(MAX_SEGMENTS) {
+        let level = (b - a).with_y(0.0);
+        let along = level.normalize_or(Vec3::X);
+        let radius = SEGMENT_RADIUS * size;
+        out.extend(caster((a + b) / 2.0, along, level.length() / 2.0 + radius, radius, SEGMENT_DARK));
+    }
+    out.truncate(MAX_CASTERS);
     out
 }
 
@@ -466,6 +561,33 @@ mod tests {
                 board: Some(engine_core::Frame { position: Vec3::new(0.0, 0.15, 0.0), forward: Vec3::new(1.0, 0.0, 0.3), up: Vec3::Y }),
                 ..default()
             }));
+        // (`SK8_SHADOW_RIDER`: an engine's bodies instead - the board, and a rider stepped off it beside it)
+        if std::env::var_os("SK8_SHADOW_RIDER").is_some() {
+            use crate::engines::{Engine, Engines, add_engine};
+            add_engine(&mut app, Engine::Sk8, |_| Ok(()), |_| {});
+            app.world_mut().resource_mut::<Engines>().request(Engine::Sk8);
+            let at = |x: f32, y: f32, z: f32| Vec3::new(0.55 + x, y, -0.45 + z);
+            let (hips, chest, neck, head) = (at(0.0, 0.92, 0.0), at(0.0, 1.25, 0.0), at(0.0, 1.45, 0.0), at(0.0, 1.62, 0.02));
+            let mut bones = vec![(hips, chest), (chest, neck), (neck, head)];
+            for side in [-1.0, 1.0] {
+                let (shoulder, elbow, hand) = (at(0.18 * side, 1.4, 0.0), at(0.24 * side, 1.15, 0.05), at(0.26 * side, 0.9, 0.12));
+                let (hip, knee, ankle, toe) =
+                    (at(0.1 * side, 0.9, 0.0), at(0.12 * side, 0.5, 0.06), at(0.12 * side, 0.08, 0.0), at(0.12 * side, 0.03, 0.14));
+                bones.extend([(neck, shoulder), (shoulder, elbow), (elbow, hand), (hips, hip), (hip, knee), (knee, ankle), (ankle, toe)]);
+            }
+            let along = Vec3::new(1.0, 0.0, 0.3).normalize();
+            app.world_mut().resource_mut::<PlayerBodies>().set(
+                Engine::Sk8,
+                vec![
+                    BodyShape::Footprint {
+                        middle: Vec3::new(0.0, 0.15, 0.0),
+                        along,
+                        ellipses: engine_core::skate::body::BOARD_FOOTPRINT.to_vec(),
+                    },
+                    BodyShape::Segments(bones),
+                ],
+            );
+        }
         app.finish();
         app.cleanup();
         app.update();
@@ -527,19 +649,86 @@ mod tests {
         assert!((area - 1.0).abs() < 1e-3, "the square's area: {area}");
     }
 
-    /// The deck and its trucks cast onto the surface under them; higher, they're fainter.
+    fn board(at: Vec3) -> BodyShape {
+        BodyShape::Footprint { middle: at, along: Vec3::X, ellipses: engine_core::skate::body::BOARD_FOOTPRINT.to_vec() }
+    }
+
+    /// The deck and its trucks cast onto the surface under them, as the board's shadow always was; higher, they're
+    /// fainter.
     #[test]
     fn the_board_casts_onto_what_is_under_it() {
         let floor = |_: Vec3| Some(0.0);
-        let low = casters(Vec3::new(0.0, 0.1, 0.0), Vec3::X, 1.0, floor);
+        let low = casters(&[board(Vec3::new(0.0, 0.1, 0.0))], 1.0, floor);
         assert_eq!(low.len(), 3);
         assert!(low.iter().all(|c| c.centre.y == 0.0 && (c.centre.w - 0.1).abs() < 1e-6));
-        // (the trucks along the nose)
-        assert!((low[1].centre.x - 0.25).abs() < 1e-6 && (low[2].centre.x + 0.25).abs() < 1e-6);
-        let high = casters(Vec3::new(0.0, 1.5, 0.0), Vec3::X, 1.0, floor);
+        // (the trucks along the nose; the deck 0.42 long each way, 0.14 across, as it was)
+        assert!((low[1].centre.x - 0.25).abs() < 1e-5 && (low[2].centre.x + 0.25).abs() < 1e-5);
+        assert!((low[0].nose.w - 0.42).abs() < 1e-5 && (low[0].side.w - 0.14).abs() < 1e-5);
+        let high = casters(&[board(Vec3::new(0.0, 1.5, 0.0))], 1.0, floor);
         assert!(high[0].centre.w > low[0].centre.w);
         // (over nothing: no shadow)
-        assert!(casters(Vec3::ZERO, Vec3::X, 1.0, |_| None).is_empty());
+        assert!(casters(&[board(Vec3::ZERO)], 1.0, |_| None).is_empty());
+    }
+
+    /// A body's bones each cast an ellipse round their line, fainter than the board's; a short one casts none; the
+    /// longest are kept, and all of them fit the shader's array with the board's.
+    #[test]
+    fn the_rider_casts_from_its_bones() {
+        let floor = |_: Vec3| Some(0.0);
+        // (a shin, from the knee to the ankle, leaning along x; and a neck too short to cast)
+        let shin = (Vec3::new(0.0, 0.5, 0.0), Vec3::new(0.2, 0.1, 0.0));
+        let neck = (Vec3::new(0.0, 1.5, 0.0), Vec3::new(0.0, 1.53, 0.0));
+        let c = casters(&[BodyShape::Segments(vec![shin, neck])], 1.0, floor);
+        assert_eq!(c.len(), 1);
+        assert!((c[0].centre.truncate() - Vec3::new(0.1, 0.0, 0.0)).length() < 1e-6, "under its middle");
+        assert!((c[0].centre.w - 0.3).abs() < 1e-6, "its middle's height");
+        assert!((c[0].nose.w - (0.1 + SEGMENT_RADIUS)).abs() < 1e-6 && c[0].nose.x == 1.0, "along it, seen from above");
+        assert!(c[0].shape.x < engine_core::skate::body::BOARD_FOOTPRINT[0].dark);
+        // (many bones: the longest kept, the board's ellipses first)
+        let many: Vec<(Vec3, Vec3)> = (1..40).map(|i| (Vec3::ZERO, Vec3::new(0.0, i as f32 * 0.01 + 0.1, 0.0))).collect();
+        let c = casters(&[board(Vec3::ZERO), BodyShape::Segments(many)], 1.0, floor);
+        assert_eq!(c.len(), 3 + MAX_SEGMENTS);
+        assert!(c.len() <= MAX_CASTERS);
+        assert!((c[3].centre.w - 0.245).abs() < 1e-5, "the longest first: {}", c[3].centre.w);
+    }
+
+    /// The patch reaches round all the bodies: a board left behind and a rider walking off both cast.
+    #[test]
+    fn the_patch_reaches_round_every_body() {
+        let (centre, needed) = patch_round(&[board(Vec3::ZERO), rider(2.0)], Some(Vec3::new(2.0, 0.0, 0.0)), 1.0).unwrap();
+        assert!((centre.x - 1.0).abs() < 1e-6 && (needed - (1.0 + PATCH_PAST)).abs() < 1e-6, "{centre} {needed}");
+        assert!(patch_reach(needed, 1.0) <= PATCH_MOST && patch_reach(needed, 1.0) >= needed + PATCH_MOVE - 1e-6);
+        assert!(patch_round(&[], None, 1.0).is_none());
+    }
+
+    /// The board alone (SK8's, from its link) gets the patch it always had: a size round it.
+    #[test]
+    fn the_board_alone_has_the_patch_it_had() {
+        let (centre, needed) = patch_round(&[board(Vec3::new(1.0, 0.1, 2.0))], None, 1.0).unwrap();
+        assert_eq!((centre.x, centre.z), (1.0, 2.0));
+        assert_eq!(patch_reach(needed, 1.0), PATCH_REACH);
+        let (_, half_size) = patch_round(&[board(Vec3::ZERO)], None, 0.5).unwrap();
+        assert_eq!(patch_reach(half_size, 0.5), PATCH_REACH * 0.5);
+    }
+
+    /// A board left far behind (10 sizes): the patch stays round the player, who keeps its shadow.
+    #[test]
+    fn a_board_left_far_behind_leaves_the_player_its_shadow() {
+        let feet = Vec3::new(10.0, 0.0, 0.0);
+        let (centre, needed) = patch_round(&[board(Vec3::ZERO), rider(10.0)], Some(feet), 1.0).unwrap();
+        assert_eq!((centre, needed), (feet, PATCH_MOST));
+        let floor = engine_core::Stage {
+            room_quads: vec![[Vec3::new(-20.0, 0.0, -20.0), Vec3::new(-20.0, 0.0, 20.0), Vec3::new(20.0, 0.0, 20.0), Vec3::new(20.0, 0.0, -20.0)]],
+            ..default()
+        };
+        let triangles = level_faces_near(&floor, centre, patch_reach(needed, 1.0), 0.0);
+        let c = casters(&[board(Vec3::ZERO), rider(10.0)], 1.0, |p| surface_under(&triangles, p, 1.0));
+        assert_eq!(c.len(), 1, "the rider's, not the far board's");
+        assert!((c[0].centre.x - 10.0).abs() < 1e-5);
+    }
+
+    fn rider(x: f32) -> BodyShape {
+        BodyShape::Segments(vec![(Vec3::new(x, 0.5, 0.0), Vec3::new(x, 0.1, 0.0))])
     }
 
     /// A box's contact shadow: dark at its sides, clear `RING_M` out; a wall has one; none for a rail; a slab turned

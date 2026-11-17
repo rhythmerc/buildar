@@ -1,4 +1,3 @@
-use crate::assets::AssetManifest;
 use bevy::prelude::*;
 
 /// World transform owner. Animation only writes descendant bone transforms.
@@ -30,8 +29,8 @@ impl Plugin for WorldPlugin {
 fn spawn(world: &mut World) {
     let scene = {
         let server = world.resource::<AssetServer>();
-        let manifest = world.resource::<AssetManifest>();
-        server.load(GltfAssetLabel::Scene(0).from_asset(manifest.0.character_scene.clone()))
+        let model = world.resource::<crate::animation::Skate3Model>();
+        server.load(GltfAssetLabel::Scene(0).from_asset(model.gltf().0.to_owned()))
     };
     world
         .spawn((PlayerRoot, Transform::default(), Visibility::default()))
