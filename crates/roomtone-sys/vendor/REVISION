@@ -1,1 +1,1 @@
-roomtone at f2a9adb
+roomtone at f2a9adb, plus room.cpp's light extraction (a light takes its whole spot, by its excess over the room's median; 2026-11-17), not yet upstream

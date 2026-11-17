@@ -350,6 +350,58 @@ mod tests {
         assert_eq!(single.volume(&cubes[..1]).0, UVec3::ONE);
     }
 
+    /// A piece in front of a bright window, in a room depth has placed (the
+    /// headset's case, 2026-11-17: its side away from the window was near
+    /// black beside walls passthrough showed well lit). What a white surface
+    /// facing away from the window is shown as (the soft light's cube side,
+    /// in cd/m^2 by the content's scale) is about what it is in the same room
+    /// with the window bricked up: the walls light it either way.
+    #[test]
+    fn a_face_away_from_a_window_keeps_the_walls_light() {
+        use super::super::{depth, feed::Feed};
+        use std::sync::Arc;
+        let (min, max) = (Vec3::new(-2.0, 0.0, -2.5), Vec3::new(2.0, 2.5, 2.5));
+        let eye = Vec3::new(0.5, 1.5, 0.0);
+        // The content's point and the grid the app makes the light on (mod.rs's
+        // constants): its points nearest the window are 0.33 m from it.
+        let mut points = vec![Vec3::new(0.0, 0.3, 0.0)];
+        points.extend(Grid::over(min, max, 0.5, 1.5, UVec3::new(3, 2, 3)).points());
+        let made = |window: f32| {
+            let surfaces = Arc::new(depth::Surfaces::new(depth::box_room(min, max)));
+            let feed = Feed::default();
+            feed.set_surfaces(Some(surfaces.clone()));
+            let mut room = roomtone_sys::Room::new();
+            room.set_points(&points.iter().map(|p| p.to_array().into()).collect::<Vec<_>>());
+            roomtone_sys::synthetic::sweep_with(
+                &mut room,
+                |d| {
+                    let d = Vec3::from_array(d);
+                    let p = eye + d * surfaces.cast(eye, d).unwrap_or(10.0);
+                    // A 1.4 x 1.2 m window on the x = -2 wall, clipping, 100 times the walls.
+                    let v = if p.x < -1.99 && p.z.abs() < 0.7 && p.y > 0.9 && p.y < 2.1 { window } else { 0.01 };
+                    [v; 3]
+                },
+                |room, frame| {
+                    let mut frame = *frame;
+                    frame.head.position = eye.to_array().into();
+                    feed.add_frame(room, &frame);
+                },
+            );
+            room.make();
+            assert!(room.voxels() > 1000, "{}", room.summary());
+            let content = room.light_at(0).unwrap();
+            let scale = Scale::new(&content, 1e-3, 1.0);
+            (0..points.len()).map(|i| ambient_cube(&room.light_at(i).unwrap(), Quat::IDENTITY, scale)).collect::<Vec<_>>()
+        };
+        let (lit, bricked) = (made(1.0), made(0.01));
+        for (i, (lit, bricked)) in lit.iter().zip(&bricked).enumerate() {
+            // +X faces away from the window (before 2026-11-17: 0 beside it, black).
+            let away = lit[0].y / bricked[0].y;
+            assert!((0.7..1.3).contains(&away), "point {i} {:?}: away from the window {away} of the walls' light", points[i]);
+            assert!(lit[1].y > bricked[1].y * 0.9, "point {i}: toward it");
+        }
+    }
+
     #[test]
     fn a_placed_key_is_a_point_light_with_the_rooms_falloff() {
         // Measured 2 m away; the miniature is 4 game metres to the room's one.

@@ -621,6 +621,44 @@ mod tests {
         assert!((key.range - 2.0).abs() < 0.05, "measured from the head, 2 m away: {}", key.range);
     }
 
+    /// A window filling much of a wall (wider than a cell): it becomes the
+    /// key light whole, and the soft light keeps the walls' own, so a
+    /// surface facing away from it is lit as the walls are, not left with
+    /// the dark side of the window's ring in the SH and a reference made
+    /// bright by the window.
+    #[test]
+    fn a_wide_window_leaves_the_walls_their_light() {
+        let window = |d: [f32; 3]| d[0] < -0.6 && d[1].abs() < 0.45;
+        // The walls as dim as passthrough shows them beside a bright window
+        // (the window clips), a little brighter toward it, from its bounce.
+        let wall = |d: [f32; 3]| 0.03 - 0.01 * d[0];
+        let made = |with_window: bool| {
+            let mut room = Room::new();
+            room.set_points(&[Vec3::default()]);
+            synthetic::sweep(&mut room, |d| {
+                let v = if with_window && window(d) { 1.0 } else { wall(d) };
+                [v, v, v]
+            });
+            room.light_at(0).unwrap()
+        };
+        let (lit, dark) = (made(true), made(false));
+        // The soft light on what faces away, as the reference sees it (its
+        // brightness is irradiance over the mean, at the walls' level): about
+        // the room's without the window, whose walls are the same.
+        let shown = |l: &Lighting, n| l.irradiance(n)[1] / l.mean;
+        let away = shown(&lit, [1.0, 0.0, 0.0]) / shown(&dark, [1.0, 0.0, 0.0]);
+        assert!((0.7..1.3).contains(&away), "away from the window: {away} of the walls' light");
+        for n in [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [0.0, -1.0, 0.0]] {
+            let side = shown(&lit, n) / shown(&dark, n);
+            assert!((0.7..1.3).contains(&side), "{n:?}: {side} of the walls' light");
+        }
+        // Toward it: the window's light on top, one light (not two halves of it).
+        let key = lit.lights[0];
+        assert!(key.dir.x < -0.95 && !lit.lights[1].lit(), "one light, the window: {:?}", lit.lights);
+        let toward = (lit.irradiance([-1.0, 0.0, 0.0])[1] + key.color[1]) / lit.mean;
+        assert!(toward > 10.0 * shown(&dark, [-1.0, 0.0, 0.0]), "toward the window: {toward}");
+    }
+
     #[test]
     fn a_missing_recording_does_not_replay() {
         assert!(!Room::new().replay(Path::new("no-such-file.roomtone")));
