@@ -246,7 +246,8 @@ the same way skate's park annotations do. Nothing in core has to change.
   - THUG2: `ModelSource::Meshes { meshes, textures }`.
   - A `MaterialDesc` describes base colour, texture, alpha mode, two-sided, vertex colour, and lit or unlit.
 - **The app owns a few lighting models:** Standard, Unlit, and later perhaps "SH character".
-- **Pose:** `Pose { generation, discontinuity, root, joints, parents }`.
+- **Pose:** `Pose { model, generation, discontinuity, step: Step { at, period }, root, joints }` (as built; `parents`
+  is the model's).
 - **Shaders as data only if retail character shading is revived.** The WGSL would then ship from
   skate3-headless as text that the app compiles and tests.
 
@@ -417,7 +418,8 @@ draws both through one generic layer that doesn't know which engine it is.
   joints). Its only interpolation, the root moved back by the skater's position between the game's last two frames,
   stays exactly as it was: the adapter works out the shift (game units) and the engine puts it between the unit
   conversion and the draw matrix. A generic world-space root blend instead would also turn the root between frames,
-  and would take the motion from the draw matrix rather than the skater's position: the user's call.
+  and would take the motion from the draw matrix rather than the skater's position: the user's call. (Replaced by
+  generic pose interpolation, below.)
 - **Parity:** `model_parity` (recorded at 8773c47, the old maths lifted out as functions unchanged) digests the `f32`
   bits of what each engine's model is given. Skate 3: joints and root over fixed ticks (a cut, a cadence change, a
   repeated generation, a bone count change) at six alphas, inside and outside 0..1, and the no-pair fallback; and
@@ -447,6 +449,34 @@ draws both through one generic layer that doesn't know which engine it is.
     the C API gives no parents and no joint positions (the palette is inverse bind times posed), and guessing a
     skeleton from shared skin weights is a workaround this step doesn't take. Checked on the real game: the
     footprint's middle within 15 cm of the board in the link and along it.
+
+**Generic pose interpolation, as done (2026-11-17):** every fixed-step engine's model is drawn between its last two
+steps the same way, so THUG2 (60 Hz on a 72-90 Hz headset) no longer judders.
+- **Core** (`engine_core::model`, branch `pose-timing`): `Pose` gains `model: ModelId` (a `u32`, the engine's own
+  numbering; one model: 0) and `step: Step { at, period }` (when its step ended on the clock the runtime steps the
+  engine by, and how long until the next). `Step::alpha(now)` is the one formula: the time since the step in periods.
+  The id rides on the pose (not only as `pose()`'s argument in the trait sketch) so a pose says whose it is wherever
+  it goes; the sketch's `pose(model: usize, ..)` becomes a `ModelId`. No `EngineCore` trait yet.
+- **The app** (`model.rs`): `PoseHistories` keeps one `PoseHistory` a model id (a model left out of a step is dropped
+  when the next step's poses come); a history takes each generation once and snaps on a cut, a new period or a new
+  joint count, as before. Alpha is `PoseHistory::alpha(now)` for every engine. The blend is the model's: with
+  `parents` (a glTF source) bone-local as before (`joint_locals`); without, `flat_blend`: the root as every root
+  (`blend`), each joint matrix on its own in the model's space (`blend_matrix`: move lerped, turn slerped the short way,
+  scale lerped; a mirrored and an unmirrored matrix, or one that won't come apart, are not blended: the nearer is
+  drawn), the two poses exactly at 0 and 1.
+- **Skate 3** keeps Bevy's fixed clock: its poses are stamped with the fixed clock's time and timestep, and drawn at
+  `app::Hold::now` (time plus overstep, held while paused), so the alpha is the old overstep fraction in every bit
+  (`app` test); the parity digests are identical. One frame differs: just after a pause the old pair was drawn at the
+  new overstep, now at the newer pose until the next tick.
+- **THUG2** (`thug2.rs`, `thug2_engine::model`): the adapter numbers every step's pose (each step's, not only a frame's
+  last), stamps it with its own clock (`PERIOD` a step) and flags a cut after a teleport, a place taken with the world
+  or a new world size; `model::pose` no longer takes a slide. The position-only slide (`thug2::shift`) is gone; the
+  stand-in reads the same clock. While a menu holds the game its clock stands still (it used to drop to the older
+  pose). Gap: a teleport inside the game itself (a script's) can't be seen through the C API, so it is blended across.
+  Parity re-recorded on purpose (`model_parity`; the parts unchanged).
+- **A new fixed-step engine** gets smooth motion by giving each pose its model id, a new generation, its step's
+  `at`/`period` on the clock its driver steps it by, and `discontinuity` on a teleport; the runtime does the rest. A
+  model with `parents` blends bone-local; one without blends each joint in model space.
 
 ### Risks
 
