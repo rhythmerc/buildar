@@ -69,7 +69,7 @@ fn ticking(hold: Option<Res<Hold>>) -> bool {
     hold.is_none_or(|h| !h.paused)
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "xr"))]
 pub(crate) fn hold_for_tests(app: &mut App) {
     hold(app);
 }
