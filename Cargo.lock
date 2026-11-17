@@ -2376,6 +2376,7 @@ dependencies = [
 [[package]]
 name = "engine-core"
 version = "0.1.0"
+source = "git+https://github.com/rhythmerc/buildar-engine-core?rev=ee2cb555cb0e70fa8fdb8aa5ba982641732daafb#ee2cb555cb0e70fa8fdb8aa5ba982641732daafb"
 dependencies = [
  "glam",
  "serde",
