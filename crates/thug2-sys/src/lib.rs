@@ -82,6 +82,7 @@ pub mod ffi {
         pub fn thug2_skater_mesh_data(mesh: u32, vertices: *mut Thug2Vertex, indices: *mut u16) -> c_int;
         pub fn thug2_skater_texture(index: u32, out: *mut Thug2Texture, bits: *mut std::ffi::c_void, size: u32) -> u32;
         pub fn thug2_skater_pose(palette: *mut [f32; 16], max: u32, draw_matrix: *mut f32) -> u32;
+        pub fn thug2_skater_placements() -> u64;
         pub fn thug2_sound_voices(out: *mut Thug2Voice, max: u32) -> u32;
         pub fn thug2_sound(sound: u32, out: *mut Thug2Sound, samples: *mut i16, count: u32) -> c_int;
         pub fn thug2_hud_enable(on: c_int);
@@ -563,6 +564,16 @@ impl Engine {
         let bones = unsafe { ffi::thug2_skater_pose(pose.palette.as_mut_ptr(), 64, pose.draw.as_mut_ptr()) };
         pose.palette.truncate(bones.min(64) as usize);
         bones > 0
+    }
+
+    /// How many times the game has put the skater somewhere outside its motion so far (only goes up): teleported or
+    /// respawned (by [`Engine::teleport`] and [`Engine::set_world`] too), placed by a wall plant (backed off the wall
+    /// to wait for a late press, put back for one, set off it turned its new way), turned round at once (rolling
+    /// backwards, a turn-around) or its animations mirrored at once. A step that changes it is a jump in the skater's
+    /// pose: nothing is drawn blended across it.
+    pub fn skater_placements(&mut self) -> u64 {
+        // SAFETY: no arguments; read between steps.
+        unsafe { ffi::thug2_skater_placements() }
     }
 
     /// The voices the game is playing sounds on, as the last step left them, into `out`.

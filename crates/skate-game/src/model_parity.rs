@@ -7,7 +7,7 @@
 //!   own ticks).
 //! - **THUG2:** each joint's matrix and the root between two steps' palettes and draw matrices (a short palette, junk
 //!   w columns, a cut and not, the clock at fixed points of a step: re-recorded with generic pose interpolation, and
-//!   again with THUG2's world size gone) and the model's parts as meshes and materials. Synthetic always; on the real game in
+//!   again with THUG2's world size gone, and with its joints blended along their steps' screws) and the model's parts as meshes and materials. Synthetic always; on the real game in
 //!   [`thug2::real`] (ignored: the game boots once a process).
 use bevy::prelude::*;
 
@@ -484,6 +484,11 @@ pub(crate) mod thug2 {
     /// (["66688 bytes d9a041747b850d5b"] synthetic, ["66688 bytes de9d8b900e1813cc"] real); these are its size-1 pass
     /// alone, recorded with the world size still in the code (the first half of the same bytes), so the removal
     /// changes nothing at size 1.
-    const RECORDED_THUG2: [&str; 2] = ["33344 bytes db16f02920af864c", "1028 bytes 5cf400bfb29176e8"];
-    const RECORDED_THUG2_REAL: [&str; 2] = ["33344 bytes 2127efec3eab0b44", "568712 bytes 88922c8caceb6a32"];
+    /// Re-recorded when each joint came to be blended along its step's screw (`model::blend_joint`: turned about the
+    /// axis its step turns it about, not about the model's origin), on purpose: the joints between the ends move by
+    /// up to the arc's sagitta, so `posed`'s digests changed (["33344 bytes db16f02920af864c"] synthetic,
+    /// ["33344 bytes 2127efec3eab0b44"] real). The model layer's jump limit (`model::JUMP_TURN_RATE`) changes neither:
+    /// with the old joint blend both digests were still those. The parts (`built`) are unchanged.
+    const RECORDED_THUG2: [&str; 2] = ["33344 bytes 96f623c13ece9fd5", "1028 bytes 5cf400bfb29176e8"];
+    const RECORDED_THUG2_REAL: [&str; 2] = ["33344 bytes 79cf80bd8ccc2ec1", "568712 bytes 88922c8caceb6a32"];
 }

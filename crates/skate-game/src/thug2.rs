@@ -141,6 +141,9 @@ struct Thug2 {
     /// The skater was put somewhere else (a teleport, our world taken with a place): the pose after the next step is a
     /// cut.
     cut: bool,
+    /// The game's own count of the skater put somewhere outside its motion (a wall plant, a respawn, a teleport, a
+    /// turn-round: `t2::Engine::skater_placements`) after the last step: a step that changes it is a cut too.
+    placements: u64,
     /// Its skater's poses, one a step, for the model layer to draw between ([`crate::model::PoseHistories`]).
     poses: crate::model::PoseHistories<()>,
     contract: engine_core::Pose,
@@ -483,6 +486,11 @@ fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
                 thug2.current = skater;
                 thug2.clock += thug2_engine::model::PERIOD;
                 thug2.steps += 1;
+                // (the game placed the skater itself this step - a wall plant, a respawn: a cut. Before the pose is
+                // read, so a step with none keeps it for the next pose)
+                let placements = engine.skater_placements();
+                thug2.cut |= placements != thug2.placements;
+                thug2.placements = placements;
                 // (every step's pose, numbered and stamped, for the model layer to draw between the last two)
                 if engine.skater_pose(&mut thug2.pose) {
                     let pose = &mut thug2.contract;

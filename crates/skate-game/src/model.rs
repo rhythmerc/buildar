@@ -8,10 +8,11 @@
 //! - **Meshes as data** (THUG2's): Bevy meshes ([`mesh`]) with the app's materials ([`material`]: the standard lit one or
 //!   unlit), skinned with identity inverse binds to joints whose transforms are the pose's root times each joint
 //!   ([`flat_joints`]). With no skeleton's shape (no `parents`), each joint's matrix is blended on its own in the
-//!   model's space ([`flat_blend`], [`blend_matrix`]).
+//!   model's space, turned about the axis its step turns it about ([`flat_blend`], [`blend_joint`]).
 //! - **Carrying a pose between steps** ([`PoseHistory`], one a model in [`PoseHistories`]): the last two steps' poses,
-//!   taken once each; a cut, a change of the engine's step period or of its joint count starts the pair again, so
-//!   nothing is blended across them. How far between them is drawn is the same for every engine: the time since the
+//!   taken once each; a cut (the engine's `discontinuity`: it put the model somewhere outside its motion), a change of
+//!   the engine's step period or of its joint count, or a jump it didn't mark (a turn no body makes in one step, a
+//!   mirror: [`JUMP_TURN_RATE`]) starts the pair again, so nothing is blended across them. How far between them is drawn is the same for every engine: the time since the
 //!   newer one's step on the engine's clock, in periods ([`PoseHistory::alpha`], `engine_core::model::Step`). The root
 //!   is blended the same way for every model ([`blend`]).
 //! - **Its bodies** ([`bodies`]): each body group placed by the pose, for the contact shadows
@@ -89,10 +90,10 @@ impl<E: Clone> PoseHistory<E> {
         let next =
             Snapshot { root: Transform::from_matrix(pose.root), root_matrix: pose.root, joints: pose.joints.clone(), extra };
         // Snap cuts and cadence changes instead of sweeping through the world or blending poses across different
-        // step periods.
+        // step periods; and a jump the engine didn't mark ([`jumped`]).
         let reset = pose.discontinuity || self.step.period != pose.step.period;
         if let Some((previous, current)) = self.pair.as_mut() {
-            if reset || current.joints.len() != next.joints.len() {
+            if reset || current.joints.len() != next.joints.len() || jumped(current, &next, pose.step.period) {
                 *previous = next.clone();
             } else {
                 std::mem::swap(previous, current);
@@ -126,6 +127,41 @@ impl<E: Clone> PoseHistory<E> {
     pub(crate) fn view_at(&self, now: Duration) -> Option<(&Snapshot<E>, &Snapshot<E>, f32)> {
         self.view(self.alpha(now))
     }
+}
+
+/// How fast a model's root may turn before it is a jump, not a motion (radians a second): a quarter turn in a 60 Hz
+/// step, 15 turns a second, as thug2-decomp's own between-ticks drawing (`transform_blend.h`: kObjectJump). Nothing a
+/// body does turns that fast (a skater's spins are a few turns a second); an engine putting its model somewhere new
+/// (a respawn, a wall plant turning it round at once) does. THUG2, measured (`thug2-engine/tests/placements.rs`): a
+/// smooth step turns the root at most 60 degrees, a jump 100 to 180.
+pub(crate) const JUMP_TURN_RATE: f32 = std::f32::consts::FRAC_PI_2 * 60.0;
+
+/// The same for a joint: 150 degrees in a 60 Hz step. Animations snap joints further than bodies turn: THUG2's ollie
+/// pops a joint by up to 116 degrees in a step and a bail's joints jump about 135, all blended ([`blend_joint`] turns
+/// them about their pivots); its mirrored animations and turn-rounds jump joints 163 to 180.
+pub(crate) const JOINT_JUMP_TURN_RATE: f32 = std::f32::consts::PI * 150.0 / 180.0 * 60.0;
+
+/// Whether the step from `previous` to `next` (a step of `period`) is a jump the engine didn't mark as a cut: the
+/// root mirrored or unmirrored, the root turned faster than [`JUMP_TURN_RATE`], or any joint faster than
+/// [`JOINT_JUMP_TURN_RATE`]. A step too long to tell (a turn past half a turn reads as one the other way round) or of
+/// no period is checked for the mirror only. The whole pose snaps: a joint snapped alone would tear the model from
+/// its neighbours.
+fn jumped<E>(previous: &Snapshot<E>, next: &Snapshot<E>, period: Duration) -> bool {
+    if separable(previous.root_matrix) != separable(next.root_matrix) {
+        return true;
+    }
+    let turned = |a: Mat4, b: Mat4, rate: f32| {
+        let limit = rate * period.as_secs_f32();
+        limit > 0.0 && limit < std::f32::consts::PI && separable(a).is_some() && separable(b).is_some() && turn(a, b) > limit
+    };
+    turned(previous.root_matrix, next.root_matrix, JUMP_TURN_RATE)
+        || previous.joints.iter().zip(&next.joints).any(|(&a, &b)| turned(a, b, JOINT_JUMP_TURN_RATE))
+}
+
+/// The angle of the turn from one matrix's rotation to another's (radians, 0..pi), each taken apart as [`blend`]
+/// takes it.
+fn turn(a: Mat4, b: Mat4) -> f32 {
+    Transform::from_matrix(a).rotation.normalize().angle_between(Transform::from_matrix(b).rotation.normalize())
 }
 
 /// The running engine's models' histories, one a model (by [`ModelId`]: every engine has one so far, id 0). A model
@@ -392,7 +428,8 @@ pub(crate) fn flat_joints(root: Mat4, joints: &[Mat4], count: usize) -> (Mat4, V
 }
 
 /// A model with no skeleton's shape (no `parents`), `alpha` of the way between two poses: its root blended as every
-/// model's is ([`blend`]), and each joint's matrix in the model's space blended on its own ([`blend_matrix`]); then,
+/// model's is ([`blend`]), and each joint's matrix in the model's space blended on its own, turned about the axis its
+/// step turns it about ([`blend_joint`]); then,
 /// as [`flat_joints`], the root and each of `count` joints in the world. At 0 and 1, the two poses exactly.
 #[cfg_attr(not(feature = "thug2"), allow(dead_code))] // (only THUG2 gives meshes as data so far)
 pub(crate) fn flat_blend<E>(previous: &Snapshot<E>, current: &Snapshot<E>, alpha: f32, count: usize) -> (Mat4, Vec<Mat4>) {
@@ -405,7 +442,7 @@ pub(crate) fn flat_blend<E>(previous: &Snapshot<E>, current: &Snapshot<E>, alpha
     // (the root as every model's, `blend`, guarded as a joint is: a root that turns mirrored between two steps snaps)
     let root = blend_matrix(previous.root_matrix, current.root_matrix, alpha);
     let at = |joints: &[Mat4], i: usize| joints.get(i).copied().unwrap_or(Mat4::IDENTITY);
-    let joints = (0..count).map(|i| root * blend_matrix(at(&previous.joints, i), at(&current.joints, i), alpha)).collect();
+    let joints = (0..count).map(|i| root * blend_joint(at(&previous.joints, i), at(&current.joints, i), alpha)).collect();
     (root, joints)
 }
 
@@ -424,6 +461,57 @@ pub(crate) fn blend_matrix(a: Mat4, b: Mat4, alpha: f32) -> Mat4 {
         _ if alpha < 0.5 => a,
         _ => b,
     }
+}
+
+/// A joint's matrix in its model's space `alpha` of the way from `a` to `b`: as [`blend_matrix`], but moved along
+/// the step's screw. The step from `a` to `b` is a turn about some axis and a move along it, and the joint goes that
+/// part of the turn about that axis: a bone turning about its joint stays on its arc about the joint, however far it
+/// turns. Taken apart about the model's origin instead (moved along a line), a bone away from the origin is pulled
+/// off its arc towards the chord between its two places: by about its distance from the origin times turn² / 8,
+/// and at a half turn by its distance times 1.4 (the limbs thrown about). Small turns come out as [`blend_matrix`]'s.
+/// At 0 and 1, `a` and `b` exactly.
+pub(crate) fn blend_joint(a: Mat4, b: Mat4, alpha: f32) -> Mat4 {
+    if alpha <= 0.0 {
+        return a;
+    }
+    if alpha >= 1.0 {
+        return b;
+    }
+    match (separable(a), separable(b)) {
+        (Some(sa), Some(sb)) if sa == sb => {
+            let (ta, tb) = (Transform::from_matrix(a), Transform::from_matrix(b));
+            let (rotation, translation) = screw(ta.rotation.normalize(), ta.translation, tb.rotation.normalize(), tb.translation, alpha);
+            Mat4::from_scale_rotation_translation(ta.scale.lerp(tb.scale, alpha), rotation, translation)
+        }
+        _ if alpha < 0.5 => a,
+        _ => b,
+    }
+}
+
+/// `alpha` of the rigid step from (`qa`, `ta`) to (`qb`, `tb`) along its screw - its turn the short way, about its
+/// axis, and its move along that axis - applied to (`qa`, `ta`).
+fn screw(qa: Quat, ta: Vec3, qb: Quat, tb: Vec3, alpha: f32) -> (Quat, Vec3) {
+    let mut d = (qb * qa.inverse()).normalize();
+    if d.w < 0.0 {
+        d = -d;
+    }
+    // (the sine of half the turn; next to none: a move along a line)
+    let half_sin = d.xyz().length();
+    if half_sin < 1e-6 {
+        return (qa.slerp(qb, alpha), ta.lerp(tb, alpha));
+    }
+    let axis = d.xyz() / half_sin;
+    let angle = 2.0 * half_sin.atan2(d.w);
+    // The step's own move (b = d a + step): along the axis, and across it (the turn is about an axis off the origin).
+    let step = tb - d * ta;
+    let along = axis * axis.dot(step);
+    let across = step - along;
+    // (across the axis, the part turn about the axis' point: (1 - e^(i alpha angle)) / (1 - e^(i angle)) of the move
+    // across - the chords' ratio, turned back by half the turn not yet made)
+    let ratio = (alpha * angle / 2.0).sin() / half_sin;
+    let moved = Quat::from_axis_angle(axis, (alpha - 1.0) * angle / 2.0) * (across * ratio) + along * alpha;
+    let part = Quat::from_axis_angle(axis, alpha * angle);
+    ((part * qa).normalize(), part * ta + moved)
 }
 
 /// Whether a matrix comes apart into a move, a turn and a scale, and if so whether it is mirrored (a negative
@@ -497,33 +585,44 @@ mod tests {
         Pose { generation, root, joints, step: Step { at: Duration::from_millis(at_ms), period: Duration::from_millis(10) }, ..Default::default() }
     }
 
+    /// As [`flat`], a step of 40 ms: too long for a turn to tell a jump by ([`JUMP_TURN_RATE`]), so any turn blends.
+    fn slow(generation: u64, at_ms: u64, root: Mat4, joints: Vec<Mat4>) -> Pose {
+        let mut pose = flat(generation, at_ms, root, joints);
+        pose.step.period = Duration::from_millis(40);
+        pose
+    }
+
     /// Halfway between two matrices: half the move, half the turn, half the scale; the root the same way.
     #[test]
     fn a_flat_joint_is_blended_by_its_move_turn_and_scale() {
-        let a = flat(1, 10, Mat4::IDENTITY, vec![trs(0.0, 0.0, 1.0, false)]);
-        let b = flat(2, 20, trs(4.0, 0.0, 1.0, false), vec![trs(2.0, std::f32::consts::FRAC_PI_2, 3.0, false)]);
+        let a = slow(1, 10, Mat4::IDENTITY, vec![trs(0.0, 0.0, 1.0, false)]);
+        let b = slow(2, 20, trs(4.0, 0.0, 1.0, false), vec![trs(2.0, std::f32::consts::FRAC_PI_2, 3.0, false)]);
         let h = flat_pair(&a, &b);
-        // (5 ms after the newer pose's step, a 10 ms period: halfway)
-        let (p, c, alpha) = h.view_at(Duration::from_millis(25)).unwrap();
+        // (20 ms after the newer pose's step, a 40 ms period: halfway)
+        let (p, c, alpha) = h.view_at(Duration::from_millis(40)).unwrap();
         assert_eq!(alpha, 0.5);
         let (root, joints) = flat_blend(p, c, alpha, 2);
         assert!(close(root, trs(2.0, 0.0, 1.0, false)), "{root}");
-        assert!(close(joints[0], root * trs(1.0, std::f32::consts::FRAC_PI_4, 2.0, false)), "{}", joints[0]);
+        // (the joint: half its turn and its scale; its move along its turn's screw, `blend_joint`)
+        let joint = Transform::from_matrix(root.inverse() * joints[0]);
+        assert!(joint.rotation.abs_diff_eq(Quat::from_rotation_y(std::f32::consts::FRAC_PI_4), 1e-5), "{joint:?}");
+        assert!(joint.scale.abs_diff_eq(Vec3::splat(2.0), 1e-5));
+        assert!(close(joints[0], root * blend_joint(a.joints[0], b.joints[0], 0.5)));
         assert!(close(joints[1], root), "a joint past the pose's is the root's");
     }
 
     /// At 0 and 1, exactly the two poses as drawn unblended (`flat_joints`); the clock past a period stays at the newer.
     #[test]
     fn a_flat_blend_at_its_ends_is_each_pose_exactly() {
-        let a = flat(1, 10, trs(0.3, 0.2, 0.9, false), vec![trs(1.0, 0.7, 1.1, false), trs(0.1, -2.0, 0.5, true)]);
-        let b = flat(2, 20, trs(0.7, 1.2, 1.0, false), vec![trs(1.5, 2.9, 1.3, false), trs(0.2, 2.0, 0.6, true)]);
+        let a = slow(1, 10, trs(0.3, 0.2, 0.9, false), vec![trs(1.0, 0.7, 1.1, false), trs(0.1, -2.0, 0.5, true)]);
+        let b = slow(2, 20, trs(0.7, 1.2, 1.0, false), vec![trs(1.5, 2.9, 1.3, false), trs(0.2, 2.0, 0.6, true)]);
         let h = flat_pair(&a, &b);
         let (p, c) = h.pair().unwrap();
         let bits = |(r, j): (Mat4, Vec<Mat4>)| (r.to_cols_array().map(f32::to_bits), j.iter().map(|m| m.to_cols_array().map(f32::to_bits)).collect::<Vec<_>>());
         assert_eq!(bits(flat_blend(p, c, 0.0, 2)), bits(flat_joints(a.root, &a.joints, 2)));
         assert_eq!(bits(flat_blend(p, c, 1.0, 2)), bits(flat_joints(b.root, &b.joints, 2)));
         assert_eq!(h.view_at(Duration::from_millis(20)).unwrap().2, 0.0);
-        assert_eq!(h.view_at(Duration::from_millis(45)).unwrap().2, 1.0);
+        assert_eq!(h.view_at(Duration::from_millis(75)).unwrap().2, 1.0);
         assert_eq!(h.view_at(Duration::from_millis(5)).unwrap().2, 0.0, "a clock behind the step: the older pose");
     }
 
@@ -539,7 +638,7 @@ mod tests {
     }
 
     /// Mirrored matrices blend with mirrored ones; a mirrored and an unmirrored one, or a flat or broken one, aren't
-    /// blended: the nearer is drawn.
+    /// blended: the nearer is drawn (a root mirrored or unmirrored between two steps: the whole newer pose).
     #[test]
     fn a_mirror_or_a_flat_matrix_is_not_blended_through() {
         let (a, b) = (trs(0.0, 0.0, 1.0, true), trs(2.0, 1.0, 3.0, true));
@@ -560,15 +659,15 @@ mod tests {
         projective.x_axis.w = 0.5;
         assert_eq!(separable(projective), None);
         assert_eq!((separable(plain), separable(a)), (Some(false), Some(true)));
-        // (a root turning mirrored between two steps: the nearer pose's root, its joints carried by it)
-        let p = flat(1, 10, a, vec![Mat4::IDENTITY]);
-        let q = flat(2, 20, plain, vec![Mat4::IDENTITY]);
+        // (a root turning mirrored between two steps: a jump - the whole newer pose, its joints carried by its root)
+        let p = slow(1, 10, a, vec![Mat4::IDENTITY]);
+        let q = slow(2, 20, plain, vec![Mat4::IDENTITY]);
         let h = flat_pair(&p, &q);
         let (prev, cur) = h.pair().unwrap();
-        assert_eq!(flat_blend(prev, cur, 0.3, 1), (a, vec![a]));
+        assert_eq!(flat_blend(prev, cur, 0.3, 1), (plain, vec![plain]));
         assert_eq!(flat_blend(prev, cur, 0.7, 1), (plain, vec![plain]));
         // (the same handedness: the root blended exactly as `blend` blends every model's root)
-        let q = flat(2, 20, trs(2.0, 1.0, 3.0, true), vec![Mat4::IDENTITY]);
+        let q = slow(2, 20, trs(2.0, 1.0, 3.0, true), vec![Mat4::IDENTITY]);
         let h = flat_pair(&p, &q);
         let (prev, cur) = h.pair().unwrap();
         assert_eq!(flat_blend(prev, cur, 0.3, 1).0, blend(prev.root, cur.root, 0.3).to_matrix());
@@ -592,6 +691,67 @@ mod tests {
             let (r, j) = flat_joints(b.root, &b.joints, 1);
             assert!(close(root, r) && close(joints[0], j[0]), "{root} {}", joints[0]);
         }
+    }
+
+    /// A bone turning about its joint, away from the model's origin, stays on its arc about the joint between steps
+    /// (taken apart about the origin, half a turn would pull it onto the joint's far side's chord); small turns come
+    /// out as `blend_matrix`'s; the move along the turn's axis goes along with it.
+    #[test]
+    fn a_flat_joint_turns_about_its_own_joint() {
+        let joint = Vec3::new(0.4, 1.0, 0.0);
+        let about = |angle: f32| Mat4::from_translation(joint) * Mat4::from_rotation_z(angle) * Mat4::from_translation(-joint);
+        for angle in [0.3f32, 1.5, 3.0] {
+            let (a, b) = (about(0.0), about(angle));
+            for alpha in [0.25, 0.5, 0.75] {
+                let m = blend_joint(a, b, alpha);
+                assert!(close(m, about(angle * alpha)), "{angle} {alpha}: {m}");
+                assert!(m.transform_point3(joint).distance(joint) < 1e-5);
+            }
+        }
+        // (the old way: the joint itself swung off by most of its distance from the origin at a near half turn)
+        assert!(blend_matrix(about(0.0), about(3.0), 0.5).transform_point3(joint).distance(joint) > 0.8);
+        // (a small turn, 3 degrees with a 10 cm move: as taken apart, to under a millimetre - the arc's sagitta)
+        let (a, b) = (trs(0.2, 0.1, 1.0, false), trs(0.3, 0.15, 1.02, false));
+        assert!(blend_joint(a, b, 0.5).abs_diff_eq(blend_matrix(a, b, 0.5), 1e-3));
+        // (a screw: half the turn about the axis and half the move along it; mirrored ones alike)
+        let screwed = |t: f32| Mat4::from_translation(Vec3::Z * t) * about(t);
+        assert!(close(blend_joint(screwed(0.0), screwed(2.0), 0.5), screwed(1.0)));
+        let mirror = Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+        assert!(close(blend_joint(about(0.0) * mirror, about(2.0) * mirror, 0.5), about(1.0) * mirror));
+        // (the ends exactly; the short way round; a mirror coming or going: the nearer)
+        assert_eq!(blend_joint(a, b, 0.0), a);
+        assert_eq!(blend_joint(a, b, 1.0), b);
+        assert!(close(blend_joint(about(-3.0), about(3.0), 0.5), about(std::f32::consts::PI)));
+        assert_eq!(blend_joint(a, b * mirror, 0.4), a);
+    }
+
+    /// The root turning more than a quarter turn in a 60 Hz step, a joint more than 150 degrees, or the root mirrored,
+    /// snaps the whole pose though the engine didn't mark a cut; spins and flips (30 degrees a step, 5 turns a second)
+    /// and an ollie's joint pop blend; a step too long to tell blends whatever it turned.
+    #[test]
+    fn a_jump_the_engine_did_not_mark_snaps() {
+        let period = Duration::from_micros(16_667);
+        let turned = |root: f32, joint: f32| flat(2, 33, Mat4::from_rotation_y(root), vec![Mat4::IDENTITY, Mat4::from_rotation_x(joint)]);
+        let snaps = |b: &Pose, period: Duration| {
+            let mut a = turned(0.0, 0.0);
+            let mut b = b.clone();
+            (a.generation, a.step.at) = (1, Duration::from_millis(16));
+            (a.step.period, b.step.period) = (period, period);
+            let h = flat_pair(&a, &b);
+            let (p, c) = h.pair().unwrap();
+            p.root_matrix == c.root_matrix && p.joints == c.joints
+        };
+        let quarter = std::f32::consts::FRAC_PI_2;
+        assert!(snaps(&turned(quarter * 1.1, 0.0), period), "the root turned round");
+        assert!(snaps(&turned(0.0, 160f32.to_radians()), period), "a joint snapped (an animation mirrored)");
+        assert!(!snaps(&turned(0.0, 120f32.to_radians()), period), "an ollie's pop: a joint's fast turn, blended");
+        assert!(!snaps(&turned(30f32.to_radians(), 30f32.to_radians()), period), "a spin and a flip");
+        assert!(!snaps(&turned(quarter * 0.95, 0.0), period));
+        assert!(!snaps(&turned(quarter * 1.5, quarter * 1.5), period * 2), "too long a step to tell");
+        assert!(!snaps(&turned(quarter * 1.5, 0.0), Duration::ZERO), "no period: can't tell");
+        let mut mirrored = turned(0.1, 0.0);
+        mirrored.root *= Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0));
+        assert!(snaps(&mirrored, period * 2), "mirrored");
     }
 
     /// A pose given again (the same generation) isn't taken: the pair and the clock's start stay as they were.
