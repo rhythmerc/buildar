@@ -64,8 +64,11 @@ pub fn rails(park: &SkatePark) -> Vec<Vec<[f32; 3]>> {
 /// - ground (level to a steep ramp): facing up, skatable;
 /// - a piece's transition steeper than 45° above a ramp (a quarter pipe's top half): vert, facing the ramp, so the
 ///   skater goes straight up and comes back down into it - or transfers to a vert face behind the coping (a spine);
-/// - any other upright face (room walls, furniture and box sides): both ways, wallridable. (The two sides are in one
-///   plane: thug2-decomp's wall plant passes over the back one when it places the skater off the wall.)
+/// - any other upright face (room walls, furniture and box sides): both ways, wallridable and not skatable - the wall
+///   flag alone, as a real level's wallridable walls carry it (the game takes a face flagged skatable as ground
+///   whatever its other flags: it rode such walls as floor, off a quarter pipe against one, and never wallrode them).
+///   (The two sides are in one plane: thug2-decomp's wall plant passes over the back one when it places the skater
+///   off the wall.)
 pub fn triangles(stage: &Stage, park: &SkatePark) -> Vec<t2::Triangle> {
     let mut out = Vec::new();
     for t in stage.room() {
@@ -97,8 +100,10 @@ fn face(out: &mut Vec<t2::Triangle>, t: [Vec3; 3], vert: Option<Vec3>) {
         // (ground, or a slope or overhang turned to face up)
         out.push(game(if n.y > 0.0 { t } else { flipped }, SKATABLE));
     } else {
-        out.push(game(t, SKATABLE | WALL));
-        out.push(game(flipped, SKATABLE | WALL));
+        // (WALL alone, as a real level's wallridable walls are: the game reads SKATABLE first, and a skatable face
+        // is ground to it - it rode such walls as floor and never wallrode them)
+        out.push(game(t, WALL));
+        out.push(game(flipped, WALL));
     }
 }
 
@@ -248,7 +253,8 @@ mod tests {
         assert_eq!(out[0].flags, t2::face::SKATABLE);
         face(&mut out, [Vec3::ZERO, Vec3::Y, Vec3::X], None);
         assert_eq!(out.len(), 3, "a wall is two faces");
-        assert_eq!(out[1].flags, t2::face::SKATABLE | t2::face::WALL);
+        assert_eq!(out[1].flags, t2::face::WALL, "wallridable, not ground");
+        assert_eq!(out[2].flags, t2::face::WALL);
     }
 
     #[test]

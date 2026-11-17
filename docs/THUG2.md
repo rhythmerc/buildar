@@ -37,8 +37,9 @@ more, `--all` always works.
   code. The skater is the model the game builds from your files (textures, clothes, board), posed
   by the game's animation every frame and drawn by the app.
 - **The world is your room and your park.** Floors and ramps are ground. Room walls, furniture and
-  box sides can be wallridden. A quarter pipe's top is vert, so you go straight up and land back in.
-  Rails and furniture edges are grindable.
+  box sides are walls: never ground, but they can be wallridden (hold B, the game's triangle, as you
+  jump along one), as a THUG2 level's wallridable walls are. A quarter pipe's top is vert, so you go
+  straight up and land back in. Rails and furniture edges are grindable.
 - **Parks keep their engine.** A park is saved with the engine it's played with, and with THUG2's
   game speed. Opening it switches to that engine and puts that setting back. A
   park built for an engine that isn't installed asks first: Cancel, or play it with the current

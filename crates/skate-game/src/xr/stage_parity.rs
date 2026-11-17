@@ -160,9 +160,11 @@ fn each_engine_is_given_exactly_what_it_was() {
 /// Recorded at 5dc9513 (f37f837 with the engines' inputs taken out as pure functions, no behaviour change), before
 /// the split. THUG2's world size 2.5 column dropped with the world size (2026-11-17); its size-1 digests are the ones
 /// recorded with it. (THUG2's were re-recorded at cb8a75d for a wall slab, and restored when thug2-decomp's wall plant
-/// took over that fix.)
+/// took over that fix. Re-recorded again when upright faces went to it with the wall flag alone, not skatable too:
+/// the same faces, only their flags changed - the game took a skatable wall as ground, rode it as floor and never
+/// wallrode it.)
 const RECORDED: [[&str; 3]; 3] = [
-    ["404 bytes e94bef4d55aae7e3", "480 bytes 58cb0e708af05d9f", "440 bytes d31134ab8c18d474"],
-    ["74592 bytes 5748a3e11b86bc44", "148204 bytes 9706442ac69c044b", "114444 bytes 52f682f160123635"],
-    ["74592 bytes d6dfe23a7269df61", "148204 bytes 2f4c6c867e7255be", "114444 bytes 0a010c6448a0c1b1"],
+    ["404 bytes e94bef4d55aae7e3", "480 bytes 5711d40188996eaf", "440 bytes d31134ab8c18d474"],
+    ["74592 bytes 5748a3e11b86bc44", "148204 bytes ca9b0a109ab7bdfb", "114444 bytes 52f682f160123635"],
+    ["74592 bytes d6dfe23a7269df61", "148204 bytes d8bfbe55d79487ea", "114444 bytes 0a010c6448a0c1b1"],
 ];
