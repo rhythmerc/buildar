@@ -172,7 +172,9 @@ pub(crate) fn build(
         app.insert_resource(crate::xr::rig::WorldOrigin(origin));
         app.add_plugins(crate::xr::XrPlugin { options, files: xr_files.clone() });
         // In the headset the faithful port is one engine of three: switched to and from while the app runs.
-        // (its systems are the ones its plugins put in `SKATE3`: `add_retail`)
+        // (its systems are the ones its plugins put in `SKATE3`: `add_retail`; the skating sounds are shared, not
+        // its own: installed first, outside the engine)
+        crate::skate_audio::clean::install(&mut app);
         crate::engines::add_engine(&mut app, Engine::Skate3, |_| Ok(()), |app| {
             add_retail(app);
             crate::xr::add_retail_link(app);

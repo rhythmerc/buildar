@@ -478,6 +478,45 @@ steps the same way, so THUG2 (60 Hz on a 72-90 Hz headset) no longer judders.
   `at`/`period` on the clock its driver steps it by, and `discontinuity` on a teleport; the runtime does the rest. A
   model with `parents` blends bone-local; one without blends each joint in model space.
 
+**Step 7, as done (2026-11-17):** each engine says its sound as the contract's data; the app plays it without knowing
+which engine it is.
+- **Core** (`engine_core::audio`): `Clip` (16-bit PCM, fetched once by id); `Voice { id, clip, starts, looping, gain,
+  speed, at }` (a voice played again from its start has new `starts`; `at` is in the stage's space); `Stream` (an
+  engine's own mix: `channels`, `rate`, `block`, `render(paused)`) and `StreamFactory` (a `Send` closure run on the
+  app's thread for it, so the stream itself needn't be `Send`: Skate 3's graph shares voices through `Rc`). How a
+  held engine sounds is the stream's to say: `render` is told.
+- **The skate mode** (`engine_core::skate::sound`): `SkateSounds { at, speed, rolling: None|Ground|Grind,
+  powersliding, airborne, cues }` and `Cue::{Pop, Flip, Land { impact }, Push, Footstep { strength }, Bail, Chime}`:
+  what a skating engine did, for the skating sounds the app carries.
+- **The app:**
+  - `engine_audio`: `EngineStream` (the factory run on a named thread, then a block a block's time into a `LivePcm`,
+    played from where the engine says, spatially in AR; the stats line every two seconds as before) and `Voices` with
+    `Heard` (THUG2's voice bookkeeping, unchanged: a voice re-started is a new emitter, a looping one goes when
+    stopped, held engines pause their sinks). `LivePcm` (`live_pcm`) and `StreamPcm` are no longer Skate 3's or THUG2's.
+  - The clean driver (`skate_audio::clean`) is one, shared: it plays the running engine's `SkaterSounds` (cues, then
+    loops) and knows no engine's states. It is installed outside `engines::add_engine` (before the first engine), so
+    its sounds start at launch and are no engine's; while an engine that didn't fill it runs it is silent (its loops
+    fade out). Before, Skate 3's clean tier and SK8 each installed it, and the second overwrote the first's resource
+    (an Android without decoded banks, switching engines).
+- **Skate 3** (`skate3_engine::sound`): `Heard` (its state numbers, the flip names, the push and footstep thresholds,
+  wipeouts: its ticks as `SkateSounds`; front-end sounds as one chime a frame), `multiplier_sound` (retail's choice,
+  out of the HUD), `stream` (its sound graph as a `Stream`, and the `StreamFeed` its ticks go into: bounded, a tick
+  dropped and counted if the graph is behind; front-end sounds ride out on the next tick; held, the last tick again
+  at 60 Hz with `paused` set, as the app's forwarder did). The adapter (`skate_audio::player`) picks the stream or the
+  clean driver as before (`SKATE_AUDIO`, the decoded banks on Android).
+- **THUG2** (`thug2_engine::sound`): its voices as the contract's, heard from the board (`SOUND_HEIGHT` over the
+  skater's feet), and its sounds as clips. Its gain keeps the game's fall-off from its camera; its pan is left out (the
+  app places the voice). An emitter whose voice the game has dropped stays where it was last heard (it followed the
+  skater before), and a voice started and stopped within a frame plays from where its step had the skater.
+- **Parity:** the clean driver's decisions (each shot and its gain, the loops' targets, the pending catch) frame by
+  frame over scripted runs of Skate 3 (its observations, 60 Hz ticks under 72 Hz frames, a pause) and SK8, recorded
+  before (c45e939) and through the new path. Skate 3's differs in one frame (the first, before any tick: silent loops'
+  pitch); SK8's in one thing on purpose: a flip into a grind no longer plays its catch on the rail (a catch is heard
+  only in the air, as Skate 3's always was). Skate 3's stream feed is tested on its own (order, the held repeats, the
+  front-end sounds once); THUG2's voices through the real engine (`thug2::tests::skates_the_room_and_switches_away_and_back`).
+- **Owed:** a listening pass on the headset: Skate 3 (its own sound, and `SKATE_AUDIO=clean`), THUG2 and SK8, each
+  also held in a menu and switched away from and back to.
+
 ### Risks
 
 - **Quest performance:**

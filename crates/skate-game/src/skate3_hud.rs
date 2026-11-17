@@ -91,10 +91,7 @@ fn draw(hud: Option<ResMut<Skate3Hud>>, mut renderer: crate::engine_hud::HudRend
 /// several fixed ticks fall inside one rendered frame. It deliberately does not depend on the
 /// HUD resource: the sound is retail's whether or not the display itself loaded.
 fn multiplier_sounds(skater: Res<SkaterRuntime>, mut sounds: MessageWriter<crate::skate_audio::FrontEndSoundRequest>) {
-    let Some(multiplier) = skater.scoring.multiplier_changed else {
-        return;
-    };
-    if let Some(id) = crate::skate_audio::player::multiplier_sound_id(multiplier) {
+    if let Some(id) = skate3_engine::sound::multiplier_sound(&skater) {
         sounds.write(crate::skate_audio::FrontEndSoundRequest(id));
     }
 }

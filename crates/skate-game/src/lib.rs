@@ -42,7 +42,12 @@ mod skate_audio;
 #[cfg(not(feature = "retail"))]
 #[path = "skate_audio_store.rs"]
 mod skate_audio;
-#[cfg(feature = "thug2")]
+// (an engine's sound, whichever engine: the ones with a stream or voices use it)
+#[cfg_attr(not(all(feature = "retail", feature = "thug2")), allow(dead_code))]
+mod engine_audio;
+#[cfg_attr(not(feature = "retail"), allow(dead_code))]
+mod live_pcm;
+#[cfg_attr(not(feature = "thug2"), allow(dead_code))]
 mod stream_pcm;
 #[cfg(feature = "retail")]
 mod world;

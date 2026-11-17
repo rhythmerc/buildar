@@ -1,4 +1,4 @@
-//! Clean player sounds: a small sample driver for builds without the retail audio runtime.
+//! Clean player sounds: a small sample driver for skating engines without sound of their own.
 //!
 //! The retail-exact player audio (`player_audio.rs`) needs the decoded retail banks, grains and
 //! the recovered authored graph. On the Quest that chain is fragile, so the AR build plays the
@@ -7,15 +7,17 @@
 //! `clean-audio/CREDITS.json`). They are compiled into the binary, so nothing has to be pushed
 //! to the headset.
 //!
-//! The driver reads the same `PlayerAudioObservation` the retail worker does:
+//! One driver for every skating engine without sound of its own: the running engine's adapter
+//! fills [`SkaterSounds`] (the skate mode's `engine_core::skate::sound`: the cues since the last
+//! frame and how the skater is), and the driver plays them:
 //! - loops (rolling per surface, grinds, powerslide) run all the time at zero volume and are
 //!   faded and pitched by speed each frame;
 //! - one-shots (pop, flip, catch, landing, push, footstep, bail, the multiplier chime) fire on
-//!   state edges, with a random variant and a little pitch spread.
+//!   the cues, with a random variant and a little pitch spread.
 //!
-//! On the Skate 3 tier the retail sounds play wherever the player's decoded sound banks are (the
-//! headset has no XMA decoder: they come with the imported data, `audio-pcm-cache`); these clean
-//! ones only on an Android without them. `SKATE_AUDIO=clean|retail` overrides that.
+//! SK8 feeds it (`crate::clean`); Skate 3 only where the player's decoded sound banks aren't
+//! (`skate_audio::player`: its own sound otherwise). The driver is shared, not an engine's: while
+//! an engine that didn't fill it runs, it is silent.
 //!
 //! In AR ([`SpatialSkateAudio`] present) every sound is a spatial emitter at the skater, heard
 //! through the headset's listener (`xr::spatial_audio`), so it pans and fades as the skater
@@ -24,25 +26,12 @@ use std::sync::Arc;
 
 use bevy::audio::{AudioSinkPlayback, SpatialAudioSink, Volume};
 use bevy::prelude::*;
-#[cfg(feature = "retail")]
-use skate_core::physics::phase::PhysicsEvent;
+use engine_core::skate::sound::{Cue, Rolling, SkateSounds};
 
 use crate::binaural::{CleanPcm, Emitter, Voice};
 use crate::clean_mix::{Buffer, Strip, Tune, Tuning};
 use crate::clean_synth::{KINDS, RATE};
 use crate::reverb::{ReverbPcm, RoomFromWorld};
-#[cfg(feature = "retail")]
-use super::{FrontEndSoundRequest, PlayerAudioObservation};
-
-/// Whether this build plays the clean sounds instead of the retail player audio.
-#[cfg(feature = "retail")]
-pub(crate) fn enabled() -> bool {
-    match std::env::var("SKATE_AUDIO").as_deref() {
-        Ok("clean") => true,
-        Ok("retail") => false,
-        _ => cfg!(target_os = "android") && !super::player::banks_decoded(),
-    }
-}
 
 macro_rules! clean_wavs {
     ($($name:literal),* $(,)?) => {
@@ -220,86 +209,46 @@ struct CleanAudio {
     targets: [(f32, f32); 7],
     last_pick: [usize; 8],
     rng: u32,
-    #[cfg(feature = "retail")]
-    previous: Option<Edges>,
     pending_catch: Option<f32>,
     last_land: f32,
     last_wipe: f32,
     paused: bool,
-    #[cfg(feature = "retail")]
-    seen_surfaces: u128,
     /// What was played, for the tests.
     #[cfg(test)]
     log: Vec<String>,
 }
 
-/// What the previous observation said, for edge detection.
-#[cfg(feature = "retail")]
-#[derive(Clone, Default)]
-struct Edges {
-    state: u32,
-    wiping_out: bool,
-    pushing: bool,
-    stepping: bool,
-    trick: Option<String>,
-}
-
-#[cfg(feature = "retail")]
-pub(super) fn install(app: &mut App) {
-    // (as `install_sk8`: `setup` makes its sounds as this source, in either tier)
-    add_sources(app);
-    app.init_resource::<RoomFromWorld>()
-        .init_resource::<SurfaceHints>()
-        .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (observe, frontend, lab, mix, follow_skater).chain().in_set(crate::app::SKATE3),
-        );
-}
-
-/// A one-shot from the clean-room engine.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Sk8Cue {
-    Pop,
-    /// A flip trick started: whoosh now, catch a moment later.
-    Flip,
-    /// Touchdown, with the speed into the surface.
-    Land(f32),
-    Push,
-    Bail,
-    /// A combo was banked.
-    Chime,
-}
-
-/// What the clean-room engine did this frame; the clean tier (`crate::clean`)
-/// fills it before the driver runs.
+/// The running skating engine's sounds, for the driver: its adapter fills them each frame
+/// (before [`SkaterSoundSet`]), adding its cues; the driver takes the cues.
 #[derive(Resource, Default, Debug)]
-pub(crate) struct Sk8Sounds {
-    pub position: Vec3,
-    pub speed: f32,
-    pub grounded: bool,
-    pub grinding: bool,
-    pub powersliding: bool,
+pub(crate) struct SkaterSounds {
+    /// Whose they are: the driver is silent while another engine runs.
+    pub engine: Option<crate::engines::Engine>,
+    /// The engine is held (a menu, build mode): its loops fade out.
     pub paused: bool,
-    pub cues: Vec<Sk8Cue>,
+    pub sounds: SkateSounds,
 }
 
-/// The driver for the clean-room engine: same sounds, loops and mixing, fed
-/// by [`Sk8Sounds`] instead of the retail physics observation.
-pub(crate) fn install_sk8(app: &mut App) {
+/// Where the driver plays the frame's sounds (`Update`): the engines' adapters fill [`SkaterSounds`] before it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SkaterSoundSet;
+
+/// The driver, once for every engine (and not an engine's own: added outside `engines::add_engine`, it starts at
+/// launch and its sounds are shared); later calls do nothing.
+pub(crate) fn install(app: &mut App) {
+    if app.world().contains_resource::<SkaterSounds>() {
+        return;
+    }
     add_sources(app);
     app.init_resource::<RoomFromWorld>()
         .init_resource::<SurfaceHints>()
-        .init_resource::<Sk8Sounds>()
+        .init_resource::<SkaterSounds>()
         .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (observe_sk8, lab, mix, follow_skater).chain().in_set(crate::engines::EngineSet(crate::engines::Engine::Sk8)),
-        );
+        .add_systems(Update, (drive, lab, mix, follow_skater).chain().in_set(SkaterSoundSet));
 }
 
-/// The sounds' sources, once: both engines' drivers (Skate 3's clean fallback and SK8's) make their sounds as these,
-/// and Bevy's playback systems for them are shared - a second copy would start each sound twice.
+/// The sounds' sources, once: Bevy's playback systems for them are shared - a second copy would start each sound
+/// twice.
 fn add_sources(app: &mut App) {
     use bevy::audio::AddAudioSource;
     if !app.world().contains_resource::<Assets<CleanPcm>>() {
@@ -307,47 +256,59 @@ fn add_sources(app: &mut App) {
     }
 }
 
-fn observe_sk8(
+/// The frame's sounds, played: the cues, then the loops by how the skater is.
+fn drive(
     mut commands: Commands,
     audio: Option<ResMut<CleanAudio>>,
     hints: Res<SurfaceHints>,
-    sounds: Res<Sk8Sounds>,
+    mut heard: ResMut<SkaterSounds>,
+    engines: Option<Res<crate::engines::Engines>>,
     real_time: Res<Time<bevy::time::Real>>,
 ) {
+    let cues = std::mem::take(&mut heard.sounds.cues);
     let Some(mut audio) = audio else { return };
+    // (without engines to switch between, the one engine's)
+    let live = engines.is_none_or(|e| e.current() == heard.engine);
+    let sounds = &heard.sounds;
     let now = real_time.elapsed_secs();
-    audio.paused = sounds.paused;
-    audio.source = sounds.position;
+    audio.paused = heard.paused || !live;
+    audio.source = sounds.at;
     if let Some(at) = audio.pending_catch {
         if now >= at {
             audio.pending_catch = None;
             audio.play(&mut commands, Shot::Catch, 0.8);
         }
     }
-    for cue in &sounds.cues {
-        match *cue {
-            Sk8Cue::Pop => audio.play(&mut commands, Shot::Pop, 0.9),
-            Sk8Cue::Flip => {
+    for cue in cues.into_iter().filter(|_| live) {
+        match cue {
+            Cue::Pop => audio.play(&mut commands, Shot::Pop, 0.9),
+            // A flip: the board's whoosh now, the catch a moment later.
+            Cue::Flip => {
                 audio.play(&mut commands, Shot::Flip, 0.7);
                 audio.pending_catch = Some(now + CATCH_DELAY_S);
             }
-            Sk8Cue::Land(impact) => {
+            // Landing: once per touchdown, louder the harder it hits.
+            Cue::Land { impact } => {
                 if now - audio.last_land > 0.15 {
                     audio.last_land = now;
-                    audio.pending_catch = None;
                     let gain = (0.45 + impact.abs() / 6.0).clamp(0.45, 1.0);
                     audio.play(&mut commands, Shot::Land, gain);
                 }
             }
-            Sk8Cue::Push => audio.play(&mut commands, Shot::Push, 0.75),
-            Sk8Cue::Bail => {
+            Cue::Push => audio.play(&mut commands, Shot::Push, 0.75),
+            Cue::Footstep { strength } => audio.play(&mut commands, Shot::Footstep, 0.4 + 0.4 * strength.min(1.0)),
+            Cue::Bail => {
                 if now - audio.last_wipe > 0.8 {
                     audio.last_wipe = now;
                     audio.play(&mut commands, Shot::Bail, 1.0);
                 }
             }
-            Sk8Cue::Chime => audio.play(&mut commands, Shot::Chime, 0.5),
+            Cue::Chime => audio.play(&mut commands, Shot::Chime, 0.5),
         }
+    }
+    // (a catch is only heard in the air)
+    if !sounds.airborne {
+        audio.pending_catch = None;
     }
     let speed = sounds.speed.max(0.0);
     let level = ((speed - ROLL_MIN_SPEED) / (ROLL_FULL_SPEED - ROLL_MIN_SPEED)).clamp(0.0, 1.0);
@@ -356,21 +317,28 @@ fn observe_sk8(
     for kind in Loop::ALL {
         audio.set(kind, 0.0, pitch);
     }
-    let position = sounds.position;
-    if sounds.grinding {
-        let kind = if hints.near_metal(position) { Loop::GrindMetal } else { Loop::GrindConcrete };
-        audio.set(kind, (0.35 + 0.65 * level).min(1.0), 0.9 + 0.2 * (speed / 8.0).min(1.0));
-    } else if sounds.grounded {
-        // On a wooden ramp the wheels sound lower, not different: the wood recording
-        // (`roll_wood`) is a creaking board, a steady squeak under every roll.
-        let (kind, pitch) = audio.rolling(hints.on_wood(position), pitch);
-        if sounds.powersliding {
-            audio.set(kind, level * 0.5, pitch);
-            let (volume, pitch) = slide(speed);
-            audio.set(Loop::Powerslide, volume, pitch);
-        } else {
-            audio.set(kind, level, pitch);
+    let position = sounds.at;
+    match sounds.rolling {
+        Rolling::Grind => {
+            let kind = if hints.near_metal(position) { Loop::GrindMetal } else { Loop::GrindConcrete };
+            audio.set(kind, (0.35 + 0.65 * level).min(1.0), 0.9 + 0.2 * (speed / 8.0).min(1.0));
         }
+        Rolling::Ground => {
+            // All AR real surfaces share one physics material, so the wheel material says nothing
+            // there: placed ramps are wood, everything else rolls like smooth concrete. The rough and
+            // metal loops are loaded for maps whose materials get mapped later.
+            // On a wooden ramp the wheels sound lower, not different: the wood recording
+            // (`roll_wood`) is a creaking board, a steady squeak under every roll.
+            let (kind, pitch) = audio.rolling(hints.on_wood(position), pitch);
+            if sounds.powersliding {
+                audio.set(kind, level * 0.5, pitch);
+                let (volume, pitch) = slide(speed);
+                audio.set(Loop::Powerslide, volume, pitch);
+            } else {
+                audio.set(kind, level, pitch);
+            }
+        }
+        Rolling::None => {}
     }
 }
 
@@ -498,14 +466,10 @@ fn setup(
         targets: [(0.0, 1.0); 7],
         last_pick: [usize::MAX; 8],
         rng: 0x9E37_79B9,
-        #[cfg(feature = "retail")]
-        previous: None,
         pending_catch: None,
         last_land: -1.0,
         last_wipe: -1.0,
         paused: false,
-        #[cfg(feature = "retail")]
-        seen_surfaces: 0,
         #[cfg(test)]
         log: Vec::new(),
     });
@@ -600,150 +564,6 @@ fn lowpass_loop(samples: &mut [i16], channels: usize, rate: f32, cutoff: f32) {
                 }
             }
         }
-    }
-}
-
-#[cfg(feature = "retail")]
-fn is_ground(state: u32) -> bool {
-    (100..=105).contains(&state)
-}
-
-#[cfg(feature = "retail")]
-fn is_air(state: u32) -> bool {
-    (200..=202).contains(&state)
-}
-
-#[cfg(feature = "retail")]
-fn is_grind(state: u32) -> bool {
-    (400..=405).contains(&state)
-}
-
-#[cfg(feature = "retail")]
-fn is_flip(trick: &str) -> bool {
-    let t = trick.to_ascii_lowercase();
-    ["flip", "heel", "shuv", "varial", "tre", "360", "impossible", "casper", "dolphin"]
-        .iter()
-        .any(|k| t.contains(k))
-}
-
-#[cfg(feature = "retail")]
-fn observe(
-    mut commands: Commands,
-    audio: Option<ResMut<CleanAudio>>,
-    hints: Res<SurfaceHints>,
-    mut observations: MessageReader<PlayerAudioObservation>,
-    virtual_time: Res<Time<bevy::time::Virtual>>,
-    real_time: Res<Time<bevy::time::Real>>,
-    hold: Option<Res<crate::app::Hold>>,
-) {
-    let Some(mut audio) = audio else { return };
-    let now = real_time.elapsed_secs();
-    // (the desktop's menu pauses virtual time; the headset's menus and build mode hold Skate 3)
-    audio.paused = virtual_time.is_paused() || hold.is_some_and(|h| h.paused());
-    if let Some(at) = audio.pending_catch {
-        if now >= at {
-            audio.pending_catch = None;
-            audio.play(&mut commands, Shot::Catch, 0.8);
-        }
-    }
-    let mut latest = None;
-    for obs in observations.read() {
-        let prev = audio.previous.clone().unwrap_or(Edges {
-            state: obs.state,
-            ..Default::default()
-        });
-        audio.source = Vec3::from_array(obs.retail.position);
-        let wiped = obs.wiping_out || obs.events.iter().any(|e| matches!(e, PhysicsEvent::Wipeout));
-        // Pop: leaving the ground or a grind for the air, by the skater's own doing.
-        if is_air(obs.state) && (is_ground(prev.state) || is_grind(prev.state)) && !wiped {
-            audio.play(&mut commands, Shot::Pop, 0.9);
-        }
-        // Landing: once per touchdown, louder the harder it hits.
-        let landed = obs.landed || obs.events.iter().any(|e| matches!(e, PhysicsEvent::Landing));
-        if landed && now - audio.last_land > 0.15 {
-            audio.last_land = now;
-            let gain = (0.45 + obs.landing_impact_speed.abs() / 6.0).clamp(0.45, 1.0);
-            audio.play(&mut commands, Shot::Land, gain);
-        }
-        // Flip tricks: the board's whoosh now, the catch a moment later.
-        if obs.trick_identifier != prev.trick && is_air(obs.state) {
-            if let Some(trick) = obs.trick_identifier.as_deref().filter(|t| is_flip(t)) {
-                debug!("SKATE_CLEAN_AUDIO trick {trick}");
-                audio.play(&mut commands, Shot::Flip, 0.7);
-                audio.pending_catch = Some(now + CATCH_DELAY_S);
-            }
-        }
-        if !is_air(obs.state) {
-            audio.pending_catch = None;
-        }
-        let pushing = obs.foot_push_speed.abs() > 0.35;
-        if pushing && !prev.pushing {
-            audio.play(&mut commands, Shot::Push, 0.75);
-        }
-        let stepping = obs.footstep_strength > 0.1 && (500..=503).contains(&obs.state);
-        if stepping && !prev.stepping {
-            audio.play(&mut commands, Shot::Footstep, 0.4 + 0.4 * obs.footstep_strength.min(1.0));
-        }
-        if wiped && !prev.wiping_out && now - audio.last_wipe > 0.8 {
-            audio.last_wipe = now;
-            audio.play(&mut commands, Shot::Bail, 1.0);
-        }
-        audio.previous = Some(Edges {
-            state: obs.state,
-            wiping_out: wiped,
-            pushing,
-            stepping,
-            trick: obs.trick_identifier.clone(),
-        });
-        latest = Some(obs);
-    }
-    let Some(obs) = latest else { return };
-
-    // Loops follow the latest observation.
-    let speed = obs.board_speed.max(0.0);
-    let level = ((speed - ROLL_MIN_SPEED) / (ROLL_FULL_SPEED - ROLL_MIN_SPEED)).clamp(0.0, 1.0);
-    let level = level.powf(0.6);
-    let pitch = 0.85 + 0.35 * (speed / 10.0).min(1.0);
-    let position = Vec3::from_array(obs.retail.position);
-    for kind in Loop::ALL {
-        audio.set(kind, 0.0, pitch);
-    }
-    if obs.grinding || is_grind(obs.state) {
-        let metal = hints.near_metal(position);
-        let kind = if metal { Loop::GrindMetal } else { Loop::GrindConcrete };
-        let grind_level = (0.35 + 0.65 * level).min(1.0);
-        audio.set(kind, grind_level, 0.9 + 0.2 * (speed / 8.0).min(1.0));
-    } else if obs.grounded && is_ground(obs.state) && !obs.wiping_out {
-        // All AR real surfaces share one physics material, so the wheel material says nothing
-        // there: placed ramps are wood, everything else rolls like smooth concrete. The rough and
-        // metal loops are loaded for maps whose materials get mapped later.
-        // On a wooden ramp the wheels sound lower, not different: the wood recording
-        // (`roll_wood`) is a creaking board, a steady squeak under every roll.
-        let (kind, pitch) = audio.rolling(hints.on_wood(position), pitch);
-        let surface = obs.wheel_surface & 0x7F;
-        if audio.seen_surfaces & (1u128 << surface) == 0 {
-            audio.seen_surfaces |= 1u128 << surface;
-            info!("SKATE_CLEAN_AUDIO wheel audio material {surface} -> {kind:?}");
-        }
-        if obs.powersliding {
-            audio.set(kind, level * 0.5, pitch);
-            let (volume, pitch) = slide(speed);
-            audio.set(Loop::Powerslide, volume, pitch);
-        } else {
-            audio.set(kind, level, pitch);
-        }
-    }
-}
-
-#[cfg(feature = "retail")]
-fn frontend(
-    mut commands: Commands,
-    audio: Option<ResMut<CleanAudio>>,
-    mut requests: MessageReader<FrontEndSoundRequest>,
-) {
-    let Some(mut audio) = audio else { return };
-    if requests.read().count() > 0 {
-        audio.play(&mut commands, Shot::Chime, 0.5);
     }
 }
 
@@ -1122,13 +942,6 @@ mod tests {
         assert!(!hints.on_wood(Vec3::new(3.0, 0.5, 0.5)));
     }
 
-    #[cfg(feature = "retail")]
-    #[test]
-    fn flips_are_recognised() {
-        assert!(is_flip("Kickflip"));
-        assert!(is_flip("varial_heelflip"));
-        assert!(!is_flip("Ollie"));
-    }
 }
 
 /// What the driver decides (the shots it plays, its loops' targets), frame by frame, over scripted runs of each
@@ -1154,14 +967,10 @@ mod parity {
             targets: [(0.0, 1.0); 7],
             last_pick: [usize::MAX; 8],
             rng: 0x9E37_79B9,
-            #[cfg(feature = "retail")]
-            previous: None,
             pending_catch: None,
             last_land: -1.0,
             last_wipe: -1.0,
             paused: false,
-            #[cfg(feature = "retail")]
-            seen_surfaces: 0,
             log: Vec::new(),
         }
     }
@@ -1213,6 +1022,7 @@ mod parity {
 
     #[cfg(feature = "retail")]
     pub(super) fn observation(t: u64) -> skate3_sim::skate_audio::PlayerAudioObservation {
+        use skate_core::physics::phase::PhysicsEvent;
         use skate3_sim::skate_audio::{PlayerAudioObservation, RetailAudioInputs};
         let mut o = PlayerAudioObservation {
             tick: t,
@@ -1313,6 +1123,8 @@ mod parity {
     #[cfg(feature = "retail")]
     #[test]
     fn skate3s_sounds_are_decided_as_recorded() {
+        use crate::skate_audio::player::{Skate3Heard, feed_clean};
+        use crate::skate_audio::{FrontEndSoundRequest, PlayerAudioObservation};
         let mut world = World::new();
         world.init_resource::<Messages<PlayerAudioObservation>>();
         world.init_resource::<Messages<FrontEndSoundRequest>>();
@@ -1320,8 +1132,10 @@ mod parity {
         world.insert_resource(hints());
         world.insert_resource(Time::<bevy::time::Real>::default());
         world.insert_resource(Time::<bevy::time::Virtual>::default());
-        let observe = world.register_system(observe);
-        let frontend = world.register_system(frontend);
+        world.init_resource::<Skate3Heard>();
+        world.init_resource::<SkaterSounds>();
+        let feed = world.register_system(feed_clean);
+        let drive = world.register_system(drive);
         let mut out = String::new();
         for (frame, ticks) in ticks().into_iter().enumerate() {
             let frame = frame as u64;
@@ -1335,8 +1149,8 @@ mod parity {
                 world.write_message(FrontEndSoundRequest(7));
                 world.write_message(FrontEndSoundRequest(8));
             }
-            world.run_system(observe).unwrap();
-            world.run_system(frontend).unwrap();
+            world.run_system(feed).unwrap();
+            world.run_system(drive).unwrap();
             frame_line(&mut out, frame, &mut world.resource_mut::<CleanAudio>());
             world.resource_mut::<Messages<PlayerAudioObservation>>().update();
             world.resource_mut::<Messages<FrontEndSoundRequest>>().update();
@@ -1350,8 +1164,63 @@ mod parity {
         assert_eq!(fnv(&out), SKATE3_DIGEST);
     }
 
+    /// Recorded at c45e939 (`8c0d54649b762692`, Skate 3's knowledge in the driver), and again through the engine's
+    /// `skate3_engine::sound::Heard`: one frame differs, the first, before any tick (the loops' silent targets now have
+    /// the standing pitch).
     #[cfg(feature = "retail")]
-    const SKATE3_DIGEST: u64 = 0x8c0d_5464_9b76_2692;
+    const SKATE3_DIGEST: u64 = 0xc46c_9152_8e77_8afe;
+
+    /// What SK8 said a frame, as its adapter had it before the skate mode's sounds (`crate::clean::feed_sounds` makes
+    /// those from the same).
+    #[derive(Default)]
+    pub(super) struct Sk8Sounds {
+        position: Vec3,
+        speed: f32,
+        grounded: bool,
+        grinding: bool,
+        powersliding: bool,
+        paused: bool,
+        cues: Vec<Sk8Cue>,
+    }
+
+    pub(super) enum Sk8Cue {
+        Pop,
+        Flip,
+        Land(f32),
+        Push,
+        Bail,
+        Chime,
+    }
+
+    impl Sk8Sounds {
+        fn said(self) -> SkaterSounds {
+            let cues = self
+                .cues
+                .into_iter()
+                .map(|c| match c {
+                    Sk8Cue::Pop => Cue::Pop,
+                    Sk8Cue::Flip => Cue::Flip,
+                    Sk8Cue::Land(impact) => Cue::Land { impact },
+                    Sk8Cue::Push => Cue::Push,
+                    Sk8Cue::Bail => Cue::Bail,
+                    Sk8Cue::Chime => Cue::Chime,
+                })
+                .collect();
+            let rolling = if self.grinding { Rolling::Grind } else if self.grounded { Rolling::Ground } else { Rolling::None };
+            SkaterSounds {
+                engine: None,
+                paused: self.paused,
+                sounds: SkateSounds {
+                    at: self.position,
+                    speed: self.speed,
+                    rolling,
+                    powersliding: self.powersliding,
+                    airborne: !self.grounded && !self.grinding,
+                    cues,
+                },
+            }
+        }
+    }
 
     /// SK8's sounds a frame, scripted.
     pub(super) fn sk8(frame: u64) -> Sk8Sounds {
@@ -1410,12 +1279,11 @@ mod parity {
         world.insert_resource(bare());
         world.insert_resource(hints());
         world.insert_resource(Time::<bevy::time::Real>::default());
-        world.init_resource::<Sk8Sounds>();
-        let observe = world.register_system(observe_sk8);
+        let observe = world.register_system(drive);
         let mut out = String::new();
         for frame in 0..FRAMES {
             world.resource_mut::<Time<bevy::time::Real>>().update_with_duration(FRAME);
-            world.insert_resource(sk8(frame));
+            world.insert_resource(sk8(frame).said());
             world.run_system(observe).unwrap();
             frame_line(&mut out, frame, &mut world.resource_mut::<CleanAudio>());
         }
@@ -1428,5 +1296,7 @@ mod parity {
         assert_eq!(fnv(&out), SK8_DIGEST);
     }
 
-    const SK8_DIGEST: u64 = 0x0ca7_f5bd_3fd0_1860;
+    /// Recorded at c45e939 (`0ca7f5bd3fd01860`), and again with the skate mode's sounds: one change, a flip into a
+    /// grind no longer has its catch on the rail (a catch is only heard in the air, as Skate 3's always was).
+    const SK8_DIGEST: u64 = 0x2108_2035_b3d9_bffe;
 }

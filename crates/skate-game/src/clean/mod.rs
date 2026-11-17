@@ -205,6 +205,8 @@ fn build(options: Options) -> App {
 pub(crate) fn add_xr_engines(app: &mut App, files: &std::path::Path, first: crate::engines::Engine) {
     use crate::engines::{Engine, Engines};
     let sk8_files = files.to_path_buf();
+    // (the skating sounds are shared, not SK8's own: installed first, outside the engine)
+    crate::skate_audio::clean::install(app);
     crate::engines::add_engine(app, Engine::Sk8, |_| Ok(()), move |app| add_sk8(app, &sk8_files, true));
     #[cfg(feature = "thug2")]
     crate::thug2::install(app, files);
@@ -229,7 +231,7 @@ fn add_sk8(app: &mut App, files: &std::path::Path, xr: bool) {
         .init_resource::<UiCapture>()
         .add_systems(Startup, (view::lights, skater::spawn))
         .add_systems(PostStartup, menu::spawn_ui);
-    crate::skate_audio::clean::install_sk8(app);
+    crate::skate_audio::clean::install(app);
     bevy::asset::embedded_asset!(app, "assets/skater.glb");
     #[cfg(feature = "xr")]
     if xr {
@@ -274,7 +276,7 @@ fn add_sk8(app: &mut App, files: &std::path::Path, xr: bool) {
         );
     }
     app.init_resource::<skater::Clock>()
-        .add_systems(Update, (feed_sounds, skater::bind, skater::animate, menu::draw).chain().in_set(SK8))
+        .add_systems(Update, (feed_sounds.before(crate::skate_audio::clean::SkaterSoundSet), skater::bind, skater::animate, menu::draw).chain().in_set(SK8))
         .add_systems(
             PostUpdate,
             (mirror::apply, procedural::layer)
@@ -285,30 +287,38 @@ fn add_sk8(app: &mut App, files: &std::path::Path, xr: bool) {
         );
 }
 
-/// Turn this frame's engine output into sound cues.
-fn feed_sounds(sim: Res<CleanSkate>, mut sounds: ResMut<crate::skate_audio::clean::Sk8Sounds>) {
-    use crate::skate_audio::clean::Sk8Cue;
+/// This frame's steps as the skating sounds (the clean driver's).
+fn feed_sounds(sim: Res<CleanSkate>, mut out: ResMut<crate::skate_audio::clean::SkaterSounds>) {
+    use engine_core::skate::sound::{Cue, Rolling, SkateSounds};
     let s = &sim.current;
-    sounds.position = Vec3::from_array(s.position);
-    sounds.speed = s.speed;
-    sounds.grounded = s.mode.grounded();
-    sounds.grinding = s.mode == Mode::Grind;
-    sounds.powersliding = s.mode == Mode::Slide;
-    sounds.paused = sim.paused;
-    sounds.cues.clear();
-    for e in &sim.events {
-        let cue = match e.kind {
-            EventKind::Pop => Some(Sk8Cue::Pop),
-            EventKind::Land => Some(Sk8Cue::Land(Vec3::from_array(s.velocity).length())),
-            EventKind::Push => Some(Sk8Cue::Push),
-            EventKind::Bail => Some(Sk8Cue::Bail),
-            EventKind::Bank => Some(Sk8Cue::Chime),
+    let grounded = s.mode.grounded();
+    let grinding = s.mode == Mode::Grind;
+    let mut cues: Vec<Cue> = sim
+        .events
+        .iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Pop => Some(Cue::Pop),
+            EventKind::Land => Some(Cue::Land { impact: Vec3::from_array(s.velocity).length() }),
+            EventKind::Push => Some(Cue::Push),
+            EventKind::Bail => Some(Cue::Bail),
+            EventKind::Bank => Some(Cue::Chime),
             _ => None,
-        };
-        sounds.cues.extend(cue);
-    }
+        })
+        .collect();
     // A flip starts when the trick name appears in the air.
     if s.flip_progress.is_some() && sim.previous.flip_progress.is_none() {
-        sounds.cues.push(Sk8Cue::Flip);
+        cues.push(Cue::Flip);
     }
+    *out = crate::skate_audio::clean::SkaterSounds {
+        engine: Some(crate::engines::Engine::Sk8),
+        paused: sim.paused,
+        sounds: SkateSounds {
+            at: Vec3::from_array(s.position),
+            speed: s.speed,
+            rolling: if grinding { Rolling::Grind } else if grounded { Rolling::Ground } else { Rolling::None },
+            powersliding: s.mode == Mode::Slide,
+            airborne: !grounded && !grinding,
+            cues,
+        },
+    };
 }

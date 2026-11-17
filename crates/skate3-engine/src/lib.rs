@@ -11,9 +11,12 @@
 //! - [`model`]: the skater's model (its GLB bound to the sim's rig) and its pose after each tick, cuts included.
 //! - [`stage`]: the stage and park as the sim's collision and rails (not mid-grind), putting the skater down, and
 //!   where the rider and the board are.
+//! - [`sound`]: its own sound graph as a stream, or its ticks as the skating sounds the app carries, and retail's
+//!   multiplier sounds.
 //! - [`trick`]: the sim's scoring as the plain trick readout.
 pub mod hud;
 pub mod input;
 pub mod model;
+pub mod sound;
 pub mod stage;
 pub mod trick;

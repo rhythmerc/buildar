@@ -16,7 +16,7 @@
 //! - Pad: the Touch controllers as a PlayStation 2 pad (`thug2_engine::input`).
 use crate::engines::{self, Engine, EngineSet};
 use crate::xr::link::{CurrentPark, CurrentStage, PlacePlayer, SkaterLink};
-use thug2_engine::stage::{DECK_HEIGHT, SOUND_HEIGHT, from_game};
+use thug2_engine::stage::{DECK_HEIGHT, from_game};
 use bevy::prelude::*;
 use std::path::{Path, PathBuf};
 use std::thread::JoinHandle;
@@ -67,10 +67,7 @@ pub(crate) fn install(app: &mut App, files: &Path) {
         warn!("THUG2 stopped the app while it started last time: opening on another engine");
         let _ = std::fs::remove_file(cache.join(STARTING));
     }
-    {
-        use bevy::audio::AddAudioSource;
-        app.add_audio_source::<Thug2Pcm>();
-    }
+    crate::engine_audio::add_voice_source(app);
     app.insert_resource(Thug2Files { game: game_folder(files), cache })
         .insert_resource(Tuning::load(&files.join("thug2.json")))
         .insert_resource(TuningFile(files.join("thug2.json")));
@@ -84,7 +81,6 @@ pub(crate) fn install(app: &mut App, files: &Path) {
     app.init_resource::<engine_api::PlayerBodies>();
     engines::add_engine(app, Engine::Thug2, available, |app| {
         app.init_resource::<Thug2>()
-            .init_resource::<Thug2Sounds>()
             .add_systems(Startup, (boot, spawn_stand_in, hud_parts))
             .add_systems(
                 Update,
@@ -157,8 +153,10 @@ struct Thug2 {
     placed: bool,
     /// The skater's pose after the last step (for its drawn model).
     pose: t2::Pose,
-    /// What the game played in the steps since the app last played it (`play_sounds`).
-    heard: Heard,
+    /// What the game played in the steps since the app last played it (`play_sounds`), and its sounds as played.
+    heard: crate::engine_audio::Heard,
+    voices: crate::engine_audio::Voices,
+    scratch: Vec<t2::Voice>,
     /// The game takes its 2D down (`want_hud`), and the last step's (`draw_hud`).
     hud_on: bool,
     hud: t2::Hud,
@@ -168,41 +166,6 @@ impl Thug2 {
     /// The game's clock now: its last step's time and the time since, towards the next.
     fn now(&self) -> std::time::Duration {
         self.clock + std::time::Duration::from_secs_f32(self.accum.max(0.0))
-    }
-}
-
-/// The game's sound effects as its steps leave them.
-#[derive(Default)]
-struct Heard {
-    /// The voices playing after the last step.
-    voices: Vec<t2::Voice>,
-    /// The voices the game played from their start in the steps since (a short one may have run out already).
-    started: Vec<t2::Voice>,
-    /// The samples of sounds the game played for the first time.
-    new_sounds: Vec<(u32, t2::Sound)>,
-    fetched: std::collections::HashSet<u32>,
-    starts: std::collections::HashMap<u32, u32>,
-    scratch: Vec<t2::Voice>,
-}
-
-impl Heard {
-    /// After a step: the voices it started, and the samples of sounds new to the app.
-    fn after_step(&mut self, engine: &mut t2::Engine) {
-        engine.voices(&mut self.scratch);
-        for v in &self.scratch {
-            if self.starts.insert(v.voice, v.starts) == Some(v.starts) {
-                continue;
-            }
-            self.started.retain(|s| s.voice != v.voice);
-            self.started.push(*v);
-            if self.fetched.insert(v.sound) {
-                match engine.sound(v.sound) {
-                    Some(sound) => self.new_sounds.push((v.sound, sound)),
-                    None => warn!("THUG2: sound {} has no samples", v.sound),
-                }
-            }
-        }
-        std::mem::swap(&mut self.voices, &mut self.scratch);
     }
 }
 
@@ -507,7 +470,10 @@ fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
                 }
                 // (the world and the skater's place are taken at the start of a step: from now it is in ours)
                 thug2.placed = true;
-                thug2.heard.after_step(engine);
+                engine.voices(&mut thug2.scratch);
+                let at = thug2.current.as_ref().and_then(thug2_engine::sound::sound_at).unwrap_or_default();
+                let voices = thug2.scratch.iter().map(|v| thug2_engine::sound::voice(v, at)).collect();
+                thug2.heard.after_step(voices, |id| engine.sound(id).map(thug2_engine::sound::clip));
             }
             Err(e) => {
                 error!("THUG2: {e}");
@@ -521,97 +487,24 @@ fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
     }
 }
 
-/// The game's sound effects as an audio source of THUG2's own (the decoded samples' source, `StreamPcm`, is the
-/// Skate 3 tier's, which may not be in the app).
-#[derive(Asset, TypePath, Clone)]
-struct Thug2Pcm(crate::stream_pcm::StreamPcm);
-
-impl bevy::audio::Decodable for Thug2Pcm {
-    type DecoderItem = f32;
-    type Decoder = crate::stream_pcm::PcmPlayback;
-
-    fn decoder(&self) -> Self::Decoder {
-        bevy::audio::Decodable::decoder(&self.0)
-    }
-}
-
-/// The sounds' samples, and each as a clip once and looping.
-#[derive(Resource, Default)]
-struct Thug2Sounds {
-    samples: std::collections::HashMap<u32, (std::sync::Arc<Vec<i16>>, u16, u32)>,
-    clips: std::collections::HashMap<(u32, bool), Handle<Thug2Pcm>>,
-}
-
-/// An emitter playing one of the game's voices.
-#[derive(Component)]
-struct VoiceEmitter {
-    voice: u32,
-    looping: bool,
-}
-
-/// The game's sound effects from the skater, heard through the headset (`xr::spatial_audio`): each voice the game
-/// plays, an emitter at the skater playing its sound at the game's level and pitch. A voice played again from its
-/// start is a new emitter; a looping one goes when the game stops it, one played once when it has run out. While the
-/// game waits (a menu, build mode) its loops wait too.
+/// The game's sound effects from the skater, heard through the headset (`xr::spatial_audio`; `engine_audio::Voices`):
+/// each voice the game plays, at the game's level and pitch. While the game waits (a menu, build mode) its loops wait
+/// too.
 #[allow(clippy::type_complexity)]
 fn play_sounds(
     mut commands: Commands,
     mut thug2: ResMut<Thug2>,
     tuning: Res<Tuning>,
-    mut sounds: ResMut<Thug2Sounds>,
-    mut assets: ResMut<Assets<Thug2Pcm>>,
-    mut emitters: Query<(Entity, &VoiceEmitter, &mut Transform, Option<&mut bevy::audio::SpatialAudioSink>)>,
+    mut assets: ResMut<Assets<crate::engine_audio::VoicePcm>>,
+    mut emitters: Query<(Entity, &crate::engine_audio::VoiceEmitter, &mut Transform, Option<&mut bevy::audio::SpatialAudioSink>)>,
 ) {
-    use bevy::audio::{AudioSinkPlayback, Volume};
     let thug2 = &mut *thug2;
-    for (id, sound) in thug2.heard.new_sounds.drain(..) {
-        sounds.samples.insert(id, (std::sync::Arc::new(sound.samples), sound.channels, sound.rate));
-    }
-    let started = std::mem::take(&mut thug2.heard.started);
-    let Some(s) = thug2.current.filter(|_| thug2.placed) else { return };
-    // (from the skater's focus: its feet, a little up)
-    let Some(focus) = thug2_engine::stage::link(&s).focus() else { return };
-    let at = focus.feet + focus.up * SOUND_HEIGHT;
-    let voices = &thug2.heard.voices;
-    for (entity, emitter, mut transform, sink) in &mut emitters {
-        let now = voices.iter().find(|v| v.voice == emitter.voice);
-        let replaced = started.iter().any(|v| v.voice == emitter.voice);
-        if replaced || (emitter.looping && now.is_none()) {
-            commands.entity(entity).despawn();
-            continue;
-        }
-        transform.translation = at;
-        if let (Some(v), Some(mut sink)) = (now, sink) {
-            sink.set_volume(Volume::Linear(v.gain * tuning.volume));
-            sink.set_speed(v.speed);
-            match (thug2.input.hold, sink.is_paused()) {
-                (true, false) => sink.pause(),
-                (false, true) => sink.play(),
-                _ => {}
-            }
-        }
-    }
-    if thug2.input.hold {
+    // (not in our world yet: what it started can't be placed)
+    if thug2.current.filter(|_| thug2.placed).is_none() {
+        thug2.heard.forget_started();
         return;
     }
-    for v in started {
-        let Some((samples, channels, rate)) = sounds.samples.get(&v.sound).cloned() else { continue };
-        let clip = sounds
-            .clips
-            .entry((v.sound, v.looping))
-            .or_insert_with(|| {
-                assets.add(Thug2Pcm(crate::stream_pcm::StreamPcm::from_i16(samples, channels, rate, v.looping)))
-            })
-            .clone();
-        let settings = if v.looping { PlaybackSettings::ONCE } else { PlaybackSettings::DESPAWN };
-        commands.spawn((
-            VoiceEmitter { voice: v.voice, looping: v.looping },
-            AudioPlayer(clip),
-            settings.with_spatial(true).with_volume(Volume::Linear(v.gain * tuning.volume)).with_speed(v.speed),
-            Transform::from_translation(at),
-            Name::new("THUG2 voice"),
-        ));
-    }
+    thug2.voices.play(&mut thug2.heard, thug2.input.hold, tuning.volume, &mut commands, &mut assets, &mut emitters);
 }
 
 /// Where the skater is (`thug2_engine::stage::link`), once it is in our world.
@@ -884,10 +777,10 @@ mod tests {
         assert!(pushed.z > start.z + 2.0, "pushed along +z: {start} -> {pushed}");
         assert!(pushed.y.abs() < 0.2, "on the floor: {pushed}");
         // Its sound: rolling, a looping emitter at the skater, playing the game's own samples.
-        let mut q = app.world_mut().query::<(&VoiceEmitter, &Transform)>();
+        let mut q = app.world_mut().query::<(&crate::engine_audio::VoiceEmitter, &Transform)>();
         let rolling = q.iter(app.world()).find(|(e, _)| e.looping).map(|(_, t)| t.translation).expect("the rolling loop plays");
         assert!((rolling - pushed).length() < 0.6, "from the skater: {rolling} vs {pushed}");
-        assert!(!app.world().resource::<Thug2Sounds>().samples.is_empty());
+        assert!(app.world().resource::<Thug2>().voices.clips() > 0);
         let there = app.world().resource::<SkaterLink>().board.unwrap().position;
         // (each step's pose taken, numbered by the steps)
         {
