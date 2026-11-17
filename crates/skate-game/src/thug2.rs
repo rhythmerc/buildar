@@ -138,15 +138,15 @@ struct Thug2 {
     accum: f32,
     /// The steps run (each pose's generation).
     steps: u64,
-    /// The skater was put somewhere else (a teleport, our world taken with a place, a new world size): the pose after
-    /// the next step is a cut.
+    /// The skater was put somewhere else (a teleport, our world taken with a place): the pose after the next step is a
+    /// cut.
     cut: bool,
     /// Its skater's poses, one a step, for the model layer to draw between ([`crate::model::PoseHistories`]).
     poses: crate::model::PoseHistories<()>,
     contract: engine_core::Pose,
     previous: Option<t2::Skater>,
     current: Option<t2::Skater>,
-    /// What the game has of the stage: its revision and world size (`thug2_engine::stage`).
+    /// What the game has of the stage: its revision (`thug2_engine::stage`).
     stage: thug2_engine::stage::StageFeed,
     /// Where to put the skater, waiting for the game or the world.
     spawn: Option<t2::Spawn>,
@@ -312,27 +312,24 @@ fn draw_hud(mut thug2: ResMut<Thug2>, mut renderer: crate::engine_hud::HudRender
     renderer.show(Engine::Thug2, &frame, |id| engine.hud_texture(thug2_engine::hud::game_texture(id)).map(thug2_engine::hud::texture));
 }
 
-/// How THUG2 plays in the room, kept in `thug2.json` beside the app's other settings.
+/// How THUG2 plays in the room, kept in `thug2.json` beside the app's other settings. (A `scale` there, THUG2's old
+/// world size, is ignored: the skater size does that for every engine.)
 #[derive(Resource, Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct Tuning {
     /// The game's clock: 1 is the game's own speed, less slows everything (jumps float).
     speed: f32,
-    /// The world size: the room is this much bigger to the game than it is, so the skater crosses it more slowly,
-    /// and is drawn that much smaller (ramps and rails keep their size to the player).
-    scale: f32,
     /// The game's sound effects' level: 1 is as the game sets them.
     volume: f32,
 }
 
 impl Default for Tuning {
     fn default() -> Self {
-        Self { speed: 1.0, scale: 1.0, volume: 1.0 }
+        Self { speed: 1.0, volume: 1.0 }
     }
 }
 
 const SPEED_RANGE: (f32, f32, f32) = (0.4, 1.0, 0.05);
-const SCALE_RANGE: (f32, f32, f32) = (1.0, 4.0, 0.25);
 const VOLUME_RANGE: (f32, f32, f32) = (0.0, 1.5, 0.05);
 
 impl Tuning {
@@ -340,7 +337,6 @@ impl Tuning {
         let t: Tuning = std::fs::read(file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         Tuning {
             speed: t.speed.clamp(SPEED_RANGE.0, SPEED_RANGE.1),
-            scale: t.scale.clamp(SCALE_RANGE.0, SCALE_RANGE.1),
             volume: t.volume.clamp(VOLUME_RANGE.0, VOLUME_RANGE.1),
         }
     }
@@ -358,23 +354,21 @@ fn keep(world: &mut World, t: Tuning) {
     }
 }
 
-/// What a park keeps of THUG2's settings: the world size and game speed it was built for (the
-/// sound's level is the player's own).
+/// What a park keeps of THUG2's settings: the game speed it was built for (the sound's level is the player's own).
+/// (A park's `scale`, THUG2's old world size, is ignored.)
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ParkTuning {
-    scale: f32,
     speed: f32,
 }
 
 fn park_settings(world: &World) -> serde_json::Value {
     let t = world.resource::<Tuning>();
-    serde_json::to_value(ParkTuning { scale: t.scale, speed: t.speed }).unwrap_or_default()
+    serde_json::to_value(ParkTuning { speed: t.speed }).unwrap_or_default()
 }
 
 fn apply_park_settings(world: &mut World, settings: &serde_json::Value) {
     let Ok(park) = serde_json::from_value::<ParkTuning>(settings.clone()) else { return };
     let mut t = *world.resource::<Tuning>();
-    t.scale = park.scale.clamp(SCALE_RANGE.0, SCALE_RANGE.1);
     t.speed = park.speed.clamp(SPEED_RANGE.0, SPEED_RANGE.1);
     if t != *world.resource::<Tuning>() {
         keep(world, t);
@@ -394,15 +388,12 @@ impl crate::xr::ui::UiProvider for Thug2Pages {
         }
         let t = *world.resource::<Tuning>();
         let mut w = vec![
-            Widget::slider("scale", "World size", t.scale, SCALE_RANGE, format!("{:.2}x", t.scale)),
             Widget::slider("speed", "Game speed", t.speed, SPEED_RANGE, format!("{:.0}%", t.speed * 100.0)),
-            Widget::button("reset", "Back to the game's own (1x, 100%)"),
+            Widget::button("reset", "Back to the game's own speed (100%)"),
             Widget::slider("volume", "Sound volume", t.volume, VOLUME_RANGE, format!("{:.0}%", t.volume * 100.0)),
         ];
         w.extend([
             Widget::info(""),
-            Widget::info("World size: the room is that much bigger to the game. The skater"),
-            Widget::info("crosses it slower and is drawn smaller; ramps and rails stay put."),
             Widget::info("Game speed: the game's clock. Slower keeps sizes, but jumps float."),
         ]);
         Some(UiPage::new("THUG2", w))
@@ -421,7 +412,6 @@ impl crate::xr::ui::UiProvider for Thug2Pages {
         }
         let mut t = *world.resource::<Tuning>();
         match (widget, act) {
-            ("scale", Act::Set(v)) => t.scale = v,
             ("speed", Act::Set(v)) => t.speed = v,
             ("volume", Act::Set(v)) => t.volume = v,
             ("reset", Act::Press) => t = Tuning { volume: t.volume, ..Tuning::default() },
@@ -432,7 +422,7 @@ impl crate::xr::ui::UiProvider for Thug2Pages {
     }
 
     fn start_items(&self, _world: &World) -> Vec<crate::xr::ui::Widget> {
-        vec![crate::xr::ui::Widget::link("THUG2: world size, game speed, sound", PAGE)]
+        vec![crate::xr::ui::Widget::link("THUG2: game speed, sound", PAGE)]
     }
 
     fn engine(&self) -> Option<Engine> {
@@ -442,9 +432,9 @@ impl crate::xr::ui::UiProvider for Thug2Pages {
 
 /// Put down where the shared layer asks (`thug2_engine::stage::spawn`: on the board, a little over the point): now if
 /// the game has a stage of ours, else with the next one it takes.
-fn place_player(mut requests: MessageReader<PlacePlayer>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
+fn place_player(mut requests: MessageReader<PlacePlayer>, mut thug2: ResMut<Thug2>) {
     for r in requests.read() {
-        let spawn = thug2_engine::stage::spawn(r.point, r.forward, tuning.scale);
+        let spawn = thug2_engine::stage::spawn(r.point, r.forward);
         let given = thug2.stage.given().is_some();
         match &mut thug2.phase {
             Phase::Running(engine) if given => {
@@ -456,9 +446,9 @@ fn place_player(mut requests: MessageReader<PlacePlayer>, tuning: Res<Tuning>, m
     }
 }
 
-/// The stage and park offered every frame: the game takes them (`thug2_engine::stage::StageFeed`) when they or the
-/// world size change - not mid-grind, and once there's somewhere to put the skater.
-fn offer_stage(stage: Res<CurrentStage>, park: Res<CurrentPark>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
+/// The stage and park offered every frame: the game takes them (`thug2_engine::stage::StageFeed`) when they change -
+/// not mid-grind, and once there's somewhere to put the skater.
+fn offer_stage(stage: Res<CurrentStage>, park: Res<CurrentPark>, mut thug2: ResMut<Thug2>) {
     let thug2 = &mut *thug2;
     let given = thug2.stage.given();
     thug2.stage.set_park(&park);
@@ -466,10 +456,10 @@ fn offer_stage(stage: Res<CurrentStage>, park: Res<CurrentPark>, tuning: Res<Tun
         Phase::Running(engine) => Some(engine),
         _ => None,
     };
-    let (placing, scale) = (thug2.spawn.is_some(), thug2.stage.scale());
-    thug2.stage.set_stage(engine, thug2.current.as_ref(), &stage, tuning.scale, &mut thug2.spawn);
-    // (the skater put down with the world, or carried over to a new world size: a cut)
-    thug2.cut |= (placing && thug2.spawn.is_none()) || thug2.stage.scale() != scale;
+    let placing = thug2.spawn.is_some();
+    thug2.stage.set_stage(engine, thug2.current.as_ref(), &stage, &mut thug2.spawn);
+    // (the skater put down with the world: a cut)
+    thug2.cut |= placing && thug2.spawn.is_none();
     if thug2.stage.given() != given {
         info!("THUG2 world: {} faces, {} rails (AR revision {})", thug2.stage.faces, thug2.stage.rails, stage.revision);
     }
@@ -496,7 +486,7 @@ fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
                 // (every step's pose, numbered and stamped, for the model layer to draw between the last two)
                 if engine.skater_pose(&mut thug2.pose) {
                     let pose = &mut thug2.contract;
-                    thug2_engine::model::pose(&thug2.pose, thug2.stage.scale(), pose);
+                    thug2_engine::model::pose(&thug2.pose, pose);
                     pose.model = thug2_engine::model::SKATER;
                     pose.generation = thug2.steps;
                     pose.discontinuity = std::mem::take(&mut thug2.cut);
@@ -572,9 +562,8 @@ fn play_sounds(
     let started = std::mem::take(&mut thug2.heard.started);
     let Some(s) = thug2.current.filter(|_| thug2.placed) else { return };
     // (from the skater's focus: its feet, a little up)
-    let link = thug2_engine::stage::link(&s, thug2.stage.scale());
-    let Some(focus) = link.focus() else { return };
-    let at = focus.feet + focus.up * (SOUND_HEIGHT * link.size());
+    let Some(focus) = thug2_engine::stage::link(&s).focus() else { return };
+    let at = focus.feet + focus.up * SOUND_HEIGHT;
     let voices = &thug2.heard.voices;
     for (entity, emitter, mut transform, sink) in &mut emitters {
         let now = voices.iter().find(|v| v.voice == emitter.voice);
@@ -620,7 +609,7 @@ fn play_sounds(
 /// Where the skater is (`thug2_engine::stage::link`), once it is in our world.
 fn publish(thug2: Res<Thug2>, mut link: ResMut<SkaterLink>) {
     let Some(s) = thug2.current.filter(|_| thug2.placed) else { return };
-    **link = thug2_engine::stage::link(&s, thug2.stage.scale());
+    **link = thug2_engine::stage::link(&s);
 }
 
 /// The skater's stand-in: a board and a body.
@@ -667,14 +656,11 @@ fn place_stand_in(
     // (the same time since the last step as the model layer's, in steps)
     let step = engine_core::Step { at: thug2.clock, period: thug2_engine::model::PERIOD };
     let alpha = step.alpha(thug2.now()).clamp(0.0, 1.0);
-    let scale = thug2.stage.scale();
-    let at = from_game(before.position, scale).lerp(from_game(now.position, scale), alpha);
+    let at = from_game(before.position).lerp(from_game(now.position), alpha);
     let up = Vec3::from_array(now.up).normalize_or(Vec3::Y);
     let forward = Vec3::from_array(now.forward).normalize_or(Vec3::Z);
     let right = up.cross(forward).normalize_or(Vec3::X);
-    *transform = Transform::from_translation(at)
-        .with_rotation(Quat::from_mat3(&Mat3::from_cols(right, up, right.cross(up))))
-        .with_scale(Vec3::splat(1.0 / scale));
+    *transform = Transform::from_translation(at).with_rotation(Quat::from_mat3(&Mat3::from_cols(right, up, right.cross(up))));
     *visibility = Visibility::Inherited;
 }
 
@@ -808,6 +794,24 @@ struct ShotImage(Handle<Image>);
 mod tests {
     use super::*;
 
+    /// A `thug2.json` and a park's settings from before the world size went (a `scale` in them) still load: the
+    /// scale ignored, the rest kept.
+    #[test]
+    fn old_settings_with_a_world_size_still_load() {
+        let dir = std::env::temp_dir().join(format!("thug2-old-settings-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("thug2.json");
+        std::fs::write(&file, br#"{ "speed": 0.8, "scale": 2.5, "volume": 0.5 }"#).unwrap();
+        assert_eq!(Tuning::load(&file), Tuning { speed: 0.8, volume: 0.5 });
+        let mut world = World::new();
+        world.insert_resource(Tuning::default());
+        world.insert_resource(TuningFile(dir.join("kept.json")));
+        apply_park_settings(&mut world, &serde_json::json!({ "scale": 2.5, "speed": 0.6 }));
+        assert_eq!(*world.resource::<Tuning>(), Tuning { speed: 0.6, volume: 1.0 });
+        assert_eq!(park_settings(&world), serde_json::json!({ "speed": 0.6f32 }));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The adapter on the real engine (`THUG2_GAME_DIR`: the folder holding the player's `Data`; skipped without
     /// it): a room floor given, the skater put on it, pushed forward with the left stick; then a second engine
     /// picked and the stand-in hidden, and THUG2 picked again carrying on.
@@ -876,52 +880,43 @@ mod tests {
         let rolling = q.iter(app.world()).find(|(e, _)| e.looping).map(|(_, t)| t.translation).expect("the rolling loop plays");
         assert!((rolling - pushed).length() < 0.6, "from the skater: {rolling} vs {pushed}");
         assert!(!app.world().resource::<Thug2Sounds>().samples.is_empty());
-        // A world twice the size: the skater stays where it is in the room, and is drawn half size.
-        let here = app.world().resource::<SkaterLink>().board.unwrap().position;
-        app.world_mut().resource_mut::<Tuning>().scale = 2.0;
-        // (the first step at the new size: a cut, its pose not blended from the one before)
-        let before = app.world().resource::<Thug2>().steps;
-        let mut snapped = false;
-        for _ in 0..3 {
-            app.update();
-            let thug2 = app.world().resource::<Thug2>();
-            if !snapped && thug2.steps == before + 1 {
-                let (previous, current) = thug2.poses.get(thug2_engine::model::SKATER).unwrap().pair().unwrap();
-                assert_eq!(previous.root_matrix, current.root_matrix, "a cut at the new size");
-                snapped = true;
-            }
-        }
-        assert!(snapped, "a step at the new size");
         let there = app.world().resource::<SkaterLink>().board.unwrap().position;
-        assert!((there.xz() - here.xz()).length() < 0.6, "kept its place: {here} -> {there}");
-        // (each step's pose taken, numbered by the steps; the new world size a cut: the pair starts again there, so
-        // its two roots are the same size, not blended from the old size)
+        // (each step's pose taken, numbered by the steps)
         {
             let thug2 = app.world().resource::<Thug2>();
             let history = thug2.poses.get(thug2_engine::model::SKATER).expect("its poses");
-            let (previous, current) = history.pair().expect("a pair");
-            assert_eq!(previous.root.scale, current.root.scale, "not blended across the new size");
+            assert!(history.pair().is_some(), "a pair");
             assert!(thug2.steps > 60 && thug2.contract.generation == thug2.steps);
             let alpha = history.alpha(thug2.now());
             assert!((0.0..=1.0).contains(&alpha), "{alpha}");
         }
-        // The game's own skater drawn: its parts skinned to joints that sit on it (half size now, as the world is
-        // twice as big), the stand-in not shown.
+        // The game's own skater drawn: its parts skinned to joints that sit on it (life size: the game's inches as
+        // metres), the stand-in not shown.
         let root = app.world().resource::<SkaterJoints>().root;
         let joint = app.world().resource::<SkaterJoints>().joints[0];
         let parts = app.world_mut().query_filtered::<(), With<crate::model::ModelPart>>().iter(app.world()).count();
         assert!(parts > 10, "{parts} parts");
         let root_at = app.world().get::<Transform>(root).unwrap();
         assert!((root_at.translation.xz() - there.xz()).length() < 0.6, "the model where the skater is: {root_at:?}");
-        assert!((root_at.scale.x - 0.5 / t2::INCHES_PER_METRE).abs() < 1e-4, "half size: {root_at:?}");
+        assert!((root_at.scale.x - 1.0 / t2::INCHES_PER_METRE).abs() < 1e-4, "life size: {root_at:?}");
         let joint_at = app.world().get::<Transform>(joint).unwrap().translation;
         assert!((joint_at - there).length() < 1.5, "its joints on it: {joint_at} vs {there}");
         // Its board's body, from the joints only the board's parts are skinned to: where the skater link puts the
-        // board, along the way it faces.
+        // board, between its last two steps' places (it is drawn between them: at full speed in life size a step is
+        // some 15 cm), along the way it faces.
         let link = app.world().resource::<SkaterLink>().board.unwrap();
+        let (from, to) = {
+            let thug2 = app.world().resource::<Thug2>();
+            let board = |s: Option<t2::Skater>| thug2_engine::stage::link(&s.unwrap()).board.unwrap().position;
+            (board(thug2.previous), board(thug2.current))
+        };
         let bodies = app.world().resource::<engine_api::PlayerBodies>().of(Engine::Thug2).to_vec();
         let [engine_api::BodyShape::Footprint { middle, along, .. }] = bodies.as_slice() else { panic!("the board alone: {bodies:?}") };
-        assert!((*middle - link.position).length() < 0.15, "the board's middle {middle} at the board {}", link.position);
+        let t = ((*middle - from).dot(to - from) / (to - from).length_squared().max(1e-9)).clamp(0.0, 1.0);
+        assert!(
+            (*middle - from.lerp(to, t)).length() < 0.15,
+            "the board's middle {middle} at the board, between {from} and {to}"
+        );
         assert!(along.dot(link.forward.with_y(0.0).normalize()).abs() > 0.9, "along it: {along} vs {}", link.forward);
         let mut q = app.world_mut().query_filtered::<&Visibility, With<StandIn>>();
         assert_eq!(*q.single(app.world()).unwrap(), Visibility::Hidden);

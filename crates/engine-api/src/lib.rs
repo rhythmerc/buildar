@@ -96,7 +96,7 @@ pub struct BeforeSwitch(pub Vec<fn(&mut World, Engine)>);
 /// A park setting's getter and setter.
 pub type CourseSettingHooks = (fn(&World) -> serde_json::Value, fn(&mut World, &serde_json::Value));
 
-/// What of an engine's settings a course keeps (THUG2's world size and game speed: what the park was built to), and
+/// What of an engine's settings a course keeps (THUG2's game speed: what the park was built to), and
 /// how to put them back: each engine that has any registers them. Saved with the park, applied when it's opened.
 #[derive(Resource, Default)]
 pub struct CourseSettings(pub HashMap<Engine, CourseSettingHooks>);

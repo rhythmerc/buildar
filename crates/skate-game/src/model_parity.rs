@@ -274,26 +274,24 @@ pub(crate) mod thug2 {
         use std::time::Duration;
         let period = thug2_engine::model::PERIOD;
         let mut b = Bytes::default();
-        for scale in [1.0] {
-            for cut in [false, true] {
-                let mut history = crate::model::PoseHistories::<()>::default();
-                for (generation, game) in [(1, before), (2, now)] {
-                    let mut contract = engine_core::Pose::default();
-                    thug2_engine::model::pose(game, scale, &mut contract);
-                    contract.generation = generation;
-                    contract.discontinuity = cut && generation == 2;
-                    contract.step = Step { at: period * generation as u32, period };
-                    history.offer(&contract, ());
-                }
-                let history = history.get(thug2_engine::model::SKATER).expect("its history");
-                for since in [0.0, 0.4, 0.5, 1.0] {
-                    let (previous, current, alpha) =
-                        history.view_at(period * 2 + Duration::from_secs_f64(period.as_secs_f64() * since)).expect("a pair");
-                    let (root, joints) = crate::model::flat_blend(previous, current, alpha, 64);
-                    b.m(root);
-                    b.n(joints.len());
-                    joints.into_iter().for_each(|m| b.m(m));
-                }
+        for cut in [false, true] {
+            let mut history = crate::model::PoseHistories::<()>::default();
+            for (generation, game) in [(1, before), (2, now)] {
+                let mut contract = engine_core::Pose::default();
+                thug2_engine::model::pose(game, &mut contract);
+                contract.generation = generation;
+                contract.discontinuity = cut && generation == 2;
+                contract.step = Step { at: period * generation as u32, period };
+                history.offer(&contract, ());
+            }
+            let history = history.get(thug2_engine::model::SKATER).expect("its history");
+            for since in [0.0, 0.4, 0.5, 1.0] {
+                let (previous, current, alpha) =
+                    history.view_at(period * 2 + Duration::from_secs_f64(period.as_secs_f64() * since)).expect("a pair");
+                let (root, joints) = crate::model::flat_blend(previous, current, alpha, 64);
+                b.m(root);
+                b.n(joints.len());
+                joints.into_iter().for_each(|m| b.m(m));
             }
         }
         b.digest()
@@ -304,7 +302,7 @@ pub(crate) mod thug2 {
     /// largest cosine between two of a matrix's axes).
     pub(crate) fn makeup(pose: &t2::Pose) -> (usize, usize, f32, f32, f32) {
         let mut contract = engine_core::Pose::default();
-        thug2_engine::model::pose(pose, 1.0, &mut contract);
+        thug2_engine::model::pose(pose, &mut contract);
         let (mut mirrored, mut broken, mut least, mut most, mut shear) = (0, 0, f32::MAX, 0.0f32, 0.0f32);
         let draw = contract.root * Mat4::from_scale(Vec3::splat(t2::INCHES_PER_METRE));
         for m in contract.joints.iter().copied().chain([draw]) {

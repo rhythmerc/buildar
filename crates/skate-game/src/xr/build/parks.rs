@@ -67,7 +67,7 @@ pub(crate) struct ParkFile {
     /// kept, played with whichever runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
-    /// That engine's settings it was built with (`engines::CourseSettings`: THUG2's world size and game speed).
+    /// That engine's settings it was built with (`engines::CourseSettings`: THUG2's game speed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_settings: Option<serde_json::Value>,
     /// The mode it is a course of (`Mode::key`: "skate"); a park from before modes were kept is a skate park. Kept
@@ -533,7 +533,7 @@ fn take_made_anchors(rig: Res<Rig>, mut anchors: ResMut<Anchors>, mut parks: Res
 }
 
 /// The open park keeps the engine it's played with, and that engine's park settings, whenever they change (an
-/// engine switched to, its world size changed). Not while a switch is pending, nor when the park's own engine isn't
+/// engine switched to, its game speed changed). Not while a switch is pending, nor when the park's own engine isn't
 /// installed (played with another for now: it stays the one it was built for), nor by an engine of another mode.
 pub(crate) fn tag_engine(world: &mut World) {
     let Some(engine) = world.get_resource::<Engines>().and_then(Engines::settled) else { return };

@@ -1,8 +1,9 @@
 //! The stage and park as THUG2's world, putting the skater down, and where it is.
 //!
-//! - **Units:** the game's are inches, y up, right-handed like the contract's space, so metres map onto it by scale.
-//!   The world size (`scale`: how much bigger the room is to the game than it is to the player) multiplies it, and
-//!   it is offset ([`OFFSET`]) clear of the empty level's own scene. [`to_game`], [`from_game`].
+//! - **Units:** the game's are inches, y up, right-handed like the contract's space, so the stage's metres map onto
+//!   it by scale alone ([`t2::INCHES_PER_METRE`]), offset ([`OFFSET`]) clear of the empty level's own scene. How big
+//!   the room is to the game is the runtime's (the player's world scale, the skater size), as for every engine.
+//!   [`to_game`], [`from_game`].
 //! - **Faces:** the game rides a face only from its front, so each is turned the way it is met ([`triangles`]).
 use engine_core::glam::Vec3;
 use engine_core::skate::{ParkPiece, SkatePark, SkaterLink};
@@ -17,7 +18,7 @@ pub const OFFSET: Vec3 = Vec3::new(50_000.0, 0.0, 50_000.0);
 pub const WALL_UP: f32 = 0.26;
 pub const RAMP_UP: f32 = 0.95;
 pub const VERT_UP: f32 = 0.707;
-/// How far each side of a wall is put out from its plane, game units (inches, at any world size): a wall is a slab
+/// How far each side of a wall is put out from its plane, game units (inches): a wall is a slab
 /// a quarter inch thick, not two faces in one plane. A wall plant puts the skater off the wall with a feeler from the
 /// hit out along its normal, and when that feeler hits something the skater goes 0.1 inch off that instead, along
 /// *its* normal. A back face in the same plane is hit at once (whenever the hit rounds onto or behind the plane), and
@@ -25,45 +26,45 @@ pub const VERT_UP: f32 = 0.707;
 /// (tests/wallplant.rs). Kept small, well over the float spacing out at OFFSET (1/256 inch): each side stands that
 /// far proud of its plane, so a box's sides no longer quite meet at its edges.
 pub const WALL_SKIN: f32 = 0.125;
-/// Where the deck is above the skater's feet, metres (at its own size).
+/// Where the deck is above the skater's feet, metres.
 pub const DECK_HEIGHT: f32 = 0.08;
-/// Where the skater's sounds come from: its board, a little up from its feet (metres at its own size).
+/// Where the skater's sounds come from: its board, a little up from its feet, metres.
 pub const SOUND_HEIGHT: f32 = 0.3;
 /// How far over the ground point the skater is put down, metres.
 pub const PLACE_LIFT: f32 = 0.1;
 
-/// Contract metres as the game's units at world size `scale`.
-pub fn to_game(p: Vec3, scale: f32) -> [f32; 3] {
-    (p * t2::INCHES_PER_METRE * scale + OFFSET).to_array()
+/// Contract metres as the game's units.
+pub fn to_game(p: Vec3) -> [f32; 3] {
+    (p * t2::INCHES_PER_METRE + OFFSET).to_array()
 }
 
-pub fn from_game(p: [f32; 3], scale: f32) -> Vec3 {
-    (Vec3::from_array(p) - OFFSET) / (t2::INCHES_PER_METRE * scale)
+pub fn from_game(p: [f32; 3]) -> Vec3 {
+    (Vec3::from_array(p) - OFFSET) / t2::INCHES_PER_METRE
 }
 
-/// Where to put the skater down at `point`, facing `forward`, at world size `scale`.
-pub fn spawn(point: Vec3, forward: Vec3, scale: f32) -> t2::Spawn {
-    t2::Spawn { point: to_game(point + Vec3::Y * PLACE_LIFT, scale), heading_degrees: t2::heading_of(forward.to_array()) }
+/// Where to put the skater down at `point`, facing `forward`.
+pub fn spawn(point: Vec3, forward: Vec3) -> t2::Spawn {
+    t2::Spawn { point: to_game(point + Vec3::Y * PLACE_LIFT), heading_degrees: t2::heading_of(forward.to_array()) }
 }
 
-/// Where the skater is, at world size `scale`: the rider at its feet, the board [`DECK_HEIGHT`] up from them. (The
-/// game's C API gives one frame, the skater's: no board of its own, and no walking off it.)
-pub fn link(s: &t2::Skater, scale: f32) -> SkaterLink {
-    let feet = from_game(s.position, scale);
+/// Where the skater is: the rider at its feet, the board [`DECK_HEIGHT`] up from them, life size. (The game's C API
+/// gives one frame, the skater's: no board of its own, and no walking off it.)
+pub fn link(s: &t2::Skater) -> SkaterLink {
+    let feet = from_game(s.position);
     let up = Vec3::from_array(s.up);
     let forward = Vec3::from_array(s.forward);
     SkaterLink {
         rider: Some(Frame { position: feet, forward, up: up.normalize_or(Vec3::Y) }),
-        board: Some(Frame { position: feet + up * DECK_HEIGHT / scale, forward, up }),
+        board: Some(Frame { position: feet + up * DECK_HEIGHT, forward, up }),
         on_board: true,
         grinding: s.state == t2::State::Rail,
-        size: 1.0 / scale.max(1e-3),
+        size: 1.0,
     }
 }
 
 /// The game's rails for `park`.
-pub fn rails(park: &SkatePark, scale: f32) -> Vec<Vec<[f32; 3]>> {
-    park.rails.iter().map(|r| r.iter().map(|&p| to_game(p, scale)).collect()).collect()
+pub fn rails(park: &SkatePark) -> Vec<Vec<[f32; 3]>> {
+    park.rails.iter().map(|r| r.iter().map(|&p| to_game(p)).collect()).collect()
 }
 
 /// The room and pieces as the game's collision faces (game units, offset). The game rides a face only from its
@@ -73,13 +74,13 @@ pub fn rails(park: &SkatePark, scale: f32) -> Vec<Vec<[f32; 3]>> {
 ///   skater goes straight up and comes back down into it - or transfers to a vert face behind the coping (a spine);
 /// - any other upright face (room walls, furniture and box sides): both ways, wallridable, the two sides a slab
 ///   [`WALL_SKIN`] either side of it.
-pub fn triangles(stage: &Stage, park: &SkatePark, scale: f32) -> Vec<t2::Triangle> {
+pub fn triangles(stage: &Stage, park: &SkatePark) -> Vec<t2::Triangle> {
     let mut out = Vec::new();
     for t in stage.room() {
-        face(&mut out, t, None, scale);
+        face(&mut out, t, None);
     }
     for solid in &stage.solids {
-        piece_faces(&mut out, solid, park.piece(solid.id), scale);
+        piece_faces(&mut out, solid, park.piece(solid.id));
     }
     out
 }
@@ -89,14 +90,14 @@ fn normal(t: [Vec3; 3]) -> Vec3 {
 }
 
 /// One face; `vert`: it is a quarter pipe's top, facing (across) `vert`.
-fn face(out: &mut Vec<t2::Triangle>, t: [Vec3; 3], vert: Option<Vec3>, scale: f32) {
+fn face(out: &mut Vec<t2::Triangle>, t: [Vec3; 3], vert: Option<Vec3>) {
     use t2::face::*;
     let n = normal(t);
     if n == Vec3::ZERO {
         return;
     }
     let flipped = [t[0], t[2], t[1]];
-    let game = |t: [Vec3; 3], flags: u16| t2::Triangle { v: t.map(|p| to_game(p, scale)), flags, terrain: 0 };
+    let game = |t: [Vec3; 3], flags: u16| t2::Triangle { v: t.map(to_game), flags, terrain: 0 };
     if let Some(toward) = vert {
         let t = if n.with_y(0.0).dot(toward.with_y(0.0)) >= 0.0 { t } else { flipped };
         out.push(game(t, SKATABLE | VERT));
@@ -117,7 +118,7 @@ fn face(out: &mut Vec<t2::Triangle>, t: [Vec3; 3], vert: Option<Vec3>, scale: f3
 
 /// A piece's faces (its body's, then its rail tubes'), its quarter pipes' tops found: a quad steeper than 45° whose
 /// lower edge is the upper edge of a gentler ramp quad (or of another such top) is vert, facing that ramp.
-fn piece_faces(out: &mut Vec<t2::Triangle>, solid: &Solid, piece: Option<&ParkPiece>, scale: f32) {
+fn piece_faces(out: &mut Vec<t2::Triangle>, solid: &Solid, piece: Option<&ParkPiece>) {
     let tubes = piece.map_or(0..0, |p| p.rail_quads.clone());
     let quads: Vec<[Vec3; 4]> = (solid.quads.iter().enumerate().filter(|(i, _)| !tubes.contains(i)))
         .chain(solid.quads.iter().enumerate().filter(|(i, _)| tubes.contains(i)))
@@ -166,18 +167,16 @@ fn piece_faces(out: &mut Vec<t2::Triangle>, solid: &Solid, piece: Option<&ParkPi
     }
     for (q, v) in quads.iter().zip(vert) {
         let [a, b, c, d] = *q;
-        face(out, [a, b, c], v, scale);
-        face(out, [a, c, d], v, scale);
+        face(out, [a, b, c], v);
+        face(out, [a, c, d], v);
     }
 }
 
-/// What the game has of the stage: the park kept until its stage comes, and the revision and world size it was given
-/// at.
+/// What the game has of the stage: the park kept until its stage comes, and the revision it was given.
 #[derive(Default)]
 pub struct StageFeed {
     park: Option<SkatePark>,
     given: Option<u64>,
-    scale: f32,
     /// What it was last given: faces and rails.
     pub faces: usize,
     pub rails: usize,
@@ -187,11 +186,6 @@ impl StageFeed {
     /// The stage revision the game has (none: it has none of ours yet: the skater is still at the level's start).
     pub fn given(&self) -> Option<u64> {
         self.given
-    }
-
-    /// The world size the game's stage was given at (0 before it was given one).
-    pub fn scale(&self) -> f32 {
-        self.scale
     }
 
     /// The park, kept for the stage of its revision ([`StageFeed::set_stage`] takes the two together).
@@ -205,45 +199,34 @@ impl StageFeed {
         Applied::Deferred
     }
 
-    /// The stage (with its park) given to the game when it changes or the world size does: not mid-grind (the rails
-    /// would go from under it), and only once there's somewhere to put the skater (`spawn`, taken with it) or the
-    /// game has a stage of ours already. A new world size puts the skater back where it is in the room. `engine`:
-    /// none while the game isn't running yet (a waiting `spawn` is kept).
+    /// The stage (with its park) given to the game when it changes: not mid-grind (the rails would go from under it),
+    /// and only once there's somewhere to put the skater (`spawn`, taken with it) or the game has a stage of ours
+    /// already. `engine`: none while the game isn't running yet (a waiting `spawn` is kept).
     pub fn set_stage(
         &mut self,
         engine: Option<&mut t2::Engine>,
         current: Option<&t2::Skater>,
         stage: &Stage,
-        scale: f32,
         spawn: &mut Option<t2::Spawn>,
     ) -> Applied {
         let grinding = current.is_some_and(|s| s.state == t2::State::Rail);
-        let rescaled = self.given.is_some() && self.scale != scale;
-        if stage.revision == 0 || (self.given == Some(stage.revision) && !rescaled) {
+        if stage.revision == 0 || self.given == Some(stage.revision) {
             return Applied::Done;
         }
         if grinding {
             return Applied::Deferred;
         }
         let Some(park) = self.park.as_ref().filter(|p| p.revision == stage.revision) else { return Applied::Deferred };
-        // (a new world size: the skater put back where it is in the room, in the new units)
-        if rescaled
-            && spawn.is_none()
-            && let Some(s) = current
-        {
-            *spawn = Some(self::spawn(from_game(s.position, self.scale), Vec3::from_array(s.forward), scale));
-        }
         if spawn.is_none() && self.given.is_none() {
             return Applied::Deferred;
         }
         let Some(engine) = engine else { return Applied::Deferred };
-        let faces = triangles(stage, park, scale);
-        let rails = rails(park, scale);
+        let faces = triangles(stage, park);
+        let rails = rails(park);
         engine.set_world(&faces, spawn.take());
         engine.set_rails(&rails);
         (self.faces, self.rails) = (faces.len(), rails.len());
         self.given = Some(stage.revision);
-        self.scale = scale;
         Applied::Done
     }
 }
@@ -264,46 +247,40 @@ mod tests {
     #[test]
     fn metres_map_to_offset_inches_and_back() {
         let p = Vec3::new(1.0, 2.0, -3.0);
-        let g = to_game(p, 1.0);
+        let g = to_game(p);
         assert!((g[1] - 2.0 * 39.370_08).abs() < 1e-3);
-        assert!((from_game(g, 1.0) - p).length() < 1e-4);
-        // A world twice the size: twice the inches, and back.
-        let g2 = to_game(p, 2.0);
-        assert!((g2[1] - 4.0 * 39.370_08).abs() < 1e-3);
-        assert!((from_game(g2, 2.0) - p).length() < 1e-4);
+        assert!((from_game(g) - p).length() < 1e-4);
     }
 
     #[test]
     fn ground_faces_up_whichever_way_it_was_wound_and_walls_both_ways() {
         let mut out = Vec::new();
         // A floor wound to face down, and a wall.
-        face(&mut out, [Vec3::ZERO, Vec3::X, Vec3::Z], None, 1.0);
+        face(&mut out, [Vec3::ZERO, Vec3::X, Vec3::Z], None);
         assert_eq!(out.len(), 1);
         assert!(up(&out[0]) > 0.99, "turned up");
         assert_eq!(out[0].flags, t2::face::SKATABLE);
-        face(&mut out, [Vec3::ZERO, Vec3::Y, Vec3::X], None, 1.0);
+        face(&mut out, [Vec3::ZERO, Vec3::Y, Vec3::X], None);
         assert_eq!(out.len(), 3, "a wall is two faces");
         assert_eq!(out[1].flags, t2::face::SKATABLE | t2::face::WALL);
     }
 
-    /// A wall's two sides are apart, each out along its own normal by the skin (in the game's units, at any world
-    /// size): a feeler from one side's face out along its normal never meets the other side.
+    /// A wall's two sides are apart, each out along its own normal by the skin (in the game's units): a feeler from
+    /// one side's face out along its normal never meets the other side.
     #[test]
     fn a_walls_sides_are_a_slab_not_one_plane() {
-        for scale in [1.0, 4.0] {
-            let mut out = Vec::new();
-            let t = [Vec3::ZERO, Vec3::Y, Vec3::X]; // facing -z
-            face(&mut out, t, None, scale);
-            let plane = to_game(Vec3::ZERO, scale)[2];
-            let (front, back) = (&out[0], &out[1]);
-            assert!(front.v.iter().all(|v| (v[2] - (plane - WALL_SKIN)).abs() < 1e-3), "{front:?} at {plane}");
-            assert!(back.v.iter().all(|v| (v[2] - (plane + WALL_SKIN)).abs() < 1e-3), "{back:?} at {plane}");
-            let n = |t: &t2::Triangle| {
-                let v = t.v.map(Vec3::from_array);
-                normal([v[0], v[1], v[2]])
-            };
-            assert!(n(front).z < -0.99 && n(back).z > 0.99, "each faces away from the other");
-        }
+        let mut out = Vec::new();
+        let t = [Vec3::ZERO, Vec3::Y, Vec3::X]; // facing -z
+        face(&mut out, t, None);
+        let plane = to_game(Vec3::ZERO)[2];
+        let (front, back) = (&out[0], &out[1]);
+        assert!(front.v.iter().all(|v| (v[2] - (plane - WALL_SKIN)).abs() < 1e-3), "{front:?} at {plane}");
+        assert!(back.v.iter().all(|v| (v[2] - (plane + WALL_SKIN)).abs() < 1e-3), "{back:?} at {plane}");
+        let n = |t: &t2::Triangle| {
+            let v = t.v.map(Vec3::from_array);
+            normal([v[0], v[1], v[2]])
+        };
+        assert!(n(front).z < -0.99 && n(back).z > 0.99, "each faces away from the other");
     }
 
     #[test]
@@ -317,7 +294,7 @@ mod tests {
         let side = [Vec3::new(3.0, 0.0, 0.0), Vec3::new(3.0, 0.5, 0.0), Vec3::new(3.0, 0.5, 1.0), Vec3::new(3.0, 0.0, 1.0)];
         let (solid, park) = piece(vec![flat, ramp, top, side]);
         let mut out = Vec::new();
-        piece_faces(&mut out, &solid, Some(&park), 1.0);
+        piece_faces(&mut out, &solid, Some(&park));
         let verts: Vec<&t2::Triangle> = out.iter().filter(|t| t.flags & t2::face::VERT != 0).collect();
         assert_eq!(verts.len(), 2, "the top's two triangles");
         for t in verts {
@@ -342,7 +319,7 @@ mod tests {
         }
         let (solid, park) = piece(quads);
         let mut out = Vec::new();
-        piece_faces(&mut out, &solid, Some(&park), 1.0);
+        piece_faces(&mut out, &solid, Some(&park));
         let vert: Vec<bool> = out.iter().map(|t| t.flags & t2::face::VERT != 0).collect();
         assert_eq!(vert, vec![false, false, true, true, true, true], "the 30° quad isn't vert, the 60° and 85° are");
         for t in out.iter().filter(|t| t.flags & t2::face::VERT != 0) {
@@ -352,7 +329,7 @@ mod tests {
     }
 
     fn skater(state: t2::State) -> t2::Skater {
-        t2::Skater { position: to_game(Vec3::ZERO, 1.0), velocity: [0.0; 3], forward: [0.0, 0.0, 1.0], up: [0.0, 1.0, 0.0], state, frame: 0, balance: None }
+        t2::Skater { position: to_game(Vec3::ZERO), velocity: [0.0; 3], forward: [0.0, 0.0, 1.0], up: [0.0, 1.0, 0.0], state, frame: 0, balance: None }
     }
 
     /// The stage is taken later, not now: mid-grind, before its park, and before there's anywhere to put the skater;
@@ -362,16 +339,16 @@ mod tests {
         let stage = Stage { revision: 2, ..Default::default() };
         let park = SkatePark { revision: 2, ..Default::default() };
         let mut feed = StageFeed::default();
-        let mut spawn = Some(spawn(Vec3::ZERO, Vec3::Z, 1.0));
-        assert_eq!(feed.set_stage(None, None, &Stage::default(), 1.0, &mut spawn), Applied::Done, "nothing built yet");
-        assert_eq!(feed.set_stage(None, None, &stage, 1.0, &mut spawn), Applied::Deferred, "no park yet");
+        let mut spawn = Some(spawn(Vec3::ZERO, Vec3::Z));
+        assert_eq!(feed.set_stage(None, None, &Stage::default(), &mut spawn), Applied::Done, "nothing built yet");
+        assert_eq!(feed.set_stage(None, None, &stage, &mut spawn), Applied::Deferred, "no park yet");
         assert_eq!(feed.set_park(&park), Applied::Deferred);
         let grinding = skater(t2::State::Rail);
-        assert_eq!(feed.set_stage(None, Some(&grinding), &stage, 1.0, &mut spawn), Applied::Deferred, "mid-grind");
+        assert_eq!(feed.set_stage(None, Some(&grinding), &stage, &mut spawn), Applied::Deferred, "mid-grind");
         assert!(spawn.is_some(), "the place kept");
         let rolling = skater(t2::State::Ground);
-        assert_eq!(feed.set_stage(None, Some(&rolling), &stage, 1.0, &mut None), Applied::Deferred, "nowhere to put it");
-        assert_eq!(feed.set_stage(None, Some(&rolling), &stage, 1.0, &mut spawn), Applied::Deferred, "the game not running");
+        assert_eq!(feed.set_stage(None, Some(&rolling), &stage, &mut None), Applied::Deferred, "nowhere to put it");
+        assert_eq!(feed.set_stage(None, Some(&rolling), &stage, &mut spawn), Applied::Deferred, "the game not running");
         assert!(spawn.is_some(), "the place kept for it");
         assert_eq!(feed.given(), None);
     }
@@ -379,7 +356,7 @@ mod tests {
     #[test]
     fn the_skater_is_its_feet_and_its_board_a_deck_up() {
         let s = t2::Skater {
-            position: to_game(Vec3::new(1.0, 0.0, 2.0), 2.0),
+            position: to_game(Vec3::new(1.0, 0.0, 2.0)),
             velocity: [0.0; 3],
             forward: [0.0, 0.0, 1.0],
             up: [0.0, 1.0, 0.0],
@@ -387,13 +364,13 @@ mod tests {
             frame: 0,
             balance: None,
         };
-        let link = link(&s, 2.0);
+        let link = link(&s);
         let (rider, board) = (link.rider.unwrap(), link.board.unwrap());
         assert!((rider.position - Vec3::new(1.0, 0.0, 2.0)).length() < 1e-4);
-        assert!((board.position.y - DECK_HEIGHT / 2.0).abs() < 1e-4, "a deck up at half size");
+        assert!((board.position.y - DECK_HEIGHT).abs() < 1e-4, "a deck up");
         assert!(link.grinding && link.on_board);
-        assert_eq!(link.size, 0.5);
-        let p = spawn(Vec3::ZERO, Vec3::Z, 1.0);
+        assert_eq!(link.size, 1.0, "life size");
+        let p = spawn(Vec3::ZERO, Vec3::Z);
         assert!((p.point[1] - PLACE_LIFT * t2::INCHES_PER_METRE).abs() < 1e-3);
     }
 }

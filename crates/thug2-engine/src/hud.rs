@@ -32,7 +32,7 @@ pub const METER_PER_SKATER: f32 = 1.2;
 pub const METER_LEAST_SHARE: f32 = 0.16;
 /// The skater's middle, a share of its height up from its feet (an upright meter is beside it).
 pub const METER_MIDDLE: f32 = 0.55;
-/// The skater's height, the game's metres (how tall it's drawn: the app's world size divides it).
+/// The skater's height, the stage's metres.
 pub const SKATER_HEIGHT: f32 = 1.8;
 
 impl Part {

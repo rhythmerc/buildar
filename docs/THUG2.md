@@ -40,7 +40,7 @@ more, `--all` always works.
   box sides can be wallridden. A quarter pipe's top is vert, so you go straight up and land back in.
   Rails and furniture edges are grindable.
 - **Parks keep their engine.** A park is saved with the engine it's played with, and with THUG2's
-  world size and game speed. Opening it switches to that engine and puts those settings back. A
+  game speed. Opening it switches to that engine and puts that setting back. A
   park built for an engine that isn't installed asks first: Cancel, or play it with the current
   engine (it stays tagged with its own). The parks screen's **Engine** dropdown switches engines;
   ones that aren't installed are greyed out.
@@ -49,10 +49,11 @@ more, `--all` always works.
   it is picked.
 - **The game waits** while a menu is open or build mode is on.
 - **Too fast for your room?** THUG2's skater covers ground the way it does in the game's own big
-  levels. Settings > THUG2 has two settings, kept between launches:
-  - **World size** (1x - 4x): the room is that much bigger to the game. The skater crosses it more
-    slowly and is drawn that much smaller; ramps and rails stay the size you built them.
-  - **Game speed** (40% - 100%): the game's clock. Sizes stay as they are, but jumps float.
+  levels. Two settings help:
+  - **Skater size** (Settings > Build a park, for every engine): a smaller skater makes the room bigger
+    to the game, so the skater crosses it more slowly; ramps and rails stay the size you built them.
+  - **Game speed** (Settings > THUG2, 40% - 100%, kept between launches): the game's clock. Sizes
+    stay as they are, but jumps float.
 - **The game's own sound effects.** Rolling, pops, landings, grinds and the rest are THUG2's own
   sounds from your files, at the level and pitch the game sets them (rolling rises with speed), and
   they come from the skater in the room. Music and voice streams aren't played yet.

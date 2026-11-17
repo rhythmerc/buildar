@@ -125,8 +125,8 @@ pub trait EngineCore: Send {
 - **One `step()` replaces the staged sim API.** Its hooks (session markers, multiplayer) are gone.
 - **One space and unit** (`engine_core::stage`'s docs): the runtime's world frame (the room as the rig lays it out,
   y up) in metres as the game sees them (the player's world scale makes a real metre more or fewer). `Stage`,
-  `Focus`, `Frame` and `PlacePlayer` are all in it; an engine converts inside itself (THUG2's inches, `OFFSET` and
-  world size are `thug2_engine::stage`'s; Skate 3's and SK8's worlds are this space as it is).
+  `Focus`, `Frame` and `PlacePlayer` are all in it; an engine converts inside itself (THUG2's inches and `OFFSET`
+  are `thug2_engine::stage`'s; Skate 3's and SK8's worlds are this space as it is).
 - **`Stage`** is what every mode stands on (as built in step 5):
   - the room's flat faces as quads and its other faces as triangles (quads stay quads: Skate 3 treats them apart);
   - the placed objects' solid faces, each a `Solid { id, quads }` (a skate piece's body, then its rail tubes);
@@ -383,14 +383,14 @@ sorting rule.
   `readable_trick`.
 - **THUG2** (`thug2_engine::stage`): units (`to_game`/`from_game`, `OFFSET`), face classes (`WALL_UP`/`RAMP_UP`/
   `VERT_UP`, `triangles`, `piece_faces`), `DECK_HEIGHT`, `SOUND_HEIGHT`, `spawn`, `link`, and `StageFeed` (the grind
-  deferral, a new world size re-placing the skater, waiting for a place to put it). C API gap: one skater frame, no
+  deferral, waiting for a place to put it). C API gap: one skater frame, no
   board of its own and no off-board state, so its board is the rider's frame `DECK_HEIGHT` up and `on_board` is
   always true.
 - **SK8** (app-resident) takes the stage and park in `clean::sim` (its own grind deferral, as before); its rider and
   board are one frame (the engine gives the rider's state only).
 - **Parity:** before the split, `xr::stage_parity` recorded the `f32` bits of what each engine was given (Skate 3's
-  four `set_real_surfaces` arguments and `set_grind_rails`, THUG2's classified faces and rails at world sizes 1 and
-  2.5, SK8's collision triangles with surfaces and its rails) for three worlds: the room alone, the room with a piece
+  four `set_real_surfaces` arguments and `set_grind_rails`, THUG2's classified faces and rails, SK8's collision
+  triangles with surfaces and its rails) for three worlds: the room alone, the room with a piece
   of every kind, and both through a turned, scaled rig. Through the stage and park they are identical. The meter's
   placement is checked against the old factors exactly (`engine_hud` tests).
 
@@ -424,7 +424,7 @@ draws both through one generic layer that doesn't know which engine it is.
   bits of what each engine's model is given. Skate 3: joints and root over fixed ticks (a cut, a cadence change, a
   repeated generation, a bone count change) at six alphas, inside and outside 0..1, and the no-pair fallback; and
   the real game (`SKATE3_ASSET_ROOT`): 150 of its own ticks bound to its GLB. THUG2: joints from a fixed palette and
-  draw matrix (short palette, junk w columns, world sizes 1 and 2.5, moving and not) and its parts as meshes and
+  draw matrix (short palette, junk w columns, moving and not) and its parts as meshes and
   materials; and the real game (ignored: the game boots once a process) after a fixed run. All identical through the
   new path.
 - **Contact shadows from body groups** (`xr/contact_shadow.rs`): the running engine's bodies, placed by the model
@@ -469,8 +469,8 @@ steps the same way, so THUG2 (60 Hz on a 72-90 Hz headset) no longer judders.
   (`app` test); the parity digests are identical. One frame differs: just after a pause the old pair was drawn at the
   new overstep, now at the newer pose until the next tick.
 - **THUG2** (`thug2.rs`, `thug2_engine::model`): the adapter numbers every step's pose (each step's, not only a frame's
-  last), stamps it with its own clock (`PERIOD` a step) and flags a cut after a teleport, a place taken with the world
-  or a new world size; `model::pose` no longer takes a slide. The position-only slide (`thug2::shift`) is gone; the
+  last), stamps it with its own clock (`PERIOD` a step) and flags a cut after a teleport or a place taken with the
+  world; `model::pose` no longer takes a slide. The position-only slide (`thug2::shift`) is gone; the
   stand-in reads the same clock. While a menu holds the game its clock stands still (it used to drop to the older
   pose). Gap: a teleport inside the game itself (a script's) can't be seen through the C API, so it is blended across.
   Parity re-recorded on purpose (`model_parity`; the parts unchanged).
@@ -505,6 +505,8 @@ steps the same way, so THUG2 (60 Hz on a 72-90 Hz headset) no longer judders.
    models draw them.
 3. **`engine-core` lives in its own repo**, pinned by revision like skate3-headless.
 4. **THUG2's game knowledge is Rust,** in a crate in thug2-headless that also takes in `thug2-sys`.
+5. **THUG2's own "World size" setting is removed (2026-11-17)** as redundant with the skater size (the rig's world
+   scale), which already makes the room bigger to every engine: THUG2's units are the stage's metres in inches.
 
 ## Noted for later (headset check, 2026-11-16)
 

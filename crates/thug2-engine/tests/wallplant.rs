@@ -1,12 +1,12 @@
 //! The skater against the room's walls, on the real engine (`THUG2_GAME_DIR`: the folder holding the player's
 //! `Data`; skipped without it). One test (the engine boots once a process):
 //! - wall plants: the skater jumps into a wall again and again, from a little to the side each time, and after each
-//!   plant is still on the room's side of it. A wall across the room at world size 1, and one turned 25° at world
-//!   size 4;
+//!   plant is still on the room's side of it. A wall across the room, and one turned 25°;
 //! - wall hits: rolling and jumping into a wall, straight on and glancing, slow to fast (down a ramp), each from a
-//!   few places along it, at world size 1 and (a turned wall) 4: the skater never ends up behind the wall's plane.
-//!   (With the wall's sides in one plane, `stage::WALL_SKIN` 0, a straight-on jump planted off the ollie's press and
-//!   rode up the back of the wall every time at 1x, often at 4x; rolling and glancing hits never went in.)
+//!   few places along it, at a wall across the room and a turned one: the skater never ends up behind the wall's
+//!   plane. (With the wall's sides in one plane, `stage::WALL_SKIN` 0, a straight-on jump planted off the ollie's
+//!   press and rode up the back of the wall every time on the wall across the room, often on the turned one (then at
+//!   the app's old THUG2 world size 4); rolling and glancing hits never went in.)
 use engine_core::Stage;
 use engine_core::glam::Vec3;
 use engine_core::skate::SkatePark;
@@ -48,22 +48,22 @@ fn room(toward: Vec3, height: f32, more: &[[Vec3; 4]]) -> Stage {
 }
 
 fn wall_plants(engine: &mut t2::Engine) {
-    for (scale, degrees) in [(1.0f32, 0.0f32), (4.0, 25.0)] {
+    for degrees in [0.0f32, 25.0] {
         // Toward the wall, and along it.
         let toward = Vec3::new(degrees.to_radians().sin(), 0.0, degrees.to_radians().cos());
         let along = Vec3::Y.cross(toward);
-        let faces = stage::triangles(&room(toward, 3.0, &[]), &SkatePark::default(), scale);
+        let faces = stage::triangles(&room(toward, 3.0, &[]), &SkatePark::default());
         // How far past the wall's plane (negative: in the room).
-        let past = |s: &t2::Skater| stage::from_game(s.position, scale).dot(toward) - WALL_AT;
+        let past = |s: &t2::Skater| stage::from_game(s.position).dot(toward) - WALL_AT;
 
         let (mut plants, mut behind) = (0, Vec::new());
         for trial in 0..40 {
             // From a little to the side each time (where the plant meets the wall), the jump a little nearer or
-            // further (the skater covers 1/scale the room at world size `scale`).
+            // further.
             let side = -2.0 + 0.0731 * trial as f32;
-            let ollie_at = (1.6 + 0.083 * (trial % 11) as f32) / scale;
-            let start = along * side - toward * (4.0 / scale.sqrt());
-            engine.set_world(&faces, Some(stage::spawn(start, toward, scale)));
+            let ollie_at = 1.6 + 0.083 * (trial % 11) as f32;
+            let start = along * side - toward * 4.0;
+            engine.set_world(&faces, Some(stage::spawn(start, toward)));
             let mut last = engine.step(&PAD_AT_REST).unwrap().unwrap();
             let (mut crouch, mut jumped, mut planted_at) = (0, false, None);
             let mut furthest = f32::MIN;
@@ -98,9 +98,9 @@ fn wall_plants(engine: &mut t2::Engine) {
                 }
             }
         }
-        eprintln!("world size {scale}, wall turned {degrees}°: {plants} plants, {} behind the wall", behind.len());
-        assert!(plants >= 5, "the skater planted on the wall ({plants} times at world size {scale})");
-        assert!(behind.is_empty(), "behind the wall after a plant (metres past it), world size {scale}: {behind:?}");
+        eprintln!("wall turned {degrees}°: {plants} plants, {} behind the wall", behind.len());
+        assert!(plants >= 5, "the skater planted on the wall ({plants} times, wall turned {degrees}°)");
+        assert!(behind.is_empty(), "behind the wall after a plant (metres past it), wall turned {degrees}°: {behind:?}");
     }
 }
 
@@ -129,15 +129,13 @@ struct Hit {
 
 fn wall_hits(engine: &mut t2::Engine) {
     let mut problems = Vec::new();
-    // A wall across the room at world size 1, and one turned 25° at world size 4 (lengths in the room a quarter as
-    // long there: the same in the game's units).
-    for (scale, wall_degrees) in [(1.0f32, 0.0f32), (4.0, 25.0)] {
-        let k = 1.0 / scale;
+    // A wall across the room, and one turned 25°.
+    for wall_degrees in [0.0f32, 25.0] {
         let toward = Vec3::new(wall_degrees.to_radians().sin(), 0.0, wall_degrees.to_radians().cos());
         let along = Vec3::Y.cross(toward);
-        let past = |s: &t2::Skater| stage::from_game(s.position, scale).dot(toward) - WALL_AT;
+        let past = |s: &t2::Skater| stage::from_game(s.position).dot(toward) - WALL_AT;
         // (the skin, metres: the room's side of the wall is this far in front of its plane)
-        let skin = stage::WALL_SKIN / t2::INCHES_PER_METRE * k;
+        let skin = stage::WALL_SKIN / t2::INCHES_PER_METRE;
         for jump in [false, true] {
             for degrees in [0.0f32, 45.0, 75.0] {
                 // Its heading: `degrees` off straight at the wall.
@@ -147,22 +145,22 @@ fn wall_hits(engine: &mut t2::Engine) {
                     let mut hits = Vec::new();
                     for place in 0..5 {
                         // Where it meets the wall, a little along it each time.
-                        let meet = toward * WALL_AT + along * (0.137 * place as f32 - 0.3) * k;
+                        let meet = toward * WALL_AT + along * (0.137 * place as f32 - 0.3);
                         let (ramps, start) = match speed {
                             Speed::Ramp(height) => {
                                 // A ramp down to 2 m short of the wall (25°), a 1.5 m deck on top.
-                                let foot = meet - heading * (2.0 * k / degrees.to_radians().cos().max(0.25));
-                                let top = foot - heading * (height * k / 25f32.to_radians().tan()) + Vec3::Y * height * k;
-                                let back = top - heading * 1.5 * k;
-                                let w = side * 1.5 * k;
+                                let foot = meet - heading * (2.0 / degrees.to_radians().cos().max(0.25));
+                                let top = foot - heading * (height / 25f32.to_radians().tan()) + Vec3::Y * height;
+                                let back = top - heading * 1.5;
+                                let w = side * 1.5;
                                 let ramp = [foot - w, foot + w, top + w, top - w];
                                 let deck = [top - w, top + w, back + w, back - w];
-                                (vec![ramp, deck], back + heading * 0.5 * k)
+                                (vec![ramp, deck], back + heading * 0.5)
                             }
-                            _ => (Vec::new(), meet - heading * (8.0 / degrees.to_radians().cos().max(0.25)).min(12.0) * k),
+                            _ => (Vec::new(), meet - heading * (8.0 / degrees.to_radians().cos().max(0.25)).min(12.0)),
                         };
-                        let faces = stage::triangles(&room(toward, 12.0, &ramps), &SkatePark::default(), scale);
-                        engine.set_world(&faces, Some(stage::spawn(start, heading, scale)));
+                        let faces = stage::triangles(&room(toward, 12.0, &ramps), &SkatePark::default());
+                        engine.set_world(&faces, Some(stage::spawn(start, heading)));
                         let mut last = engine.step(&PAD_AT_REST).unwrap().unwrap();
                         let mut hit = Hit { speed: 0.0, furthest: f32::MIN, at_plane: 0, on_wall: 0, states: Vec::new(), planted: false };
                         let (mut crouch, mut jumped, mut met) = (0, false, None);
@@ -177,7 +175,7 @@ fn wall_hits(engine: &mut t2::Engine) {
                             // The ollie: when it would be about a quarter second short of the wall.
                             let to_wall = -past(&last) / degrees.to_radians().cos();
                             if jump && !jumped && last.state == State::Ground
-                                && to_wall < (across / t2::INCHES_PER_METRE * 0.25 + 0.3) * k
+                                && to_wall < across / t2::INCHES_PER_METRE * 0.25 + 0.3
                             {
                                 crouch += 1;
                                 if crouch < 3 {
@@ -189,13 +187,13 @@ fn wall_hits(engine: &mut t2::Engine) {
                             last = engine.step(&pad).unwrap().unwrap();
                             let p = past(&last);
                             hit.planted |= last.state == State::Wallplant;
-                            if met.is_none() && p > -1.0 * k {
+                            if met.is_none() && p > -1.0 {
                                 met = Some(frame);
                                 hit.speed = across;
                             }
                             if met.is_some() {
                                 hit.furthest = hit.furthest.max(p);
-                                if p > -0.01 * k {
+                                if p > -0.01 {
                                     hit.at_plane += 1;
                                     if last.up[1].abs() < 0.5 {
                                         hit.on_wall += 1;
@@ -210,25 +208,25 @@ fn wall_hits(engine: &mut t2::Engine) {
                             }
                         }
                         if met.is_none() && std::env::var_os("WALLPLANT_DEBUG").is_some() {
-                            eprintln!("  unmet {jump} {degrees} {speed:?} {place}: start {start} {:?} at {} v {:?} up {:?}", last.state, stage::from_game(last.position, scale), last.velocity, last.up);
+                            eprintln!("  unmet {jump} {degrees} {speed:?} {place}: start {start} {:?} at {} v {:?} up {:?}", last.state, stage::from_game(last.position), last.velocity, last.up);
                         }
                         hits.push(hit);
                     }
                     let how = if jump { "jumped" } else { "rolled" };
                     let speeds: Vec<i32> = hits.iter().map(|h| h.speed as i32).collect();
                     let planted = hits.iter().filter(|h| h.planted).count();
-                    let behind = hits.iter().filter(|h| h.furthest > 0.0005 * k).count();
-                    let inside = hits.iter().filter(|h| h.furthest > -skin - 0.0005 * k && h.furthest <= 0.0005 * k).count();
+                    let behind = hits.iter().filter(|h| h.furthest > 0.0005).count();
+                    let inside = hits.iter().filter(|h| h.furthest > -skin - 0.0005 && h.furthest <= 0.0005).count();
                     let furthest: Vec<String> = hits.iter().map(|h| format!("{:+.4}", h.furthest)).collect();
                     let at_plane: Vec<u32> = hits.iter().map(|h| h.at_plane).collect();
                     let on_wall: Vec<u32> = hits.iter().map(|h| h.on_wall).collect();
                     let mut states: Vec<State> = hits.iter().flat_map(|h| h.states.clone()).collect();
                     states.dedup();
                     eprintln!(
-                        "HIT {scale}x wall {wall_degrees}° {how} {degrees:>2}° {speed:?}: in/s {speeds:?}; planted {planted}/5, behind {behind}/5, at the face {inside}/5; furthest m {furthest:?}; frames at the plane {at_plane:?}, riding it {on_wall:?}; {states:?}"
+                        "HIT wall {wall_degrees}° {how} {degrees:>2}° {speed:?}: in/s {speeds:?}; planted {planted}/5, behind {behind}/5, at the face {inside}/5; furthest m {furthest:?}; frames at the plane {at_plane:?}, riding it {on_wall:?}; {states:?}"
                     );
                     if behind > 0 {
-                        problems.push(format!("{scale}x {how} {degrees}° {speed:?}: {behind}/5 behind"));
+                        problems.push(format!("wall {wall_degrees}° {how} {degrees}° {speed:?}: {behind}/5 behind"));
                     }
                 }
             }

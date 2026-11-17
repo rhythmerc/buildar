@@ -103,17 +103,17 @@ fn skate3((stage, park): &(Stage, SkatePark)) -> String {
     b.digest()
 }
 
-/// THUG2: its faces (`set_world`) and rails (`set_rails`), at the game's world size `scale`.
-fn thug2((stage, park): &(Stage, SkatePark), scale: f32) -> String {
+/// THUG2: its faces (`set_world`) and rails (`set_rails`).
+fn thug2((stage, park): &(Stage, SkatePark)) -> String {
     let mut b = Bytes::default();
-    let faces = thug2_engine::stage::triangles(stage, park, scale);
+    let faces = thug2_engine::stage::triangles(stage, park);
     b.n(faces.len());
     for t in &faces {
         t.v.iter().flatten().for_each(|&x| b.f(x));
         b.0.extend(t.flags.to_le_bytes());
         b.0.extend(t.terrain.to_le_bytes());
     }
-    let rails = thug2_engine::stage::rails(park, scale);
+    let rails = thug2_engine::stage::rails(park);
     b.n(rails.len());
     for rail in &rails {
         b.n(rail.len());
@@ -141,17 +141,17 @@ fn sk8((stage, park): &(Stage, SkatePark)) -> String {
 
 #[test]
 fn each_engine_is_given_exactly_what_it_was() {
-    let got: Vec<[String; 4]> = worlds().iter().map(|w| [skate3(w), thug2(w, 1.0), thug2(w, 2.5), sk8(w)]).collect();
+    let got: Vec<[String; 3]> = worlds().iter().map(|w| [skate3(w), thug2(w), sk8(w)]).collect();
     for (i, g) in got.iter().enumerate() {
         eprintln!("world {i}: {g:?}");
     }
     // (the worlds have what's worth keeping: vert faces, rail tubes, edges, metal)
     let pieces = &worlds()[1];
-    assert!(thug2_engine::stage::triangles(&pieces.0, &pieces.1, 1.0).iter().any(|t| t.flags & thug2_sys::face::VERT != 0));
+    assert!(thug2_engine::stage::triangles(&pieces.0, &pieces.1).iter().any(|t| t.flags & thug2_sys::face::VERT != 0));
     assert!(skate3_engine::stage::surfaces(&pieces.0, &pieces.1).3.iter().any(|p| !p.rail_quads.is_empty()));
     assert!(skate3_engine::stage::surfaces(&pieces.0, &pieces.1).3.iter().any(|p| !p.edges.is_empty()));
     for (i, (g, w)) in got.iter().zip(RECORDED).enumerate() {
-        for (engine, (g, w)) in ["Skate 3", "THUG2 x1", "THUG2 x2.5", "SK8"].iter().zip(g.iter().zip(w)) {
+        for (engine, (g, w)) in ["Skate 3", "THUG2", "SK8"].iter().zip(g.iter().zip(w)) {
             assert_eq!(g, w, "world {i}, {engine}");
         }
     }
@@ -159,19 +159,10 @@ fn each_engine_is_given_exactly_what_it_was() {
 
 /// Recorded at 5dc9513 (f37f837 with the engines' inputs taken out as pure functions, no behaviour change), before
 /// the split. THUG2's re-recorded at cb8a75d: its upright faces a thin slab (`thug2_engine::stage::WALL_SKIN`), so a
-/// wall plant can't put the skater behind a wall.
-const RECORDED: [[&str; 4]; 3] = [
-    ["404 bytes e94bef4d55aae7e3", "480 bytes 81d2d88f3a6315c7", "480 bytes 5e4a09cc37d611bd", "440 bytes d31134ab8c18d474"],
-    [
-        "74592 bytes 5748a3e11b86bc44",
-        "148204 bytes d7d963805da12db0",
-        "148204 bytes 92c38d764e80453c",
-        "114444 bytes 52f682f160123635",
-    ],
-    [
-        "74592 bytes d6dfe23a7269df61",
-        "148204 bytes f2af15ec9ea92d67",
-        "148204 bytes 601f751b7e5ba8e5",
-        "114444 bytes 0a010c6448a0c1b1",
-    ],
+/// wall plant can't put the skater behind a wall. THUG2's world size 2.5 column dropped with the world size
+/// (2026-11-17); its size-1 digests are the ones recorded with it.
+const RECORDED: [[&str; 3]; 3] = [
+    ["404 bytes e94bef4d55aae7e3", "480 bytes 81d2d88f3a6315c7", "440 bytes d31134ab8c18d474"],
+    ["74592 bytes 5748a3e11b86bc44", "148204 bytes d7d963805da12db0", "114444 bytes 52f682f160123635"],
+    ["74592 bytes d6dfe23a7269df61", "148204 bytes f2af15ec9ea92d67", "114444 bytes 0a010c6448a0c1b1"],
 ];
