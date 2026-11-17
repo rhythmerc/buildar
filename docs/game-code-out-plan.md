@@ -435,6 +435,9 @@ sorting rule.
   for the park settings page rework. Reported as new since steps 4-5: the first suspect is step 5's (9701b9d) swap
   of the deck for `Focus::feet` as the point re-placed (an engine's placement puts its deck or spawn point there, not
   its rider's feet).
-- **THUG2: hitting a wall fast enters it.** At speed the skater can go into a wall and skate along its plane. Seen
-  after the wall slab (`thug2_engine::stage::WALL_SKIN`, cb8a75d) fixed wall plants; not known whether it predates
-  that.
+- **THUG2: hitting a wall fast enters it.** At speed the skater can go into a wall and skate along its plane; seen
+  on the build with the wall slab (`thug2_engine::stage::WALL_SKIN`, cb8a75d). On a flat wall in the real engine
+  (`thug2-engine/tests/wallplant.rs`, 3fd5397) it predates the slab and the slab fixes it: straight-on jumps planted
+  by accident (the ollie's press counts as the plant's) and hit the plant-placement bug; rolling and glancing hits
+  never went in. Still seen with the slab, so the next suspects are what that test doesn't cover: room-mesh
+  triangles and placed pieces' sides.
