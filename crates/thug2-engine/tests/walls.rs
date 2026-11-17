@@ -3,7 +3,10 @@
 //! - riding a wall as ground: up a quarter pipe backed against a room wall with up held (the user's report), and off a
 //!   kicker into the wall for comparison; the skater must never ride the wall as if it were floor (upright across it,
 //!   not in a wall ride);
-//! - a wall leaning a little (as scanned walls are): rolled and pushed into fast, never ridden as floor;
+//! - a wall leaning a little (as scanned walls are): rolled and pushed into fast, never ridden as floor nor gone
+//!   through;
+//! - walls overhanging the room 1-10°, rolled and jumped into, square-on and turned, near the origin and far out: the
+//!   skater stays on the room's side;
 //! - wall rides: a glancing jump at the wall with triangle held starts them (the game's own rule).
 //!
 //! With walls fed skatable (SKATABLE | WALL, before this test), the game took them as floor: the quarter pipe put
@@ -32,9 +35,22 @@ fn walls_are_walls() {
     for _ in 0..120 {
         engine.step(&PAD_AT_REST).expect("step");
     }
-    let mut problems = pieces_at_the_wall(&mut engine);
-    problems.extend(leaning_walls(&mut engine));
-    problems.extend(wall_rides(&mut engine));
+    // (`WALLS_ONLY`: one part - pieces, leaning, overhangs or wallrides - to trace it)
+    let mut problems = Vec::new();
+    let only = std::env::var("WALLS_ONLY").ok();
+    let wanted = |name: &str| only.as_deref().is_none_or(|o| o == name);
+    if wanted("pieces") {
+        problems.extend(pieces_at_the_wall(&mut engine));
+    }
+    if wanted("leaning") {
+        problems.extend(leaning_walls(&mut engine));
+    }
+    if wanted("overhangs") {
+        problems.extend(overhangs(&mut engine));
+    }
+    if wanted("wallrides") {
+        problems.extend(wall_rides(&mut engine));
+    }
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
@@ -244,52 +260,129 @@ fn pieces_at_the_wall(engine: &mut t2::Engine) -> Vec<String> {
     problems
 }
 
-/// Rolled (pushed) and jumped into a wall leaning a little, straight on and glancing, down a ramp for speed.
+/// The room turned `turn` degrees about y and moved to `centre` (contract metres), and back.
+#[derive(Clone, Copy)]
+struct Placed {
+    turn: f32,
+    rotation: Quat,
+    centre: Vec3,
+}
+
+impl Placed {
+    fn new(turn: f32, centre: Vec3) -> Self {
+        Self { turn, rotation: Quat::from_rotation_y(turn.to_radians()), centre }
+    }
+
+    fn place(&self, p: Vec3) -> Vec3 {
+        self.rotation * p + self.centre
+    }
+
+    /// The skater in the room's own frame.
+    fn local(&self, s: t2::Skater) -> t2::Skater {
+        t2::Skater {
+            position: stage::to_game(self.rotation.inverse() * (stage::from_game(s.position) - self.centre)),
+            up: (self.rotation.inverse() * Vec3::from_array(s.up)).to_array(),
+            velocity: (self.rotation.inverse() * Vec3::from_array(s.velocity)).to_array(),
+            ..s
+        }
+    }
+}
+
+/// Rolled (pushed, up held) or jumped (`jump`) into the wall leaning `lean` (negative: overhanging the room), heading
+/// `degrees` off square-on, down a ramp for speed, the room `at` its place; 300 frames. Also how far past the wall's
+/// plane the skater got at all (metres), in the air or not.
+fn leaning_run(engine: &mut t2::Engine, lean: f32, degrees: f32, at: Placed, jump: bool) -> (Run, f32) {
+    let heading = Vec3::new(degrees.to_radians().sin(), 0.0, degrees.to_radians().cos());
+    let side = Vec3::Y.cross(heading);
+    // A 1.5 m ramp (25°) down to 2 m short of the wall, a deck on top.
+    let meet = Vec3::new(0.0, 0.0, WALL_AT);
+    let foot = meet - heading * (2.0 / degrees.to_radians().cos());
+    let top = foot - heading * (1.5 / 25f32.to_radians().tan()) + Vec3::Y * 1.5;
+    let back = top - heading * 1.5;
+    let w = side * 1.5;
+    let mut quads = room(lean);
+    quads.push([foot - w, foot + w, top + w, top - w]);
+    quads.push([top - w, top + w, back + w, back - w]);
+    let quads = quads.into_iter().map(|q| q.map(|p| at.place(p))).collect();
+    let stage = Stage { revision: 1, room_quads: quads, ..Default::default() };
+    let faces = as_fed(stage::triangles(&stage, &SkatePark::default()));
+    if std::env::var_os("WALLS_DEBUG").is_some() {
+        eprintln!(" run: lean {lean} heading {degrees} room turned {}° at {} jump {jump}", at.turn, at.centre);
+    }
+    engine.set_world(&faces, Some(stage::spawn(at.place(back + heading * 0.5), at.rotation * heading)));
+    let mut last = at.local(engine.step(&PAD_AT_REST).unwrap().unwrap());
+    let (mut run, mut streak, mut crouch, mut most) = (Run::default(), 0, 0, f32::MIN);
+    for _ in 0..300 {
+        let mut pad = UP;
+        let to_wall = -past(&last, lean) / degrees.to_radians().cos();
+        if jump && crouch < 3 && last.state == State::Ground && to_wall < 1.2 {
+            crouch += 1;
+            if crouch < 3 {
+                pad.buttons = buttons::CROSS;
+            }
+        }
+        last = at.local(engine.step(&pad).unwrap().unwrap());
+        run.note(&last, lean, &mut streak);
+        most = most.max(past(&last, lean));
+    }
+    (run, most)
+}
+
+/// Rolled (pushed) and jumped into a wall leaning a little, straight on and glancing, down a ramp for speed: never
+/// ridden as floor, never through it.
 fn leaning_walls(engine: &mut t2::Engine) -> Vec<String> {
     let mut problems = Vec::new();
     for lean in [-3.0f32, -1.0, 1.0, 3.0] {
         for degrees in [0.0f32, 30.0, 60.0] {
-            let heading = Vec3::new(degrees.to_radians().sin(), 0.0, degrees.to_radians().cos());
-            let side = Vec3::Y.cross(heading);
-            // A 1.5 m ramp (25°) down to 2 m short of the wall, a deck on top.
-            let meet = Vec3::new(0.0, 0.0, WALL_AT);
-            let foot = meet - heading * (2.0 / degrees.to_radians().cos());
-            let top = foot - heading * (1.5 / 25f32.to_radians().tan()) + Vec3::Y * 1.5;
-            let back = top - heading * 1.5;
-            let w = side * 1.5;
-            let mut quads = room(lean);
-            quads.push([foot - w, foot + w, top + w, top - w]);
-            quads.push([top - w, top + w, back + w, back - w]);
-            let stage = Stage { revision: 1, room_quads: quads, ..Default::default() };
-            let faces = as_fed(stage::triangles(&stage, &SkatePark::default()));
             let (mut longest, mut behind) = (Vec::new(), Vec::new());
             for jump in [false, true] {
-                engine.set_world(&faces, Some(stage::spawn(back + heading * 0.5, heading)));
-                let mut last = engine.step(&PAD_AT_REST).unwrap().unwrap();
-                let (mut run, mut streak, mut crouch) = (Run::default(), 0, 0);
-                for _ in 0..300 {
-                    let mut pad = UP;
-                    let to_wall = -past(&last, lean) / degrees.to_radians().cos();
-                    if jump && crouch < 3 && last.state == State::Ground && to_wall < 1.2 {
-                        crouch += 1;
-                        if crouch < 3 {
-                            pad.buttons = buttons::CROSS;
-                        }
-                    }
-                    last = engine.step(&pad).unwrap().unwrap();
-                    run.note(&last, lean, &mut streak);
-                }
+                let (run, _) = leaning_run(engine, lean, degrees, Placed::new(0.0, Vec3::ZERO), jump);
                 longest.push(run.longest);
                 behind.push(run.behind);
             }
-            // (Behind is only reported: jumped straight at a wall overhanging the room (lean < 0) the skater can end
-            // up behind it, walls fed skatable or not - the game's to answer, not the faces' flags.)
             eprintln!(
                 "LEAN {lean}° heading {degrees}°: longest on the wall as floor (rolled, jumped) {longest:?}; frames on the ground behind it {behind:?}"
             );
             if longest.iter().any(|&l| l > 3) {
                 problems.push(format!("wall leaning {lean}° hit at {degrees}°: ridden as floor {longest:?} frames"));
             }
+            if behind.iter().any(|&b| b > 0) {
+                problems.push(format!("wall leaning {lean}° hit at {degrees}°: behind it {behind:?} frames"));
+            }
+        }
+    }
+    problems
+}
+
+/// Walls overhanging the room 1-10° (as scanned walls can), rolled and jumped into square-on and at 30°, the room as
+/// it is, turned 25°, and turned 137° far out (where the game's floats are coarser): the skater stays on the room's
+/// side. (Jumped square-on into a 3-5° overhang it ended behind the wall before thug2-decomp's `overhang` fix: the
+/// game's keep-above-ground feeler, starting 8 inches over the feet, came down onto the wall's back face under the
+/// overhang and lifted the skater onto the wall's plane; it rose through the wall and landed on the back face.)
+fn overhangs(engine: &mut t2::Engine) -> Vec<String> {
+    let mut problems = Vec::new();
+    let places = [Placed::new(0.0, Vec3::ZERO), Placed::new(25.0, Vec3::ZERO), Placed::new(137.0, Vec3::new(560.0, 0.0, 560.0))];
+    for at in places {
+        for degrees in [0.0f32, 30.0] {
+            let (mut behind, mut furthest) = (Vec::new(), Vec::new());
+            for overhang in 1..=10 {
+                let lean = -(overhang as f32);
+                for jump in [false, true] {
+                    let (run, most) = leaning_run(engine, lean, degrees, at, jump);
+                    if run.behind > 0 || most > 0.05 || run.longest > 3 {
+                        problems.push(format!(
+                            "overhang {overhang}° heading {degrees}°, room turned {}° at {}, jump {jump}: {} frames behind, furthest past m {most:+.3}, on it as floor {} frames",
+                            at.turn, at.centre, run.behind, run.longest
+                        ));
+                    }
+                    behind.push(run.behind);
+                    furthest.push(format!("{most:+.3}"));
+                }
+            }
+            eprintln!(
+                "OVERHANG 1..10° heading {degrees}°, room turned {}° at {} (rolled, jumped each): frames on the ground behind it {behind:?}; furthest past it m {furthest:?}",
+                at.turn, at.centre
+            );
         }
     }
     problems
@@ -303,16 +396,10 @@ fn wall_rides(engine: &mut t2::Engine) -> Vec<String> {
     let (mut total, mut tries) = (0, 0);
     for (turn, centre) in [(0.0f32, Vec3::ZERO), (25.0, Vec3::ZERO), (137.0, Vec3::new(560.0, 0.0, 560.0))] {
         // The room turned `turn` about y and moved to `centre`; and the skater back in the room's own frame.
-        let rotation = Quat::from_rotation_y(turn.to_radians());
-        let place = |p: Vec3| rotation * p + centre;
+        let placed = Placed::new(turn, centre);
+        let (rotation, place, local) = (placed.rotation, |p| placed.place(p), |s| placed.local(s));
         let quads: Vec<[Vec3; 4]> = room(0.0).into_iter().map(|q| q.map(place)).collect();
         let faces = faces(quads, Vec::new());
-        let local = |s: t2::Skater| t2::Skater {
-            position: stage::to_game(rotation.inverse() * (stage::from_game(s.position) - centre)),
-            up: (rotation.inverse() * Vec3::from_array(s.up)).to_array(),
-            velocity: (rotation.inverse() * Vec3::from_array(s.velocity)).to_array(),
-            ..s
-        };
         for jump_out in [false, true] {
             for degrees in [10.0f32, 20.0, 30.0, 45.0] {
                 let heading = Vec3::new(degrees.to_radians().cos(), 0.0, degrees.to_radians().sin());

@@ -67,8 +67,9 @@ pub fn rails(park: &SkatePark) -> Vec<Vec<[f32; 3]>> {
 /// - any other upright face (room walls, furniture and box sides): both ways, wallridable and not skatable - the wall
 ///   flag alone, as a real level's wallridable walls carry it (the game takes a face flagged skatable as ground
 ///   whatever its other flags: it rode such walls as floor, off a quarter pipe against one, and never wallrode them).
-///   (The two sides are in one plane: thug2-decomp's wall plant passes over the back one when it places the skater
-///   off the wall.)
+///   (The two sides are in one plane: thug2-decomp passes over the back one where the game would otherwise take it
+///   from the front - its wall plant placing the skater off the wall, and its keep-above-ground feeler under a wall
+///   overhanging the room, which lifted the skater onto the wall's plane and so through it.)
 pub fn triangles(stage: &Stage, park: &SkatePark) -> Vec<t2::Triangle> {
     let mut out = Vec::new();
     for t in stage.room() {
