@@ -497,3 +497,20 @@ draws both through one generic layer that doesn't know which engine it is.
   by accident (the ollie's press counts as the plant's) and hit the plant-placement bug; rolling and glancing hits
   never went in. Still seen with the slab, so the next suspects are what that test doesn't cover: room-mesh
   triangles and placed pieces' sides.
+
+## Later: several models from one engine (2026-11-17)
+
+An engine may hand over several models at once, such as the CPU racers in a headless Wipeout or MKWii. Today every
+engine has one model (the skater). The pose history is keyed by a model id already (generic pose interpolation, after
+step 6); the rest waits for an engine that needs it.
+
+- **Contract:**
+  - `models()` returns a list, each model with its own poses, matched by model id.
+  - A model's look is separate from its instances: eight karts with one look load it once and are posed eight times.
+  - Models come and go (a CPU spawns or drops out), and the engine says so.
+  - One model is the player's: it gives the core `Focus`. The others are only drawn.
+- **App:**
+  - Spawn and despawn models as the engine says, with one pose history per model.
+  - **A shadow budget.** The caster cap (24) is sized for one skater. Nearby models get their body-group shadows,
+    distant ones a single soft blob or none. Measure the frame rate on the headset with a full grid.
+  - One-model engines (Skate 3, THUG2, SK8) don't change.
