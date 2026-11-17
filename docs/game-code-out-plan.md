@@ -519,6 +519,45 @@ which engine it is.
 - **Owed:** a listening pass on the headset: Skate 3 (its own sound, and `SKATE_AUDIO=clean`), THUG2 and SK8, each
   also held in a menu and switched away from and back to.
 
+**Step 8, the plan (2026-11-17):** one generic driver hosts every engine through an `EngineCore` trait; each a commit
+that passes the full set.
+1. **THUG2 onto the trait, and the driver.** `engine_core::EngineCore` is what the driver calls (not the sketch above):
+   boot on a worker from a factory (the crash marker the driver's), input, the stage and park offered every frame,
+   placing, stepping by `period()` (re-read after each step), each step's poses, voices and focus, the HUD on the
+   frame's last step, the model once. THUG2's state moves from the `Thug2` resource into `thug2_engine`, its first
+   implementation. The driver is installed once per engine, inside `engines::add_engine` and in its set (what an
+   engine spawns stays its own: hidden and paused while another runs). Gates: `thug2::tests::skates_the_room_and_
+   switches_away_and_back`, `model_parity::thug2::real`.
+2. **A Skate 3 gate on today's adapter:** the real game driven through the app (placed, pushed, held), its link,
+   trick text and pose digested a tick.
+3. **Skate 3 onto the trait** over `skate3_sim::Sim` (its preferences and the off-board view inside), checked against
+   that digest. **The flat desktop Skate 3 run goes** (the user, 2026-11-17): its camera, replay, presentation and
+   world lights; the desktop keeps `--clean` (SK8, the Roomtone previews).
+4. **Lazy boot, one host builder, and the Android asset source** (Skate 3 loaded when first picked, not before the app;
+   the default-source override replaced).
+
+**8.1, as done (2026-11-17):** `engine_core::EngineCore` (with `EngineFactory`, and the skate mode's `SkateMode`:
+`set_park`, `link`, `trick`, `sounds`) is what the driver calls: `period`, `set_input`, `set_view`, `set_stage`,
+`place_player`, `wants_steps`, `step`, `focus`, `models` (once), `poses` and `voices` after each step, `clip`, `stream`,
+`want_hud` before the frame's steps and `hud` after, `hud_texture`. The runtime numbers and stamps the poses.
+- **THUG2** (`thug2_engine::engine`): the `Thug2` resource's state (the game, its pad, stage feed, waiting spawn, cuts,
+  placements, pose, HUD, voices) as the first `EngineCore`; `factory` boots it and lets it settle on the worker.
+- **The driver** (`engine_driver`): `Driver<M>` a hosted engine, its systems generic over it, installed inside
+  `add_engine` in its set: boot on a worker with the crash marker, finishing it (models spawned; the player put ahead
+  or where a placement asked meanwhile), input and the eyes, placements, the park and stage, the HUD wanted, stepping
+  (its clock scaled by the adapter's speed; four steps a frame at most; not while held or while the engine waits; a
+  step error fails the engine), each step's poses, focus and voices, the link, trick text and skating sounds out, the
+  voices played, the HUD drawn, the models posed with their bodies, and a stand-in where the player is while an engine
+  has no model. `thug2.rs` keeps THUG2's files, settings, page and HUD parts.
+- **Changes:** the crash marker goes when the start returns, whether it made the engine or not (an error isn't a
+  crash); THUG2's 2D is read after the frame's steps, not inside its last (the same moment); the game's cache folder is
+  made at launch.
+- **Gates:** `thug2::tests::skates_the_room_and_switches_away_and_back` (on the driver's state: steps, its model,
+  focus and voices) and `model_parity::thug2::real` pass.
+
+Shared policies: the driver steps an engine only while `PadHeld.pause` is off (both engines' hold); a step error marks
+the engine failed (THUG2's way; Skate 3 exited the app); whether an engine steps before it has a stage is its own.
+
 ### Risks
 
 - **Quest performance:**

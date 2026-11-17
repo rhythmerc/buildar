@@ -2,36 +2,27 @@
 //! engine, skating the room and the parks.
 //!
 //! It runs on the player's own THUG2 files, in `<app files>/thug2` (the folder holding `Data`; `THUG2_GAME_DIR`
-//! elsewhere); without them the engine can't be picked. The game draws nothing itself: its skater - the model it built
-//! from those files, posed by its own animation every frame - is drawn here ([`spawn_skater`], [`pose_skater`]); a
-//! stand-in only if the model can't be read.
-//!
-//! - Start: picked the first time, the game boots on a thread of its own (its scripts and an empty level), then the
-//!   skater is put in front of the player, or where the last engine's skater was.
-//! - World: the stage and the park become its collision and rails (`thug2_engine::stage`: its units, offset and face
-//!   classes; not mid-grind). Offered every frame; the game takes the latest when it can.
-//! - Frames: the game steps at its 60 Hz from the headset's frames (several a frame at most), and waits while a menu
-//!   or build mode has the controllers. Each step's pose is numbered and stamped with the game's clock; the model
-//!   layer draws between the last two (`crate::model::PoseHistories`).
-//! - Pad: the Touch controllers as a PlayStation 2 pad (`thug2_engine::input`).
-use crate::engines::{self, Engine, EngineSet};
-use crate::xr::link::{CurrentPark, CurrentStage, PlacePlayer, SkaterLink};
-use thug2_engine::stage::{DECK_HEIGHT, from_game};
+//! elsewhere); without them the engine can't be picked. What it knows of THUG2 is `thug2_engine`'s (the game as an
+//! `engine_core::EngineCore`: `thug2_engine::engine`); the app's generic driver hosts it (`crate::engine_driver`:
+//! booting it on a worker, stepping it at its 60 Hz, drawing its skater, its HUD and playing its voices). Here: where
+//! its files are, its settings (game speed, sound level) and page, and its HUD's parts from the start.
+use crate::engines::{self, Engine};
 use bevy::prelude::*;
 use std::path::{Path, PathBuf};
-use std::thread::JoinHandle;
 use thug2_sys as t2;
 
-/// The game's frame (`thug2_engine::model::PERIOD`), in seconds.
-const STEP: f32 = thug2_engine::model::PERIOD.as_secs_f32();
-const MAX_STEPS_PER_FRAME: u32 = 4;
-/// Game frames run at boot, before the skater is put anywhere (the level puts it at its own start first).
-const SETTLE_FRAMES: u32 = 120;
-/// Where the game's files are, and where it may write.
+/// THUG2 to the driver.
+pub(crate) struct Thug2;
+
+impl crate::engine_driver::Hosted for Thug2 {
+    const ENGINE: Engine = Engine::Thug2;
+}
+
+type Driver = crate::engine_driver::Driver<Thug2>;
+/// Where the game's files are.
 #[derive(Resource, Clone)]
 struct Thug2Files {
     game: PathBuf,
-    cache: PathBuf,
 }
 
 /// The game's folder for the app's files folder.
@@ -46,8 +37,8 @@ fn has_data(game: &Path) -> bool {
 }
 
 fn available(world: &World) -> Result<(), String> {
-    if let Some(Thug2 { phase: Phase::Failed(why), .. }) = world.get_resource::<Thug2>() {
-        return Err(why.clone());
+    if let Some(why) = world.get_resource::<Driver>().and_then(Driver::failed) {
+        return Err(why);
     }
     let files = world.resource::<Thug2Files>();
     if has_data(&files.game) {
@@ -67,8 +58,11 @@ pub(crate) fn install(app: &mut App, files: &Path) {
         warn!("THUG2 stopped the app while it started last time: opening on another engine");
         let _ = std::fs::remove_file(cache.join(STARTING));
     }
-    crate::engine_audio::add_voice_source(app);
-    app.insert_resource(Thug2Files { game: game_folder(files), cache })
+    let game = game_folder(files);
+    let factory = thug2_engine::engine::factory(game.clone(), cache.clone());
+    let marker = cache.join(STARTING);
+    let _ = std::fs::create_dir_all(&cache);
+    app.insert_resource(Thug2Files { game })
         .insert_resource(Tuning::load(&files.join("thug2.json")))
         .insert_resource(TuningFile(files.join("thug2.json")));
     app.world_mut().resource_mut::<crate::xr::ui::UiProviders>().0.push(std::sync::Arc::new(Thug2Pages));
@@ -80,21 +74,8 @@ pub(crate) fn install(app: &mut App, files: &Path) {
     crate::engine_hud::install(app);
     app.init_resource::<engine_api::PlayerBodies>();
     engines::add_engine(app, Engine::Thug2, available, |app| {
-        app.init_resource::<Thug2>()
-            .add_systems(Startup, (boot, spawn_stand_in, hud_parts))
-            .add_systems(
-                Update,
-                (finish_boot, read_pad, place_player, offer_stage, want_hud, step, publish, play_sounds, draw_hud)
-                    .chain()
-                    .after(crate::xr::ui::UiSet)
-                    .in_set(EngineSet(Engine::Thug2)),
-            )
-            .add_systems(
-                PostUpdate,
-                (place_stand_in, pose_skater.in_set(engine_api::BodiesSet))
-                    .before(bevy::transform::TransformSystems::Propagate)
-                    .in_set(EngineSet(Engine::Thug2)),
-            );
+        crate::engine_driver::install::<Thug2>(app, factory, Some(marker));
+        app.add_systems(Startup, hud_parts).add_systems(Update, tune.in_set(engines::EngineSet(Engine::Thug2)));
     });
     // (outside THUG2's systems: it shoots whichever engine's skater - another's skinned skater, to compare)
     if std::env::var_os("THUG2_SHOT").is_some() {
@@ -113,137 +94,6 @@ pub(crate) fn install(app: &mut App, files: &Path) {
 /// Made while the game starts, gone once it runs: still there at launch, the last start crashed the app.
 const STARTING: &str = "starting";
 
-type Booted = Result<(t2::Engine, Option<t2::Skater>, Option<t2::SkaterModel>), String>;
-
-#[derive(Default)]
-enum Phase {
-    #[default]
-    Idle,
-    Booting(JoinHandle<Booted>),
-    Running(t2::Engine),
-    Failed(String),
-}
-
-#[derive(Resource, Default)]
-struct Thug2 {
-    phase: Phase,
-    /// Its pad, and whether it waits (a menu or build mode has the controllers).
-    input: thug2_engine::input::Input,
-    /// The game's clock: its steps' periods summed (`clock`), and the time towards the next step (`accum`, seconds).
-    clock: std::time::Duration,
-    accum: f32,
-    /// The steps run (each pose's generation).
-    steps: u64,
-    /// The skater was put somewhere else (a teleport, our world taken with a place): the pose after the next step is a
-    /// cut.
-    cut: bool,
-    /// The game's own count of the skater put somewhere outside its motion (a wall plant, a respawn, a teleport, a
-    /// turn-round: `t2::Engine::skater_placements`) after the last step: a step that changes it is a cut too.
-    placements: u64,
-    /// Its skater's poses, one a step, for the model layer to draw between ([`crate::model::PoseHistories`]).
-    poses: crate::model::PoseHistories<()>,
-    contract: engine_core::Pose,
-    previous: Option<t2::Skater>,
-    current: Option<t2::Skater>,
-    /// What the game has of the stage: its revision (`thug2_engine::stage`).
-    stage: thug2_engine::stage::StageFeed,
-    /// Where to put the skater, waiting for the game or the world.
-    spawn: Option<t2::Spawn>,
-    /// The game has stepped since it was given our world (the skater is in it, not at the level's own start).
-    placed: bool,
-    /// The skater's pose after the last step (for its drawn model).
-    pose: t2::Pose,
-    /// What the game played in the steps since the app last played it (`play_sounds`), and its sounds as played.
-    heard: crate::engine_audio::Heard,
-    voices: crate::engine_audio::Voices,
-    scratch: Vec<t2::Voice>,
-    /// The game takes its 2D down (`want_hud`), and the last step's (`draw_hud`).
-    hud_on: bool,
-    hud: t2::Hud,
-}
-
-impl Thug2 {
-    /// The game's clock now: its last step's time and the time since, towards the next.
-    fn now(&self) -> std::time::Duration {
-        self.clock + std::time::Duration::from_secs_f32(self.accum.max(0.0))
-    }
-}
-
-fn boot(files: Res<Thug2Files>, mut thug2: ResMut<Thug2>) {
-    let Thug2Files { game, cache } = files.clone();
-    let _ = std::fs::create_dir_all(&cache);
-    info!("THUG2 starting from {}", game.display());
-    let _ = std::fs::write(cache.join(STARTING), b"");
-    let worker = std::thread::Builder::new().name("thug2-boot".into()).spawn(move || -> Booted {
-        let started = std::time::Instant::now();
-        let mut engine = t2::boot(&game, Some(&cache), &["-level", "Default"]).map_err(|e| e.to_string())?;
-        let mut skater = None;
-        for _ in 0..SETTLE_FRAMES {
-            skater = engine.step(&t2::PAD_AT_REST).map_err(|e| e.to_string())?;
-        }
-        // (the skater's look, as the game built it: drawn here in place of the stand-in)
-        let model = engine.skater_model();
-        info!(
-            "THUG2 ready in {:.0} ms (skater {}, model: {} meshes, {} textures)",
-            started.elapsed().as_secs_f32() * 1000.0,
-            skater.is_some(),
-            model.as_ref().map_or(0, |m| m.meshes.len()),
-            model.as_ref().map_or(0, |m| m.textures.len())
-        );
-        let _ = std::fs::remove_file(cache.join(STARTING));
-        Ok((engine, skater, model))
-    });
-    thug2.phase = match worker {
-        Ok(handle) => Phase::Booting(handle),
-        Err(e) => Phase::Failed(format!("THUG2 didn't start: {e}")),
-    };
-}
-
-/// The game ready: running, and the skater put in front of the player unless a place is waiting already.
-fn finish_boot(world: &mut World) {
-    let finished = match &world.resource::<Thug2>().phase {
-        Phase::Booting(handle) => handle.is_finished(),
-        _ => return,
-    };
-    if !finished {
-        let mut hud = world.resource_mut::<crate::xr::ui::hud::TrickHud>();
-        if hud.name.is_empty() {
-            hud.name = "Starting THUG2...".into();
-        }
-        return;
-    }
-    let Phase::Booting(handle) = std::mem::take(&mut world.resource_mut::<Thug2>().phase) else { return };
-    let result = handle.join().unwrap_or_else(|_| Err("THUG2 stopped while it started".into()));
-    world.resource_mut::<crate::xr::ui::hud::TrickHud>().name.clear();
-    match result {
-        Ok((engine, skater, model)) => {
-            if let Some(model) = model {
-                spawn_skater(world, &model);
-            }
-            let waiting = {
-                let mut thug2 = world.resource_mut::<Thug2>();
-                thug2.phase = Phase::Running(engine);
-                thug2.previous = skater;
-                thug2.current = skater;
-                thug2.spawn.is_some()
-            };
-            if !waiting {
-                crate::xr::ui::pages::put_skater_ahead(world);
-            }
-        }
-        Err(why) => {
-            error!("THUG2: {why}");
-            world.resource_mut::<crate::xr::ui::XrUi>().say(format!("THUG2: {why}"));
-            world.resource_mut::<Thug2>().phase = Phase::Failed(why);
-        }
-    }
-}
-
-/// The game's pad from the controllers (`thug2_engine::input`).
-fn read_pad(touch: Res<engine_api::LatestTouch>, held: Res<engine_api::PadHeld>, mut thug2: ResMut<Thug2>) {
-    thug2.input.set_input(&touch.0, **held);
-}
-
 /// THUG2's HUD (`thug2_engine::hud`: its parts and where they go) drawn by the app's HUD renderer. Its parts are
 /// there from the start, empty (the corner readout gives way to them).
 fn hud_parts(mut renderer: crate::engine_hud::HudRenderer) {
@@ -252,30 +102,12 @@ fn hud_parts(mut renderer: crate::engine_hud::HudRenderer) {
     renderer.show(Engine::Thug2, &frame, |_| None);
 }
 
-/// The game takes its 2D down only while it's seen: the HUD on and no menu over it.
-fn want_hud(
-    settings: Option<Res<crate::xr::ar_settings::ArSettings>>,
-    panel: Option<Res<crate::xr::panel::XrPanel>>,
-    huds: Option<Res<crate::engine_hud::EngineHuds>>,
-    mut thug2: ResMut<Thug2>,
-) {
-    let wanted = huds.is_some() && settings.is_some_and(|s| s.hud) && !panel.is_some_and(|p| p.visible);
-    let thug2 = &mut *thug2;
-    let Phase::Running(engine) = &mut thug2.phase else { return };
-    if thug2.hud_on != wanted {
-        engine.hud_enable(wanted);
-        thug2.hud_on = wanted;
-        thug2.hud = t2::Hud::default();
+/// Its settings to the driver: the game's clock and its sounds' level.
+fn tune(tuning: Res<Tuning>, mut driver: ResMut<Driver>) {
+    if (driver.speed, driver.volume) != (tuning.speed, tuning.volume) {
+        driver.speed = tuning.speed;
+        driver.volume = tuning.volume;
     }
-}
-
-/// The last step's 2D drawn (the balance meter goes at the skater: its focus, from the link `publish` fills).
-fn draw_hud(mut thug2: ResMut<Thug2>, mut renderer: crate::engine_hud::HudRenderer, mut frame: Local<engine_core::hud::HudFrame>) {
-    let thug2 = &mut *thug2;
-    let Phase::Running(engine) = &mut thug2.phase else { return };
-    let balancing = thug2.current.is_some_and(|s| s.balance.is_some());
-    thug2_engine::hud::frame(&thug2.hud, balancing, &mut frame);
-    renderer.show(Engine::Thug2, &frame, |id| engine.hud_texture(thug2_engine::hud::game_texture(id)).map(thug2_engine::hud::texture));
 }
 
 /// How THUG2 plays in the room, kept in `thug2.json` beside the app's other settings. (A `scale` there, THUG2's old
@@ -396,231 +228,6 @@ impl crate::xr::ui::UiProvider for Thug2Pages {
     }
 }
 
-/// Put down where the shared layer asks (`thug2_engine::stage::spawn`: on the board, a little over the point): now if
-/// the game has a stage of ours, else with the next one it takes.
-fn place_player(mut requests: MessageReader<PlacePlayer>, mut thug2: ResMut<Thug2>) {
-    for r in requests.read() {
-        let spawn = thug2_engine::stage::spawn(r.point, r.forward);
-        let given = thug2.stage.given().is_some();
-        match &mut thug2.phase {
-            Phase::Running(engine) if given => {
-                engine.teleport(spawn);
-                thug2.cut = true;
-            }
-            _ => thug2.spawn = Some(spawn),
-        }
-    }
-}
-
-/// The stage and park offered every frame: the game takes them (`thug2_engine::stage::StageFeed`) when they change -
-/// not mid-grind, and once there's somewhere to put the skater.
-fn offer_stage(stage: Res<CurrentStage>, park: Res<CurrentPark>, mut thug2: ResMut<Thug2>) {
-    let thug2 = &mut *thug2;
-    let given = thug2.stage.given();
-    thug2.stage.set_park(&park);
-    let engine = match &mut thug2.phase {
-        Phase::Running(engine) => Some(engine),
-        _ => None,
-    };
-    let placing = thug2.spawn.is_some();
-    thug2.stage.set_stage(engine, thug2.current.as_ref(), &stage, &mut thug2.spawn);
-    // (the skater put down with the world: a cut)
-    thug2.cut |= placing && thug2.spawn.is_none();
-    if thug2.stage.given() != given {
-        info!("THUG2 world: {} faces, {} rails (AR revision {})", thug2.stage.faces, thug2.stage.rails, stage.revision);
-    }
-}
-
-fn step(time: Res<Time<Real>>, tuning: Res<Tuning>, mut thug2: ResMut<Thug2>) {
-    let thug2 = &mut *thug2;
-    let Phase::Running(engine) = &mut thug2.phase else { return };
-    // (waiting, its clock stands still: the skater is drawn where it was)
-    if thug2.input.hold || thug2.stage.given().is_none() {
-        return;
-    }
-    thug2.accum += time.delta_secs().min(0.1) * tuning.speed;
-    let mut steps = 0;
-    while thug2.accum >= STEP && steps < MAX_STEPS_PER_FRAME {
-        thug2.accum -= STEP;
-        steps += 1;
-        match engine.step(&thug2.input.pad) {
-            Ok(skater) => {
-                thug2.previous = thug2.current;
-                thug2.current = skater;
-                thug2.clock += thug2_engine::model::PERIOD;
-                thug2.steps += 1;
-                // (the game placed the skater itself this step - a wall plant, a respawn: a cut. Before the pose is
-                // read, so a step with none keeps it for the next pose)
-                let placements = engine.skater_placements();
-                thug2.cut |= placements != thug2.placements;
-                thug2.placements = placements;
-                // (every step's pose, numbered and stamped, for the model layer to draw between the last two)
-                if engine.skater_pose(&mut thug2.pose) {
-                    let pose = &mut thug2.contract;
-                    thug2_engine::model::pose(&thug2.pose, pose);
-                    pose.model = thug2_engine::model::SKATER;
-                    pose.generation = thug2.steps;
-                    pose.discontinuity = std::mem::take(&mut thug2.cut);
-                    pose.step = engine_core::Step { at: thug2.clock, period: thug2_engine::model::PERIOD };
-                    thug2.poses.offer(pose, ());
-                }
-                if thug2.hud_on && (steps == MAX_STEPS_PER_FRAME || thug2.accum < STEP) {
-                    // (the last step this frame: its 2D)
-                    engine.hud(&mut thug2.hud);
-                }
-                // (the world and the skater's place are taken at the start of a step: from now it is in ours)
-                thug2.placed = true;
-                engine.voices(&mut thug2.scratch);
-                let at = thug2.current.as_ref().and_then(thug2_engine::sound::sound_at).unwrap_or_default();
-                let voices = thug2.scratch.iter().map(|v| thug2_engine::sound::voice(v, at)).collect();
-                thug2.heard.after_step(voices, |id| engine.sound(id).map(thug2_engine::sound::clip));
-            }
-            Err(e) => {
-                error!("THUG2: {e}");
-                thug2.phase = Phase::Failed(e.to_string());
-                return;
-            }
-        }
-    }
-    if steps == MAX_STEPS_PER_FRAME {
-        thug2.accum = thug2.accum.min(STEP);
-    }
-}
-
-/// The game's sound effects from the skater, heard through the headset (`xr::spatial_audio`; `engine_audio::Voices`):
-/// each voice the game plays, at the game's level and pitch. While the game waits (a menu, build mode) its loops wait
-/// too.
-#[allow(clippy::type_complexity)]
-fn play_sounds(
-    mut commands: Commands,
-    mut thug2: ResMut<Thug2>,
-    tuning: Res<Tuning>,
-    mut assets: ResMut<Assets<crate::engine_audio::VoicePcm>>,
-    mut emitters: Query<(Entity, &crate::engine_audio::VoiceEmitter, &mut Transform, Option<&mut bevy::audio::SpatialAudioSink>)>,
-) {
-    let thug2 = &mut *thug2;
-    // (not in our world yet: what it started can't be placed)
-    if thug2.current.filter(|_| thug2.placed).is_none() {
-        thug2.heard.forget_started();
-        return;
-    }
-    thug2.voices.play(&mut thug2.heard, thug2.input.hold, tuning.volume, &mut commands, &mut assets, &mut emitters);
-}
-
-/// Where the skater is (`thug2_engine::stage::link`), once it is in our world.
-fn publish(thug2: Res<Thug2>, mut link: ResMut<SkaterLink>) {
-    let Some(s) = thug2.current.filter(|_| thug2.placed) else { return };
-    **link = thug2_engine::stage::link(&s);
-}
-
-/// The skater's stand-in: a board and a body.
-#[derive(Component)]
-struct StandIn;
-
-fn spawn_stand_in(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
-    let board = materials.add(StandardMaterial { base_color: Color::srgb(0.08, 0.08, 0.09), perceptual_roughness: 0.6, ..default() });
-    let body = materials.add(StandardMaterial { base_color: Color::srgb(0.93, 0.45, 0.12), perceptual_roughness: 0.8, ..default() });
-    let head = materials.add(StandardMaterial { base_color: Color::srgb(0.85, 0.68, 0.55), perceptual_roughness: 0.8, ..default() });
-    commands
-        .spawn((StandIn, Transform::default(), Visibility::Hidden, Name::new("THUG2 skater")))
-        .with_children(|s| {
-            s.spawn((
-                Mesh3d(meshes.add(Cuboid::new(0.21, 0.025, 0.8))),
-                MeshMaterial3d(board),
-                Transform::from_xyz(0.0, DECK_HEIGHT, 0.0),
-            ));
-            s.spawn((
-                Mesh3d(meshes.add(Capsule3d::new(0.17, 1.05))),
-                MeshMaterial3d(body),
-                Transform::from_xyz(0.0, DECK_HEIGHT + 0.7, 0.0),
-            ));
-            s.spawn((
-                Mesh3d(meshes.add(Sphere::new(0.12))),
-                MeshMaterial3d(head),
-                Transform::from_xyz(0.0, DECK_HEIGHT + 1.5, 0.0),
-            ));
-        });
-}
-
-/// The stand-in where the skater is, between the game's last two frames.
-fn place_stand_in(
-    thug2: Res<Thug2>,
-    model: Option<Res<SkaterJoints>>,
-    mut stand_in: Query<(&mut Transform, &mut Visibility), With<StandIn>>,
-) {
-    let Ok((mut transform, mut visibility)) = stand_in.single_mut() else { return };
-    let (Some(now), true, None) = (thug2.current, thug2.placed, model) else {
-        *visibility = Visibility::Hidden;
-        return;
-    };
-    let before = thug2.previous.unwrap_or(now);
-    // (the same time since the last step as the model layer's, in steps)
-    let step = engine_core::Step { at: thug2.clock, period: thug2_engine::model::PERIOD };
-    let alpha = step.alpha(thug2.now()).clamp(0.0, 1.0);
-    let at = from_game(before.position).lerp(from_game(now.position), alpha);
-    let up = Vec3::from_array(now.up).normalize_or(Vec3::Y);
-    let forward = Vec3::from_array(now.forward).normalize_or(Vec3::Z);
-    let right = up.cross(forward).normalize_or(Vec3::X);
-    *transform = Transform::from_translation(at).with_rotation(Quat::from_mat3(&Mat3::from_cols(right, up, right.cross(up))));
-    *visibility = Visibility::Inherited;
-}
-
-/// The game's skater drawn by the generic model layer ([`crate::model`]): its meshes skinned to joints set from its
-/// pose each frame.
-#[derive(Resource)]
-struct SkaterJoints {
-    joints: Vec<Entity>,
-    root: Entity,
-    /// Its bodies (`thug2_engine::model::board`: the board alone; the C API gives no parents for the rider's bones).
-    groups: Vec<engine_core::model::BodyGroup>,
-}
-
-/// The skater's model (`thug2_engine::model::source`: bind-pose meshes in game units with plain materials) spawned as
-/// meshes as data, skinned with identity inverse binds to joints whose matrices are the game's palette carried into
-/// our world (`pose_skater`).
-fn spawn_skater(world: &mut World, model: &t2::SkaterModel) {
-    let model = thug2_engine::model::source(model);
-    let engine_core::ModelSource::Meshes { meshes, textures, joint_count } = &model.source else { return };
-    let crate::model::FlatModel { root, joints } = crate::model::spawn_meshes(world, "THUG2 skater", meshes, textures, *joint_count);
-    world.insert_resource(SkaterJoints { joints, root, groups: model.groups.clone() });
-}
-
-/// The skater where the game's pose has it, in our world (`thug2_engine::model::pose`: the draw matrix and palette
-/// carried over), between the game's last two steps as the model layer draws every engine's model
-/// ([`crate::model::flat_blend`]: the game steps at 60 Hz, the headset draws faster).
-fn pose_skater(
-    thug2: Res<Thug2>,
-    joints: Option<Res<SkaterJoints>>,
-    mut q: Query<(&mut Transform, &mut Visibility)>,
-    mut bodies: ResMut<engine_api::PlayerBodies>,
-) {
-    let Some(joints) = joints else { return };
-    let history = thug2.poses.get(thug2_engine::model::SKATER);
-    let view = history.and_then(|h| h.view_at(thug2.now()));
-    let shown = thug2.placed && thug2.current.is_some() && !thug2.pose.palette.is_empty() && view.is_some();
-    if let Ok((_, mut visibility)) = q.get_mut(joints.root) {
-        *visibility = if shown { Visibility::Inherited } else { Visibility::Hidden };
-    }
-    let (true, Some((previous, current, alpha))) = (shown, view) else {
-        bodies.set(Engine::Thug2, Vec::new());
-        return;
-    };
-    let (placed, matrices) = crate::model::flat_blend(previous, current, alpha, joints.joints.len());
-    // (the parts' own transform - the root's - is where the model is: skinning ignores it, but culling places the
-    // parts' bind-pose bounds with it)
-    if let Ok((mut t, _)) = q.get_mut(joints.root) {
-        *t = Transform::from_matrix(placed);
-    }
-    // (its bodies where they are drawn: each point carried by its joint as blended)
-    let point = |p: engine_core::model::Point| Some(matrices.get(usize::from(p.joint))?.transform_point3(p.at));
-    bodies.set(Engine::Thug2, crate::model::bodies(&joints.groups, &[], point));
-    for (&joint, matrix) in joints.joints.iter().zip(&matrices) {
-        if let Ok((mut transform, _)) = q.get_mut(joint) {
-            *transform = Transform::from_matrix(*matrix);
-        }
-    }
-}
-
 /// `THUG2_SHOT=<file.png>` (testing without a headset): a camera put a little way in front of the skater, looking at
 /// it, rendered to an image and saved once the skater has been in the world `THUG2_SHOT_AFTER` seconds (default 2;
 /// `THUG2_SHOT_SK8`: SK8's skater). The camera is made at launch: in this app a camera made later drew none of the meshes
@@ -694,6 +301,7 @@ struct ShotImage(Handle<Image>);
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::xr::link::{CurrentPark, CurrentStage, PlacePlayer, SkaterLink};
 
     /// A `thug2.json` and a park's settings from before the world size went (a `scale` in them) still load: the
     /// scale ignored, the rest kept.
@@ -767,7 +375,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let (start, nose) = deck.expect("the skater in the room");
-        assert!((start - Vec3::new(0.0, DECK_HEIGHT, -2.0)).length() < 0.05, "put where asked: {start}");
+        assert!((start - Vec3::new(0.0, thug2_engine::stage::DECK_HEIGHT, -2.0)).length() < 0.05, "put where asked: {start}");
         assert!(nose.z > 0.9, "facing +z: {nose}");
         app.world_mut().resource_mut::<crate::xr::actions::LatestTouch>().0.left_stick = [0.0, 1.0];
         for _ in 0..60 {
@@ -780,21 +388,20 @@ mod tests {
         let mut q = app.world_mut().query::<(&crate::engine_audio::VoiceEmitter, &Transform)>();
         let rolling = q.iter(app.world()).find(|(e, _)| e.looping).map(|(_, t)| t.translation).expect("the rolling loop plays");
         assert!((rolling - pushed).length() < 0.6, "from the skater: {rolling} vs {pushed}");
-        assert!(app.world().resource::<Thug2>().voices.clips() > 0);
+        assert!(app.world().resource::<Driver>().clips() > 0);
         let there = app.world().resource::<SkaterLink>().board.unwrap().position;
         // (each step's pose taken, numbered by the steps)
         {
-            let thug2 = app.world().resource::<Thug2>();
-            let history = thug2.poses.get(thug2_engine::model::SKATER).expect("its poses");
+            let driver = app.world().resource::<Driver>();
+            let history = driver.poses().get(thug2_engine::model::SKATER).expect("its poses");
             assert!(history.pair().is_some(), "a pair");
-            assert!(thug2.steps > 60 && thug2.contract.generation == thug2.steps);
-            let alpha = history.alpha(thug2.now());
+            assert!(driver.steps() > 60, "{} steps", driver.steps());
+            let alpha = history.alpha(driver.now());
             assert!((0.0..=1.0).contains(&alpha), "{alpha}");
         }
         // The game's own skater drawn: its parts skinned to joints that sit on it (life size: the game's inches as
         // metres), the stand-in not shown.
-        let root = app.world().resource::<SkaterJoints>().root;
-        let joint = app.world().resource::<SkaterJoints>().joints[0];
+        let (root, joint) = app.world().resource::<Driver>().model().map(|m| (m.root, m.joints[0])).expect("its model");
         let parts = app.world_mut().query_filtered::<(), With<crate::model::ModelPart>>().iter(app.world()).count();
         assert!(parts > 10, "{parts} parts");
         let root_at = app.world().get::<Transform>(root).unwrap();
@@ -807,9 +414,9 @@ mod tests {
         // some 15 cm), along the way it faces.
         let link = app.world().resource::<SkaterLink>().board.unwrap();
         let (from, to) = {
-            let thug2 = app.world().resource::<Thug2>();
-            let board = |s: Option<t2::Skater>| thug2_engine::stage::link(&s.unwrap()).board.unwrap().position;
-            (board(thug2.previous), board(thug2.current))
+            let [before, now] = app.world().resource::<Driver>().focus().map(|f| f.unwrap());
+            let board = |f: engine_core::Focus| f.feet + f.up * thug2_engine::stage::DECK_HEIGHT;
+            (board(before), board(now))
         };
         let bodies = app.world().resource::<engine_api::PlayerBodies>().of(Engine::Thug2).to_vec();
         let [engine_api::BodyShape::Footprint { middle, along, .. }] = bodies.as_slice() else { panic!("the board alone: {bodies:?}") };
@@ -819,15 +426,12 @@ mod tests {
             "the board's middle {middle} at the board, between {from} and {to}"
         );
         assert!(along.dot(link.forward.with_y(0.0).normalize()).abs() > 0.9, "along it: {along} vs {}", link.forward);
-        let mut q = app.world_mut().query_filtered::<&Visibility, With<StandIn>>();
+        let mut q = app.world_mut().query_filtered::<&Visibility, With<crate::engine_driver::StandIn>>();
         assert_eq!(*q.single(app.world()).unwrap(), Visibility::Hidden);
         // Away to the other engine: the game waits, its stand-in hidden.
         app.world_mut().resource_mut::<Engines>().request(Engine::Sk8);
         app.update();
-        let frame = |app: &App| match &app.world().resource::<Thug2>().current {
-            Some(s) => s.frame,
-            None => 0,
-        };
+        let frame = |app: &App| app.world().resource::<Driver>().steps();
         let left_at = frame(&app);
         assert_eq!(*app.world().get::<Visibility>(root).unwrap(), Visibility::Hidden, "the model hidden");
         for _ in 0..30 {

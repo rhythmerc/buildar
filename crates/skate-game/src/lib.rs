@@ -47,6 +47,9 @@ mod skate_audio;
 mod engine_audio;
 #[cfg_attr(not(feature = "retail"), allow(dead_code))]
 mod live_pcm;
+// (every engine's host: THUG2's so far)
+#[cfg(feature = "thug2")]
+mod engine_driver;
 #[cfg_attr(not(feature = "thug2"), allow(dead_code))]
 mod stream_pcm;
 #[cfg(feature = "retail")]
