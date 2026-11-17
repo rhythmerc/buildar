@@ -452,7 +452,7 @@ draws both through one generic layer that doesn't know which engine it is.
 
 **Generic pose interpolation, as done (2026-11-17):** every fixed-step engine's model is drawn between its last two
 steps the same way, so THUG2 (60 Hz on a 72-90 Hz headset) no longer judders.
-- **Core** (`engine_core::model`, branch `pose-timing`): `Pose` gains `model: ModelId` (a `u32`, the engine's own
+- **Core** (`engine_core::model`, branch `pose-timing`, b5fa394): `Pose` gains `model: ModelId` (a `u32`, the engine's own
   numbering; one model: 0) and `step: Step { at, period }` (when its step ended on the clock the runtime steps the
   engine by, and how long until the next). `Step::alpha(now)` is the one formula: the time since the step in periods.
   The id rides on the pose (not only as `pose()`'s argument in the trait sketch) so a pose says whose it is wherever
@@ -461,7 +461,7 @@ steps the same way, so THUG2 (60 Hz on a 72-90 Hz headset) no longer judders.
   when the next step's poses come); a history takes each generation once and snaps on a cut, a new period or a new
   joint count, as before. Alpha is `PoseHistory::alpha(now)` for every engine. The blend is the model's: with
   `parents` (a glTF source) bone-local as before (`joint_locals`); without, `flat_blend`: the root as every root
-  (`blend`), each joint matrix on its own in the model's space (`blend_matrix`: move lerped, turn slerped the short way,
+  (`blend`; one turning mirrored between two steps snaps), each joint matrix on its own in the model's space (`blend_matrix`: move lerped, turn slerped the short way,
   scale lerped; a mirrored and an unmirrored matrix, or one that won't come apart, are not blended: the nearer is
   drawn), the two poses exactly at 0 and 1.
 - **Skate 3** keeps Bevy's fixed clock: its poses are stamped with the fixed clock's time and timestep, and drawn at

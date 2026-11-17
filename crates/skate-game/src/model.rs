@@ -402,7 +402,8 @@ pub(crate) fn flat_blend<E>(previous: &Snapshot<E>, current: &Snapshot<E>, alpha
     if alpha >= 1.0 {
         return flat_joints(current.root_matrix, &current.joints, count);
     }
-    let root = blend(previous.root, current.root, alpha).to_matrix();
+    // (the root as every model's, `blend`, guarded as a joint is: a root that turns mirrored between two steps snaps)
+    let root = blend_matrix(previous.root_matrix, current.root_matrix, alpha);
     let at = |joints: &[Mat4], i: usize| joints.get(i).copied().unwrap_or(Mat4::IDENTITY);
     let joints = (0..count).map(|i| root * blend_matrix(at(&previous.joints, i), at(&current.joints, i), alpha)).collect();
     (root, joints)
@@ -548,9 +549,9 @@ mod tests {
         let plain = trs(2.0, 1.0, 1.0, false);
         assert_eq!(blend_matrix(a, plain, 0.4), a);
         assert_eq!(blend_matrix(a, plain, 0.6), plain);
-        let flat = Mat4::from_scale(Vec3::new(1.0, 0.0, 1.0));
-        assert_eq!(separable(flat), None);
-        assert_eq!(blend_matrix(flat, plain, 0.3), flat);
+        let squashed = Mat4::from_scale(Vec3::new(1.0, 0.0, 1.0));
+        assert_eq!(separable(squashed), None);
+        assert_eq!(blend_matrix(squashed, plain, 0.3), squashed);
         let mut broken = plain;
         broken.w_axis.x = f32::NAN;
         assert_eq!(separable(broken), None);
@@ -559,6 +560,18 @@ mod tests {
         projective.x_axis.w = 0.5;
         assert_eq!(separable(projective), None);
         assert_eq!((separable(plain), separable(a)), (Some(false), Some(true)));
+        // (a root turning mirrored between two steps: the nearer pose's root, its joints carried by it)
+        let p = flat(1, 10, a, vec![Mat4::IDENTITY]);
+        let q = flat(2, 20, plain, vec![Mat4::IDENTITY]);
+        let h = flat_pair(&p, &q);
+        let (prev, cur) = h.pair().unwrap();
+        assert_eq!(flat_blend(prev, cur, 0.3, 1), (a, vec![a]));
+        assert_eq!(flat_blend(prev, cur, 0.7, 1), (plain, vec![plain]));
+        // (the same handedness: the root blended exactly as `blend` blends every model's root)
+        let q = flat(2, 20, trs(2.0, 1.0, 3.0, true), vec![Mat4::IDENTITY]);
+        let h = flat_pair(&p, &q);
+        let (prev, cur) = h.pair().unwrap();
+        assert_eq!(flat_blend(prev, cur, 0.3, 1).0, blend(prev.root, cur.root, 0.3).to_matrix());
     }
 
     /// A cut, a new period or a new joint count: drawn as the newer pose whatever the clock says.

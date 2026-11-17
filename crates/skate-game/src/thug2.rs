@@ -879,11 +879,32 @@ mod tests {
         // A world twice the size: the skater stays where it is in the room, and is drawn half size.
         let here = app.world().resource::<SkaterLink>().board.unwrap().position;
         app.world_mut().resource_mut::<Tuning>().scale = 2.0;
+        // (the first step at the new size: a cut, its pose not blended from the one before)
+        let before = app.world().resource::<Thug2>().steps;
+        let mut snapped = false;
         for _ in 0..3 {
             app.update();
+            let thug2 = app.world().resource::<Thug2>();
+            if !snapped && thug2.steps == before + 1 {
+                let (previous, current) = thug2.poses.get(thug2_engine::model::SKATER).unwrap().pair().unwrap();
+                assert_eq!(previous.root_matrix, current.root_matrix, "a cut at the new size");
+                snapped = true;
+            }
         }
+        assert!(snapped, "a step at the new size");
         let there = app.world().resource::<SkaterLink>().board.unwrap().position;
         assert!((there.xz() - here.xz()).length() < 0.6, "kept its place: {here} -> {there}");
+        // (each step's pose taken, numbered by the steps; the new world size a cut: the pair starts again there, so
+        // its two roots are the same size, not blended from the old size)
+        {
+            let thug2 = app.world().resource::<Thug2>();
+            let history = thug2.poses.get(thug2_engine::model::SKATER).expect("its poses");
+            let (previous, current) = history.pair().expect("a pair");
+            assert_eq!(previous.root.scale, current.root.scale, "not blended across the new size");
+            assert!(thug2.steps > 60 && thug2.contract.generation == thug2.steps);
+            let alpha = history.alpha(thug2.now());
+            assert!((0.0..=1.0).contains(&alpha), "{alpha}");
+        }
         // The game's own skater drawn: its parts skinned to joints that sit on it (half size now, as the world is
         // twice as big), the stand-in not shown.
         let root = app.world().resource::<SkaterJoints>().root;
