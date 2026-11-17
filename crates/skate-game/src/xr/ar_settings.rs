@@ -198,9 +198,14 @@ fn save(files: Res<XrFiles>, settings: Res<ArSettings>, mut saved: Local<Option<
     }
     *saved = Some(settings.revision);
     let path = files.0.join(FILE);
-    let result = serde_json::to_vec_pretty(&*settings)
-        .map_err(|e| e.to_string())
-        .and_then(|json| std::fs::write(&path, json).map_err(|e| e.to_string()));
+    // Written beside it and moved over it: a file the app can't write (one pushed over adb, owned by the shell, as
+    // `skate-install` does to turn on the developer's pages) is replaced, as the folder is the app's; and a crash
+    // mid-write leaves the old file whole.
+    let next = files.0.join(format!("{FILE}.next"));
+    let result = serde_json::to_vec_pretty(&*settings).map_err(|e| e.to_string()).and_then(|json| {
+        std::fs::write(&next, json).map_err(|e| e.to_string())?;
+        std::fs::rename(&next, &path).map_err(|e| e.to_string())
+    });
     if let Err(e) = result {
         warn!("AR settings: could not save {}: {e}", path.display());
     }
