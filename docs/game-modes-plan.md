@@ -8,6 +8,22 @@ against, and multiplayer. Everything targets the clean tier first: it is what a 
 run, its engine is ours to change (github.com/rhythmerc/skatecore), and its skater is animated from
 the engine's state alone, so another player can be drawn from their state without their inputs.
 
+## Direction (2026-11-17)
+
+buildAR is genre-neutral now (docs/buildar-proposal.md, docs/game-code-out-plan.md), so modes are too. What follows
+this section is the earlier skate-only plan: its skate modes still stand, but it predates buildAR (it targets the SK8
+tier and the since-removed skate-net multiplayer).
+
+- **Every mode starts in free roam.** Spawning the player into the stage you're building generalises to every genre:
+  skate the park, drive the track, run the platform level. Free roam is the base; modes are layered on it.
+- **Modes per genre:**
+  - Skating: S.K.A.T.E., time attack, combo attack (with the modes below).
+  - Driving: time trials and races.
+  - Platforming: custom objectives the builder places, after Mario 64: get here, beat that guy, win this race.
+- **Objectives may be the general tool.** Placed goals (reach a spot, beat an opponent, finish first, score so many)
+  could express most modes in every genre, with each genre's mode module saying what its events mean.
+- Notes for direction only: nothing is scheduled.
+
 ## What there is to build on
 
 - The clean engine's events: pop, trick (with its name), land, bail, grind and grind end, a banked
