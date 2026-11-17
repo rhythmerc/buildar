@@ -69,6 +69,11 @@ fn ticking(hold: Option<Res<Hold>>) -> bool {
     hold.is_none_or(|h| !h.paused)
 }
 
+#[cfg(test)]
+pub(crate) fn hold_for_tests(app: &mut App) {
+    hold(app);
+}
+
 /// [`Hold`]: everything Skate 3 runs in `FixedUpdate` (all of it is in [`SKATE3`]) waits while it is paused.
 fn hold(app: &mut App) {
     app.init_resource::<Hold>()

@@ -555,6 +555,12 @@ that passes the full set.
 - **Gates:** `thug2::tests::skates_the_room_and_switches_away_and_back` (on the driver's state: steps, its model,
   focus and voices) and `model_parity::thug2::real` pass.
 
+**8.2, as done (2026-11-17):** `skate3_gate` hosts the real game through the app's own Skate 3 plugins (input,
+physics, presentation, the XR adapter) headless, a tick a frame: a floor and a rail given, placed, pushed, steered,
+flicked into an ollie, held 25 frames; each tick's link, trick text and pose (root, joints, cut) digested
+(`b605958c0fd9cde4`, the same run to run). The script is by frame; the adapter takes the stage and placements in the
+frame's update after its tick, so its harness gives them a frame early.
+
 Shared policies: the driver steps an engine only while `PadHeld.pause` is off (both engines' hold); a step error marks
 the engine failed (THUG2's way; Skate 3 exited the app); whether an engine steps before it has a stage is its own.
 

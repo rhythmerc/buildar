@@ -67,6 +67,8 @@ mod thug2;
 mod model;
 #[cfg(test)]
 mod model_parity;
+#[cfg(all(test, feature = "xr", feature = "retail"))]
+mod skate3_gate;
 
 /// Platform hooks for shared storage (the headset's `Download` folder),
 /// set by the Android entry point: whether the app may read it, and asking
