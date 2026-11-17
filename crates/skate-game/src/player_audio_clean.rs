@@ -228,6 +228,9 @@ struct CleanAudio {
     paused: bool,
     #[cfg(feature = "retail")]
     seen_surfaces: u128,
+    /// What was played, for the tests.
+    #[cfg(test)]
+    log: Vec<String>,
 }
 
 /// What the previous observation said, for edge detection.
@@ -503,6 +506,8 @@ fn setup(
         paused: false,
         #[cfg(feature = "retail")]
         seen_surfaces: 0,
+        #[cfg(test)]
+        log: Vec::new(),
     });
 }
 
@@ -528,6 +533,8 @@ impl CleanAudio {
     }
 
     fn play(&mut self, commands: &mut Commands, shot: Shot, gain: f32) {
+        #[cfg(test)]
+        self.log.push(format!("{shot:?} {gain:?}"));
         let slot = Shot::ALL.iter().position(|&s| s == shot).unwrap_or(0);
         let Some(count) = self
             .shots
@@ -1122,4 +1129,304 @@ mod tests {
         assert!(is_flip("varial_heelflip"));
         assert!(!is_flip("Ollie"));
     }
+}
+
+/// What the driver decides (the shots it plays, its loops' targets), frame by frame, over scripted runs of each
+/// engine: digested, so moving the engines' knowledge out of the driver can be checked to change nothing.
+#[cfg(test)]
+mod parity {
+    use super::*;
+    use std::fmt::Write;
+    use std::time::Duration;
+
+    pub(super) fn bare() -> CleanAudio {
+        CleanAudio {
+            spatial: false,
+            source: Vec3::ZERO,
+            shots: Vec::new(),
+            loops: Vec::new(),
+            emitter: None,
+            voices: Vec::new(),
+            strips: Vec::new(),
+            buffers: Vec::new(),
+            recorded: Vec::new(),
+            wood_loop: false,
+            targets: [(0.0, 1.0); 7],
+            last_pick: [usize::MAX; 8],
+            rng: 0x9E37_79B9,
+            #[cfg(feature = "retail")]
+            previous: None,
+            pending_catch: None,
+            last_land: -1.0,
+            last_wipe: -1.0,
+            paused: false,
+            #[cfg(feature = "retail")]
+            seen_surfaces: 0,
+            log: Vec::new(),
+        }
+    }
+
+    pub(super) fn hints() -> SurfaceHints {
+        SurfaceHints {
+            metal_rails: vec![(Vec3::new(0.0, 0.3, 5.0), Vec3::new(3.0, 0.3, 5.0))],
+            wood_boxes: vec![(Vec3::new(-3.0, 0.0, -3.0), Vec3::new(-1.0, 1.0, -1.0))],
+        }
+    }
+
+    /// Where the scripted skater is at a tick: on the rail while grinding, in the wooden box while sliding.
+    pub(super) fn position(t: u64) -> Vec3 {
+        match t {
+            100..=140 => Vec3::new((t - 100) as f32 * 0.07, 0.35, 5.1),
+            160..=200 => Vec3::new(-2.0, 0.2, -2.0),
+            _ => Vec3::new(t as f32 * 0.01, 0.0, 0.0),
+        }
+    }
+
+    pub(super) const FRAME: Duration = Duration::from_nanos(1_000_000_000 / 72);
+    pub(super) const FRAMES: u64 = 420;
+    /// The frames the game is paused for (a menu): no ticks.
+    pub(super) fn paused(frame: u64) -> bool {
+        (300..330).contains(&frame)
+    }
+
+    /// The ticks due by each frame (60 Hz under 72 Hz frames: none, one or two), none while paused.
+    pub(super) fn ticks() -> Vec<std::ops::Range<u64>> {
+        let (mut out, mut done, mut running) = (Vec::new(), 0, 0u64);
+        for frame in 0..FRAMES {
+            if !paused(frame) {
+                running += 1;
+            }
+            let due = running * 60 / 72;
+            out.push(done..due);
+            done = due;
+        }
+        out
+    }
+
+    pub(super) fn fnv(text: &str) -> u64 {
+        text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
+    }
+
+    pub(super) fn frame_line(out: &mut String, frame: u64, audio: &mut CleanAudio) {
+        let _ = writeln!(out, "{frame}: {:?} {:?} {:?} {:?}", std::mem::take(&mut audio.log), audio.targets, audio.pending_catch, audio.source);
+    }
+
+    #[cfg(feature = "retail")]
+    pub(super) fn observation(t: u64) -> skate3_sim::skate_audio::PlayerAudioObservation {
+        use skate3_sim::skate_audio::{PlayerAudioObservation, RetailAudioInputs};
+        let mut o = PlayerAudioObservation {
+            tick: t,
+            state: 100,
+            board_speed: (t as f32 * 0.1).min(6.0),
+            rider_speed: 0.0,
+            grounded: true,
+            grinding: false,
+            grind_family: 0,
+            grind_substate: 0,
+            grind_audio_surface: 0,
+            grind_impact_speed: 0.0,
+            wiping_out: false,
+            landed: false,
+            landing_impact_speed: 0.0,
+            landing_clean: false,
+            landing_sketchy: false,
+            landing_type: 0,
+            landing_spin: 0.0,
+            landing_sideways_speed: 0.0,
+            footstep_strength: 0.0,
+            footstep_bone: -1,
+            foot_push_speed: 0.0,
+            feet_supported: [false; 2],
+            foot_surface: 0,
+            contact_count: 0,
+            powersliding: false,
+            trick_id: None,
+            trick_identifier: None,
+            animation_name: None,
+            riding_switch: false,
+            riding_fakie: false,
+            nollie: false,
+            wheel_surface: (t / 37) as u32 % 5,
+            events: Vec::new(),
+            frontend_sounds: Vec::new(),
+            retail: RetailAudioInputs::default(),
+        };
+        o.retail.position = position(t).to_array();
+        let air = |o: &mut PlayerAudioObservation, trick: &str| {
+            o.state = 200;
+            o.grounded = false;
+            o.trick_identifier = Some(trick.into());
+        };
+        match t {
+            10..=14 | 40..=44 => o.foot_push_speed = 0.5,
+            60..=69 => air(&mut o, "Ollie"),
+            70..=89 => air(&mut o, "Kickflip"),
+            90 => {
+                o.landed = true;
+                o.landing_impact_speed = -3.5;
+                o.events.push(PhysicsEvent::Landing);
+            }
+            100..=140 => {
+                o.state = 401;
+                o.grinding = true;
+                o.grounded = false;
+            }
+            141..=144 => air(&mut o, "Ollie"),
+            145..=149 => air(&mut o, "Heelflip"),
+            150 => o.events.push(PhysicsEvent::Landing),
+            160..=200 => {
+                o.state = 101;
+                o.powersliding = true;
+            }
+            201..=204 | 210..=215 => {
+                o.state = 300;
+                o.grounded = false;
+                o.wiping_out = t != 203;
+                if t == 201 {
+                    o.events.push(PhysicsEvent::Wipeout);
+                }
+            }
+            205..=209 => o.state = 300,
+            216..=229 => o.board_speed = 0.1,
+            230..=280 => {
+                o.state = 501;
+                o.board_speed = 0.0;
+                o.footstep_strength = if t % 15 < 3 { 0.6 } else { 0.0 };
+            }
+            281..=289 => air(&mut o, "Ollie"),
+            290 | 292 => {
+                o.landed = true;
+                o.landing_impact_speed = -8.0;
+            }
+            300..=310 => {
+                // (a grind the state doesn't name: the flag alone)
+                o.state = 202;
+                o.grounded = false;
+                o.grinding = true;
+            }
+            311..=320 => air(&mut o, "varial_heelflip"),
+            _ => {}
+        }
+        o
+    }
+
+    #[cfg(feature = "retail")]
+    #[test]
+    fn skate3s_sounds_are_decided_as_recorded() {
+        let mut world = World::new();
+        world.init_resource::<Messages<PlayerAudioObservation>>();
+        world.init_resource::<Messages<FrontEndSoundRequest>>();
+        world.insert_resource(bare());
+        world.insert_resource(hints());
+        world.insert_resource(Time::<bevy::time::Real>::default());
+        world.insert_resource(Time::<bevy::time::Virtual>::default());
+        let observe = world.register_system(observe);
+        let frontend = world.register_system(frontend);
+        let mut out = String::new();
+        for (frame, ticks) in ticks().into_iter().enumerate() {
+            let frame = frame as u64;
+            world.resource_mut::<Time<bevy::time::Real>>().update_with_duration(FRAME);
+            let mut virtual_time = world.resource_mut::<Time<bevy::time::Virtual>>();
+            if paused(frame) { virtual_time.pause() } else { virtual_time.unpause() }
+            for t in ticks {
+                world.write_message(PlayerAudioObservation(observation(t)));
+            }
+            if frame == 120 || frame == 121 || frame == 250 {
+                world.write_message(FrontEndSoundRequest(7));
+                world.write_message(FrontEndSoundRequest(8));
+            }
+            world.run_system(observe).unwrap();
+            world.run_system(frontend).unwrap();
+            frame_line(&mut out, frame, &mut world.resource_mut::<CleanAudio>());
+            world.resource_mut::<Messages<PlayerAudioObservation>>().update();
+            world.resource_mut::<Messages<FrontEndSoundRequest>>().update();
+        }
+        let shots = out.matches(|c| c == '"').count() / 2;
+        eprintln!("skate3 clean sounds: {} shots, digest {:016x}", shots, fnv(&out));
+        if std::env::var_os("PARITY_DUMP").is_some() {
+            std::fs::write(std::env::temp_dir().join("skate3-sounds.txt"), &out).unwrap();
+        }
+        assert!(shots > 15, "{out}");
+        assert_eq!(fnv(&out), SKATE3_DIGEST);
+    }
+
+    #[cfg(feature = "retail")]
+    const SKATE3_DIGEST: u64 = 0x8c0d_5464_9b76_2692;
+
+    /// SK8's sounds a frame, scripted.
+    pub(super) fn sk8(frame: u64) -> Sk8Sounds {
+        let t = frame;
+        let mut s = Sk8Sounds {
+            position: position(t),
+            speed: (t as f32 * 0.08).min(7.0),
+            grounded: true,
+            grinding: false,
+            powersliding: false,
+            paused: paused(frame),
+            cues: Vec::new(),
+        };
+        match t {
+            10 | 40 => s.cues.push(Sk8Cue::Push),
+            60 => s.cues.push(Sk8Cue::Pop),
+            70 => {
+                s.grounded = false;
+                s.cues.push(Sk8Cue::Flip);
+            }
+            61..=89 => s.grounded = false,
+            90 => s.cues.push(Sk8Cue::Land(3.5)),
+            100..=140 => {
+                s.grounded = false;
+                s.grinding = true;
+            }
+            141 => {
+                s.grounded = false;
+                s.cues.push(Sk8Cue::Pop);
+            }
+            142..=148 => s.grounded = false,
+            // (a flip into a grind: the catch comes on the rail)
+            149 => {
+                s.grounded = false;
+                s.cues.push(Sk8Cue::Flip);
+            }
+            150..=158 => {
+                s.grounded = false;
+                s.grinding = true;
+            }
+            160..=200 => s.powersliding = true,
+            201 | 210 => {
+                s.grounded = false;
+                s.cues.push(Sk8Cue::Bail);
+            }
+            250 => s.cues.extend([Sk8Cue::Chime, Sk8Cue::Chime]),
+            290 | 292 => s.cues.push(Sk8Cue::Land(8.0)),
+            _ => {}
+        }
+        s
+    }
+
+    #[test]
+    fn sk8s_sounds_are_decided_as_recorded() {
+        let mut world = World::new();
+        world.insert_resource(bare());
+        world.insert_resource(hints());
+        world.insert_resource(Time::<bevy::time::Real>::default());
+        world.init_resource::<Sk8Sounds>();
+        let observe = world.register_system(observe_sk8);
+        let mut out = String::new();
+        for frame in 0..FRAMES {
+            world.resource_mut::<Time<bevy::time::Real>>().update_with_duration(FRAME);
+            world.insert_resource(sk8(frame));
+            world.run_system(observe).unwrap();
+            frame_line(&mut out, frame, &mut world.resource_mut::<CleanAudio>());
+        }
+        let shots = out.matches(|c| c == '"').count() / 2;
+        eprintln!("sk8 sounds: {} shots, digest {:016x}", shots, fnv(&out));
+        if std::env::var_os("PARITY_DUMP").is_some() {
+            std::fs::write(std::env::temp_dir().join("sk8-sounds.txt"), &out).unwrap();
+        }
+        assert!(shots > 10, "{out}");
+        assert_eq!(fnv(&out), SK8_DIGEST);
+    }
+
+    const SK8_DIGEST: u64 = 0x0ca7_f5bd_3fd0_1860;
 }
