@@ -13,6 +13,8 @@ PKG=${PKG:-io.github.rhythmerc.buildar}
 DEST=/sdcard/Android/data/$PKG/files/mkwii
 [ -f "$DISC/sys/main.dol" ] || { echo "no sys/main.dol in $DISC" >&2; exit 1; }
 adb shell mkdir -p "$DEST"
+# (the disc's folders made first: adb push can't make folders under Android/data on the headset, the shell can)
+(cd "$DISC" && find sys files $( [ -d "$DISC/wii_bootstrap" ] && echo wii_bootstrap ) -type d) | sed "s|^|$DEST/|" | xargs adb shell mkdir -p
 adb push --sync "$DISC/sys" "$DEST/"
 adb push --sync "$DISC/files" "$DEST/"
 # (the runtime's own files the library looks for beside the disc - the DSP's coefficients, the NAND's bootstrap: from
