@@ -91,8 +91,9 @@ pub fn set_attach_hook(hook: AttachHook) {
     let _ = ATTACH_HOOK.set(hook);
 }
 
-/// `f` run on this thread attached to the Java VM (`AttachHook`).
-#[cfg_attr(not(feature = "xr"), allow(dead_code))]
+/// `f` run on this thread attached to the Java VM (`AttachHook`). (Unused for now: Meta's keyboard has to be made on
+/// the main thread itself, not on an attached one.)
+#[allow(dead_code)]
 pub(crate) fn attached(f: &mut dyn FnMut()) {
     match ATTACH_HOOK.get() {
         Some(hook) => hook(f),

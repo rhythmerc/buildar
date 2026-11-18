@@ -53,8 +53,11 @@ pub(crate) enum Key {
     Save,
 }
 
-/// The keyboard: its rows (each key with its width in units).
-fn keyboard() -> Vec<Vec<(Key, f32)>> {
+/// The keyboard: its rows (each key with its width in units). With Meta's keyboard up (`meta`), only Cancel and Save.
+fn keyboard(meta: bool) -> Vec<Vec<(Key, f32)>> {
+    if meta {
+        return vec![vec![(Key::Cancel, 2.5), (Key::Save, 2.5)]];
+    }
     let chars = |s: &str| s.chars().map(|c| (Key::Char(c), 1.0)).collect::<Vec<_>>();
     let mut third = vec![(Key::Shift, 1.5)];
     third.extend(chars("zxcvbnm-"));
@@ -131,6 +134,8 @@ pub(crate) struct View {
     focus: Option<Spot>,
     dropdown: Option<(Drop, Vec<RowView>, usize)>,
     rename: Option<Rename>,
+    /// Meta's keyboard is up (the panel shows only Cancel and Save).
+    meta_keys: bool,
 }
 
 /// The course's mode's own words: its name, what it is.
@@ -164,8 +169,35 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
     let mut outcome = Outcome::Stay;
 
     if let Some(mut rename) = details.rename.clone() {
-        // The keyboard: the stick walks the keys, A (or the trigger) presses, B cancels.
-        let keys = keyboard();
+        // Meta's keyboard, where the headset has it (`xr::virtual_keyboard`): asked for each frame; what it typed taken.
+        let (meta, typed) = match world.get_resource_mut::<crate::xr::virtual_keyboard::Typing>() {
+            Some(mut typing) => {
+                typing.wanted = Some(rename.text.clone());
+                (typing.up, std::mem::take(&mut typing.typed))
+            }
+            None => (false, Vec::new()),
+        };
+        let mut saved_by_meta = false;
+        for t in typed {
+            match t {
+                crate::xr::virtual_keyboard::Typed::Text(s) => {
+                    for ch in s.chars() {
+                        if rename.text.chars().count() < NAME_MAX && !ch.is_control() {
+                            rename.text.push(ch);
+                        }
+                    }
+                }
+                crate::xr::virtual_keyboard::Typed::Erase => {
+                    rename.text.pop();
+                }
+                crate::xr::virtual_keyboard::Typed::Enter => saved_by_meta = true,
+            }
+        }
+        // The panel's keys: all of them, or (Meta's keyboard up) only Cancel and Save.
+        let keys = keyboard(meta);
+        if rename.key.0 >= keys.len() {
+            rename.key = (keys.len() - 1, keys[keys.len() - 1].len() - 1);
+        }
         let (mut r, mut c) = rename.key;
         if nav.up {
             r = (r + keys.len() - 1) % keys.len();
@@ -188,8 +220,9 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
         }
         rename.key = (r, c.min(keys[r].len() - 1));
         let press = match pressed {
-            Some(CHit::Key(kr, kc)) => Some(keys[kr][kc].0),
+            Some(CHit::Key(kr, kc)) => keys.get(kr).and_then(|row| row.get(kc)).map(|k| k.0),
             Some(_) => None,
+            None if saved_by_meta => Some(Key::Save),
             None if nav.select => Some(keys[rename.key.0][rename.key.1].0),
             None if nav.back => Some(Key::Cancel),
             None => None,
@@ -290,10 +323,6 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
             Some(Spot::Settings) => world.resource_mut::<ParksScreen>().settings = Some((details.id.clone(), SettingsRow::Size)),
             Some(Spot::Title) => {
                 details.rename = Some(Rename { text: file.name.clone(), shift: false, key: (4, 2) });
-                // (Meta's keyboard, where the headset has it: `xr::virtual_keyboard`)
-                if let Some(mut wanted) = world.get_resource_mut::<crate::xr::virtual_keyboard::Wanted>() {
-                    wanted.0 = true;
-                }
             }
             Some(Spot::Mode) => {
                 let at = mode_rows().iter().position(|(m, ..)| *m == mode).unwrap_or(0);
@@ -407,6 +436,7 @@ pub(super) fn view(world: &World, modal: bool) -> Option<View> {
         focus: (!modal && details.dropdown.is_none() && details.rename.is_none()).then_some(details.focus),
         dropdown,
         rename: details.rename.clone(),
+        meta_keys: world.get_resource::<crate::xr::virtual_keyboard::Typing>().is_some_and(|t| t.up),
     })
 }
 
@@ -535,7 +565,7 @@ pub(super) fn panel(root: &mut Spawner, view: &View, fonts: &Fonts, icons: &Icon
                 BorderColor::all(LINE),
             ))
             .with_children(|picture| match &view.rename {
-                Some(rename) => keys(picture, rename, fonts),
+                Some(rename) => keys(picture, rename, view.meta_keys, fonts),
                 None => {
                     match &view.thumb {
                         Some(thumb) if !view.empty => {
@@ -627,10 +657,13 @@ pub(super) fn panel(root: &mut Spawner, view: &View, fonts: &Fonts, icons: &Icon
 }
 
 /// The keyboard, in the picture's place.
-fn keys(parent: &mut Spawner, rename: &Rename, fonts: &Fonts) {
+fn keys(parent: &mut Spawner, rename: &Rename, meta: bool, fonts: &Fonts) {
     let unit = 74.0;
-    parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(10), align_items: AlignItems::Center, ..default() }).with_children(|board| {
-        for (r, row) in keyboard().iter().enumerate() {
+    parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(if meta { 24 } else { 10 }), align_items: AlignItems::Center, ..default() }).with_children(|board| {
+        if meta {
+            board.spawn((Text::new("Type on the keyboard below the panel"), fonts.body(24.0, 500), TextColor(DIM)));
+        }
+        for (r, row) in keyboard(meta).iter().enumerate() {
             board.spawn(Node { column_gap: px(8), ..default() }).with_children(|line| {
                 for (c, &(key, width)) in row.iter().enumerate() {
                     let on = rename.key == (r, c);
@@ -675,7 +708,7 @@ mod tests {
 
     #[test]
     fn the_stick_walks_the_keys_to_the_key_under_it() {
-        let keys = keyboard();
+        let keys = keyboard(false);
         // (from Space, the bottom row's middle, up: a key in the middle of the row above, 'v' or 'b'; from 'q' down: 'a')
         assert!(matches!(keys[3][column_near(&keys, (4, 1), 3)].0, Key::Char('v' | 'b')));
         assert_eq!(column_near(&keys, (1, 0), 2), 0);
