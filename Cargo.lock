@@ -1810,6 +1810,7 @@ dependencies = [
  "engine-core",
  "gltf",
  "libloading 0.8.9",
+ "mkw-engine",
  "ndk-sys 0.6.0+11769913",
  "openxr",
  "roomtone-sys",
@@ -3403,6 +3404,15 @@ name = "mint"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
+
+[[package]]
+name = "mkw-engine"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+ "glam",
+ "libloading 0.8.9",
+]
 
 [[package]]
 name = "moxcms"

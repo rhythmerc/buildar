@@ -28,6 +28,8 @@ mod engines;
 mod engine_hud;
 #[cfg(feature = "thug2")]
 mod thug2;
+#[cfg(feature = "mkwii")]
+mod mkwii;
 #[cfg(all(feature = "xr", any(feature = "retail", feature = "thug2")))]
 mod model;
 #[cfg(all(test, feature = "xr", any(feature = "retail", feature = "thug2")))]

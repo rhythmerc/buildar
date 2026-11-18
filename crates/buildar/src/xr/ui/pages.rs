@@ -32,7 +32,8 @@ const BUILD_CONTROLS: PageId = "build_controls";
 /// The game data pages: every engine's, and each one's.
 pub(crate) const DATA: PageId = "data";
 #[cfg(any(feature = "retail", feature = "thug2"))]
-const DATA_PAGES: [(Engine, PageId); 3] = [(Engine::Sk8, "data_sk8"), (Engine::Skate3, "data_skate3"), (Engine::Thug2, "data_thug2")];
+const DATA_PAGES: [(Engine, PageId); 4] =
+    [(Engine::Sk8, "data_sk8"), (Engine::Skate3, "data_skate3"), (Engine::Thug2, "data_thug2"), (Engine::Mkwii, "data_mkwii")];
 
 /// Where "put the skater in front of me" aims, real metres ahead of the head.
 const AHEAD_M: f32 = 0.6;
@@ -211,6 +212,7 @@ fn tier_line(engine: Option<Engine>) -> &'static str {
         Some(Engine::Skate3) => "Playing your own Skate 3 data (retail controls and skaters).",
         Some(Engine::Thug2) => "Playing THUG2's own engine, on your copy of the game.",
         Some(Engine::Sk8) => "SK8: every move, value and sound in it was made for this app.",
+        Some(Engine::Mkwii) => "Driving Mario Kart Wii's own code, from your disc.",
         None => "No game yet: bring your own game files (Settings > Game data).",
     }
 }
@@ -223,14 +225,19 @@ pub(crate) fn no_engine(world: &World) -> bool {
 // ---------------------------------------------------------------- engine
 
 /// Each engine's button.
-const ENGINE_IDS: [(&str, Engine); 3] =
-    [("engine_sk8", Engine::Sk8), ("engine_skate3", Engine::Skate3), ("engine_thug2", Engine::Thug2)];
+const ENGINE_IDS: [(&str, Engine); 4] = [
+    ("engine_sk8", Engine::Sk8),
+    ("engine_skate3", Engine::Skate3),
+    ("engine_thug2", Engine::Thug2),
+    ("engine_mkwii", Engine::Mkwii),
+];
 
 fn engine_about(engine: Engine) -> &'static str {
     match engine {
         Engine::Sk8 => "SK8: the clean-room engine, made for this app.",
         Engine::Skate3 => "Skate 3: the faithful port, on your imported Skate 3 data.",
         Engine::Thug2 => "THUG2: the game's own engine (decomp), on your THUG2 files.",
+        Engine::Mkwii => "Mario Kart Wii: the game's own code (WiiCompiled), built from your disc.",
     }
 }
 

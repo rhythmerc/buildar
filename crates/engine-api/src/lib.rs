@@ -35,16 +35,19 @@ pub enum Engine {
     Skate3,
     /// THUG2's own engine (the decomp), on the player's game files.
     Thug2,
+    /// Mario Kart Wii (WiiCompiled's translation of the player's disc), free driving.
+    Mkwii,
 }
 
 impl Engine {
-    pub const ALL: [Engine; 3] = [Engine::Sk8, Engine::Skate3, Engine::Thug2];
+    pub const ALL: [Engine; 4] = [Engine::Sk8, Engine::Skate3, Engine::Thug2, Engine::Mkwii];
 
     pub fn name(self) -> &'static str {
         match self {
             Engine::Sk8 => "SK8",
             Engine::Skate3 => "Skate 3",
             Engine::Thug2 => "THUG2",
+            Engine::Mkwii => "Mario Kart Wii",
         }
     }
 
@@ -54,6 +57,7 @@ impl Engine {
             Engine::Sk8 => "sk8",
             Engine::Skate3 => "skate3",
             Engine::Thug2 => "thug2",
+            Engine::Mkwii => "mkwii",
         }
     }
 
@@ -65,6 +69,7 @@ impl Engine {
     pub fn mode(self) -> Mode {
         match self {
             Engine::Sk8 | Engine::Skate3 | Engine::Thug2 => Mode::Skate,
+            Engine::Mkwii => Mode::Race,
         }
     }
 }

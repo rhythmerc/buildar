@@ -216,6 +216,8 @@ pub(crate) fn add_xr_engines(app: &mut App, files: &std::path::Path, skate3: Opt
     crate::engines::add_engine(app, Engine::Sk8, sk8_available, move |app| add_sk8(app, &sk8_files, true));
     #[cfg(feature = "thug2")]
     crate::thug2::install(app, files);
+    #[cfg(feature = "mkwii")]
+    crate::mkwii::install(app, files);
     let mut engines = app.world_mut().resource_mut::<Engines>();
     engines.shown_if(Engine::Sk8, sk8_shown);
     engines.remember_in(files.to_path_buf(), first);
