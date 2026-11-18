@@ -30,10 +30,12 @@ pub(crate) fn enable(exts: &mut openxr::ExtensionSet) {
     exts.fb_render_model = true;
 }
 
-/// Where the probe is: frames waited, model fetches tried, and whether it's done (made, or given up).
+/// Where the probe is: frames waited, the keyboard being made (on a thread of its own: the call waits on the
+/// runtime, which may want frames to go on meanwhile) or made, model fetches tried, and whether it's done.
 #[derive(Default)]
 struct Probe {
     wait: u32,
+    making: Option<(std::sync::mpsc::Receiver<sys::Result>, std::sync::Arc<std::sync::atomic::AtomicU64>, std::time::Instant)>,
     keyboard: Option<sys::VirtualKeyboardMETA>,
     tries: u32,
     done: bool,
@@ -41,7 +43,17 @@ struct Probe {
 
 const TRIES: u32 = 10;
 
-fn probe(session: Res<OxrSession>, instance: Res<OxrInstance>, system: Option<Res<OxrSystemId>>, wanted: Res<Wanted>, mut state: Local<Probe>) {
+/// (On the app's main thread - `NonSendMarker` - which made the session: the runtime lends that thread's Java handle
+/// to a worker of its own while the call waits, so the call must come from it, the thread then held still. From
+/// another thread the handle is used by two at once, and the runtime's Java calls fail: Android aborts the app.)
+fn probe(
+    _main: bevy::ecs::system::NonSendMarker,
+    session: Res<OxrSession>,
+    instance: Res<OxrInstance>,
+    system: Option<Res<OxrSystemId>>,
+    wanted: Res<Wanted>,
+    mut state: Local<Probe>,
+) {
     if state.done || !wanted.0 {
         return;
     }
@@ -56,6 +68,29 @@ fn probe(session: Res<OxrSession>, instance: Res<OxrInstance>, system: Option<Re
         return;
     };
     let ok = |result: sys::Result, what: &str| if result.into_raw() >= 0 { Ok(()) } else { Err(format!("{what}: {result:?}")) };
+    // (being made: done yet?)
+    if let Some((rx, handle, started)) = &state.making {
+        match rx.try_recv() {
+            Ok(result) => {
+                let ms = started.elapsed().as_secs_f64() * 1000.0;
+                match ok(result, "making the keyboard") {
+                    Ok(()) => {
+                        info!("VKB: keyboard made ({ms:.0} ms, on its own thread)");
+                        state.keyboard = Some(sys::VirtualKeyboardMETA::from_raw(handle.load(std::sync::atomic::Ordering::Acquire)));
+                    }
+                    Err(why) => {
+                        warn!("VKB: {why} ({ms:.0} ms)");
+                        state.done = true;
+                    }
+                }
+                state.making = None;
+            }
+            Err(_) => {
+                info!("VKB: still making the keyboard ({:.1} s)", started.elapsed().as_secs_f64());
+                return;
+            }
+        }
+    }
     if state.keyboard.is_none() {
         // (does this headset have it)
         if let Some(system) = system.as_ref() {
@@ -71,18 +106,22 @@ fn probe(session: Res<OxrSession>, instance: Res<OxrInstance>, system: Option<Re
                 return;
             }
         }
+        // (on the main thread: the runtime uses the Java handle of the thread that made the session, whatever thread
+        // calls it - a thread of our own, attached or not, made Android abort the app)
+        info!("VKB: making the keyboard (main thread: {:?})…", std::thread::current().name());
+        let started = std::time::Instant::now();
         let info = sys::VirtualKeyboardCreateInfoMETA { ty: sys::VirtualKeyboardCreateInfoMETA::TYPE, next: std::ptr::null() };
         let mut keyboard = sys::VirtualKeyboardMETA::NULL;
-        info!("VKB: making the keyboard…");
-        let started = std::time::Instant::now();
         // SAFETY: the session is live; the handle is written.
-        match ok(unsafe { (fns.create_virtual_keyboard)(session.as_raw(), &info, &mut keyboard) }, "making the keyboard") {
+        let result = unsafe { (fns.create_virtual_keyboard)(session.as_raw(), &info, &mut keyboard) };
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        match ok(result, "making the keyboard") {
             Ok(()) => {
-                info!("VKB: keyboard made ({:.0} ms)", started.elapsed().as_secs_f64() * 1000.0);
+                info!("VKB: keyboard made ({ms:.0} ms)");
                 state.keyboard = Some(keyboard);
             }
             Err(why) => {
-                warn!("VKB: {why}");
+                warn!("VKB: {why} ({ms:.0} ms)");
                 state.done = true;
                 return;
             }

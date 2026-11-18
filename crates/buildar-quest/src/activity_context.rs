@@ -36,3 +36,20 @@ pub fn point_ndk_context_at_activity() {
         Err(e) => eprintln!("buildar_quest: failed to re-point ndk_context: {e}"),
     }
 }
+
+/// Runs `f` with this thread attached to the Java VM (`buildar::AttachHook`): a Rust thread calling into Meta's
+/// runtime, which calls Java, must be.
+pub fn run_attached(f: &mut dyn FnMut()) {
+    let Some(app) = bevy::android::ANDROID_APP.get() else {
+        f();
+        return;
+    };
+    let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) };
+    let result = vm.attach_current_thread(|_env| -> jni::errors::Result<()> {
+        f();
+        Ok(())
+    });
+    if let Err(e) = result {
+        eprintln!("buildar_quest: attaching a thread to the VM: {e}");
+    }
+}

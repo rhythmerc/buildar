@@ -118,7 +118,7 @@ actions = ["org.khronos.openxr.OpenXRRuntimeService"]
 
 [package.metadata.android.application]
 label = "buildAR"
-debuggable = true
+debuggable = false
 theme = "@android:style/Theme.Black.NoTitleBar.Fullscreen"
 
 [[package.metadata.android.application.meta_data]]

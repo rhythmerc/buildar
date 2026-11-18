@@ -22,6 +22,8 @@ pub fn main() {
         // engine startup.
         permissions::request_scene_permissions();
         // Room lighting opens a passthrough camera, once the player turns it on.
+        // (threads of the app's own that call into Meta's runtime: attached to the VM)
+        buildar::set_attach_hook(activity_context::run_attached);
         buildar::set_camera_hooks(buildar::CameraHooks {
             has_access: permissions::has_headset_camera,
             request_access: permissions::request_headset_camera,

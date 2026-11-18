@@ -80,6 +80,26 @@ pub struct CameraHooks {
 
 static CAMERA_HOOKS: std::sync::OnceLock<CameraHooks> = std::sync::OnceLock::new();
 
+/// Runs a function with the calling thread attached to the Java VM: a thread of the app's own calling into a runtime
+/// that calls Java (Meta's keyboard) must be, or Android aborts the app. Set by the Android shell; elsewhere the
+/// function just runs.
+pub type AttachHook = fn(&mut dyn FnMut());
+
+static ATTACH_HOOK: std::sync::OnceLock<AttachHook> = std::sync::OnceLock::new();
+
+pub fn set_attach_hook(hook: AttachHook) {
+    let _ = ATTACH_HOOK.set(hook);
+}
+
+/// `f` run on this thread attached to the Java VM (`AttachHook`).
+#[cfg_attr(not(feature = "xr"), allow(dead_code))]
+pub(crate) fn attached(f: &mut dyn FnMut()) {
+    match ATTACH_HOOK.get() {
+        Some(hook) => hook(f),
+        None => f(),
+    }
+}
+
 pub fn set_camera_hooks(hooks: CameraHooks) {
     let _ = CAMERA_HOOKS.set(hooks);
 }
