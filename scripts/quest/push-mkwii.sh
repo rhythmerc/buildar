@@ -15,5 +15,14 @@ DEST=/sdcard/Android/data/$PKG/files/mkwii
 adb shell mkdir -p "$DEST"
 adb push --sync "$DISC/sys" "$DEST/"
 adb push --sync "$DISC/files" "$DEST/"
+# (the runtime's own files the library looks for beside the disc - the DSP's coefficients, the NAND's bootstrap: from
+# WiiCompiled's build output, copied into the disc folder)
+for f in dsp_coef.bin wii_bootstrap; do
+  if [ -e "$DISC/$f" ]; then
+    adb push --sync "$DISC/$f" "$DEST/"
+  else
+    echo "warning: no $f in $DISC (copy it there from WiiCompiled's build output): the game won't boot without it" >&2
+  fi
+done
 adb push --sync "$LIB" "$DEST/libmkw_engine.so"
 echo "Pushed to $DEST: pick Mario Kart Wii in the app (Settings > Engine), or open a track"
