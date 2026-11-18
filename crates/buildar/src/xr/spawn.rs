@@ -158,6 +158,7 @@ fn aim_and_spawn(
 
 fn show_aim(
     aim: Res<Aim>,
+    rig: Res<Rig>,
     mut ray: Query<(&mut Transform, &mut Visibility), (With<AimRay>, Without<AimMarker>)>,
     mut marker: Query<(&mut Transform, &mut Visibility), (With<AimMarker>, Without<AimRay>)>,
 ) {
@@ -171,16 +172,19 @@ fn show_aim(
         *marker_vis = Visibility::Hidden;
         return;
     };
+    // (its thickness and the ring's size: the same in the room at any world scale)
+    let k = super::rig::marker_size(rig.scale);
     let length = start.distance(end).max(1e-3);
     *ray_tf = Transform {
         translation: (start + end) * 0.5,
         rotation: Quat::from_rotation_arc(Vec3::Y, (end - start) / length),
-        scale: Vec3::new(1.0, length, 1.0),
+        scale: Vec3::new(k, length, k),
     };
     *ray_vis = Visibility::Visible;
     if valid {
-        *marker_tf = Transform::from_translation(end + Vec3::Y * 0.03)
-            .with_rotation(Quat::from_rotation_arc(Vec3::Z, Vec3::Y));
+        *marker_tf = Transform::from_translation(end + Vec3::Y * 0.03 * k)
+            .with_rotation(Quat::from_rotation_arc(Vec3::Z, Vec3::Y))
+            .with_scale(Vec3::splat(k));
         *marker_vis = Visibility::Visible;
     } else {
         *marker_vis = Visibility::Hidden;

@@ -34,6 +34,15 @@ impl Rig {
     }
 }
 
+/// The world scale at which what the shared layer draws in the game's space for the player (pointer rays, the rings
+/// they end in) has its size: at any world scale it is drawn that size in the room, not the game's.
+pub(crate) const MARKER_AT_SCALE: f32 = 12.0;
+
+/// How much bigger, in game metres, those are drawn at world scale `scale`, to stay the same real size.
+pub(crate) fn marker_size(scale: f32) -> f32 {
+    scale / MARKER_AT_SCALE
+}
+
 /// The tracking root that puts the world's origin at `anchor` (each engine puts the room where its own game needs it,
 /// inside itself).
 pub(crate) fn root_transform(scale: f32, anchor: Vec3, yaw: f32) -> Transform {
@@ -81,6 +90,16 @@ mod tests {
 
     fn to_world(root: &Transform, tracking: Vec3) -> Vec3 {
         root.transform_point(tracking)
+    }
+
+    #[test]
+    fn a_marker_is_the_same_real_size_at_any_world_scale() {
+        // (a 4 cm ray, in game metres, drawn under the tracking root: its real thickness)
+        let real = |scale: f32| 0.04 * marker_size(scale) / root_transform(scale, Vec3::ZERO, 0.0).scale.x;
+        let at_twelfth = real(MARKER_AT_SCALE);
+        for scale in [1.0, 8.0, 12.0, 120.0] {
+            assert!((real(scale) - at_twelfth).abs() < 1e-7, "at world scale {scale}: {} m", real(scale));
+        }
     }
 
     #[test]

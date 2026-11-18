@@ -72,6 +72,16 @@ impl Engine {
             Engine::Mkwii => Mode::Race,
         }
     }
+
+    /// The world scale a course for it starts at (game metres to a real one): its game at a size that suits a room -
+    /// a skater 1/12 life size, a kart toy-sized (1/8: its game's karts are about 2.5 m long). A course's size is set
+    /// as a multiple of this (x1.0 is this).
+    pub fn default_scale(self) -> f32 {
+        match self {
+            Engine::Sk8 | Engine::Skate3 | Engine::Thug2 => 12.0,
+            Engine::Mkwii => 8.0,
+        }
+    }
 }
 
 /// Whether an engine can run now; `Err` says why not (for the menu).

@@ -8,7 +8,7 @@ use super::{Act, ControlsSheet, Outcome, PageId, UiPage, UiProvider, UiProviders
 use crate::engines::{Engine, Engines};
 use crate::xr::actions::Hand;
 use crate::xr::ar_settings::{ArMode, ArSettings, HudHand};
-use crate::xr::build::{BuildMode, MAX_PARK_SCALE, MAX_PIECE_SCALE, MAX_SCALE, MIN_PARK_SCALE, MIN_PIECE_SCALE, MIN_SCALE, PlacedPieces};
+use crate::xr::build::{BuildMode, MAX_PIECE_SCALE, MIN_PIECE_SCALE, PlacedPieces, size};
 use crate::xr::link::{CurrentStage, PlacePlayer};
 use crate::xr::planes::{RoomMesh, SceneCapture, SceneShapes};
 use crate::xr::rig::Rig;
@@ -547,38 +547,38 @@ fn ar_act(widget: &str, world: &mut World) -> Outcome {
 
 // ---------------------------------------------------------------- build
 
-/// The skater's size against the real room as a 0..1 slider: 1 is life
-/// size, 0 the smallest (the world scale is game metres per real metre).
-pub(crate) fn skater_size_widget(world: &World) -> Widget {
-    let scale = world.resource::<Rig>().scale;
-    let v = 1.0 - scale.ln() / MAX_SCALE.ln();
-    let text = if scale <= 1.01 { "life size".to_string() } else { format!("1/{scale:.0} life size") };
-    Widget::slider("skater_size", "Skater size", v, (0.0, 1.0, 0.01), text)
+/// The open course's size (x1.0: its game's own size for a room, `size`) and
+/// a step either way: the menus' stepper (the parks screen's course settings
+/// has the same). Only the game changes size: every placed piece keeps its
+/// real size, and the player stays on the same real spot.
+pub(crate) fn size_widgets(world: &World) -> [Widget; 3] {
+    let t = size::current_times(world);
+    [
+        Widget::info(format!("Size {} (x1.0: the game's own size for a room)", size::label(t))),
+        Widget::button("size_down", format!("Smaller: {}", size::label(size::stepped(t, -1)))),
+        Widget::button("size_up", format!("Bigger: {}", size::label(size::stepped(t, 1)))),
+    ]
 }
 
-/// Set the skater's size from its slider. Only the skater changes: the world
-/// scale moves and the park scale moves with it, so every placed piece keeps
-/// its real size (and its own scale). The skater stays on the same real spot.
-pub(crate) fn set_skater_size(world: &mut World, v: f32) {
-    let old = world.resource::<Rig>().scale;
-    let scale = MAX_SCALE.powf(1.0 - v).clamp(MIN_SCALE, MAX_SCALE);
-    {
-        let mut placed = world.resource_mut::<PlacedPieces>();
-        placed.park_scale = (placed.park_scale * scale / old).clamp(MIN_PARK_SCALE, MAX_PARK_SCALE);
-    }
-    set_world_scale(world, scale);
+/// The open course a step (a tenth) bigger or smaller.
+pub(crate) fn step_size(world: &mut World, steps: i32) {
+    let t = size::stepped(size::current_times(world), steps);
+    size::set_current_times(world, t);
 }
 
-/// The park-size slider is logarithmic over the wide park range.
+/// The park-size slider is logarithmic over its range (narrower than what a
+/// course's size can take it to: `MIN_PARK_SCALE`).
+const PARK_SLIDER: (f32, f32) = (0.05, 60.0);
+
 fn park_slider(world: &World) -> Widget {
     let park = world.resource::<PlacedPieces>().park_scale;
-    let span = (MAX_PARK_SCALE / MIN_PARK_SCALE).ln();
-    let v = (park / MIN_PARK_SCALE).ln() / span;
+    let span = (PARK_SLIDER.1 / PARK_SLIDER.0).ln();
+    let v = ((park / PARK_SLIDER.0).ln() / span).clamp(0.0, 1.0);
     Widget::slider("park_scale", "Park size (every piece)", v, (0.0, 1.0, 0.005), format!("{park:.2}x"))
 }
 
 fn park_from_slider(v: f32) -> f32 {
-    (MIN_PARK_SCALE * ((MAX_PARK_SCALE / MIN_PARK_SCALE).ln() * v).exp()).clamp(MIN_PARK_SCALE, MAX_PARK_SCALE)
+    (PARK_SLIDER.0 * ((PARK_SLIDER.1 / PARK_SLIDER.0).ln() * v).exp()).clamp(PARK_SLIDER.0, PARK_SLIDER.1)
 }
 
 /// The world's scale (the player is put back on the same real spot once it settles: `xr::link`).
@@ -591,9 +591,9 @@ fn build_widgets(world: &World) -> Vec<Widget> {
     let placed = world.resource::<PlacedPieces>();
     let mut w = vec![
         Widget::button("build", "Start building (hold the menu button 1 s to stop)"),
-        skater_size_widget(world),
-        park_slider(world),
     ];
+    w.extend(size_widgets(world));
+    w.push(park_slider(world));
     match placed.selected.and_then(|id| placed.items.iter().find(|p| p.id == id)) {
         Some(item) => w.extend([
             Widget::info(format!("Selected: {} (the last piece pointed at)", item.name())),
@@ -631,8 +631,8 @@ fn build_act(widget: &str, act: Act, world: &mut World) -> Option<Outcome> {
             world.resource_mut::<BuildMode>().active = true;
             Outcome::Close
         }
-        "skater_size" => {
-            set_skater_size(world, value?);
+        "size_down" | "size_up" => {
+            step_size(world, if widget == "size_up" { 1 } else { -1 });
             Outcome::Stay
         }
         "park_scale" => {

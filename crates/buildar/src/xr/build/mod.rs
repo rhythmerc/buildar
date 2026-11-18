@@ -38,6 +38,7 @@ pub(crate) mod pool_shadow;
 mod legend;
 pub(crate) mod parks;
 pub(crate) mod pieces;
+pub(crate) mod size;
 mod snap;
 
 use self::pieces::{drawn, Finish, MAX_SIZE, MIN_SIZE, Piece, PieceGeometry, PieceKind, Tint};
@@ -67,16 +68,18 @@ const SIZE_STEP: f32 = 0.05;
 /// World scale change per second at full stick deflection (multiplicative).
 const SCALE_RATE: f32 = 1.0;
 /// Park scale: every placed piece is this many times its authored size.
-/// Wide, because "skater size" changes it the other way to keep every piece
-/// its real size while the skater grows or shrinks (world scale 1..60).
-pub(crate) const MIN_PARK_SCALE: f32 = 0.05;
-pub(crate) const MAX_PARK_SCALE: f32 = 60.0;
+/// Wide, because a course's size changes it the other way to keep every
+/// piece its real size while the game grows or shrinks in the room (its
+/// world scale over 150 times), from wherever its pieces were sized.
+pub(crate) const MIN_PARK_SCALE: f32 = 0.005;
+pub(crate) const MAX_PARK_SCALE: f32 = 600.0;
 /// One piece's own uniform scale, on top of the park scale.
 pub(crate) const MIN_PIECE_SCALE: f32 = 0.25;
 pub(crate) const MAX_PIECE_SCALE: f32 = 4.0;
-/// Game metres per real metre: 1 is life size, 60 is a tiny toy.
-pub(crate) const MIN_SCALE: f32 = 1.0;
-pub(crate) const MAX_SCALE: f32 = 60.0;
+/// Game metres per real metre: 1 is life size. The outer bounds of every
+/// engine's sizes (`size`: x0.1 to x15 of its own, 8 to 12).
+pub(crate) const MIN_SCALE: f32 = 0.5;
+pub(crate) const MAX_SCALE: f32 = 120.0;
 const STICK_DEADZONE: f32 = 0.25;
 /// The right grip held this long on the selected piece picks it up.
 const MOVE_HOLD_SECONDS: f32 = 0.25;
@@ -1514,7 +1517,7 @@ fn describe(
     use legend::Row;
     let mut next = legend::Legend::default();
     if let Some(job) = &placing.0 {
-        let size = if rig.scale <= 1.01 { "life size".to_string() } else { format!("skater 1/{:.0} life size", rig.scale) };
+        let size = size::label(size::times(rig.scale, job.default));
         next.right = vec![
             Row::new("Pointer", if job.at.is_some() { "on the floor, a table or a shelf" } else { "point at the floor or a table" }),
             Row::new("Stick ↔", "turn the park"),
@@ -1943,7 +1946,7 @@ fn place_park(world: &mut World, mut previous: Local<Option<(bool, bool)>>) {
     }
     if ry.abs() > STICK_DEADZONE && ry.abs() > rx.abs() {
         // (up: a bigger park, and skater, in the room: fewer game metres to the real one)
-        job.scale = (job.scale * (-ry * SCALE_RATE * dt).exp()).clamp(MIN_SCALE, MAX_SCALE);
+        job.scale = size::clamped(job.scale * (-ry * SCALE_RATE * dt).exp(), job.default);
     }
     world.resource_mut::<Rig>().scale = job.scale;
     let Some(root) = world.resource::<Rig>().root_transform() else { return };
@@ -2642,11 +2645,13 @@ fn show_build(
     // Ray.
     match state.ray.filter(|_| mode.active || state.placing) {
         Some((start, end, _)) => {
+            // (its thickness and the ring's size: the same in the room at any world scale)
+            let k = crate::xr::rig::marker_size(rig.scale);
             let length = start.distance(end).max(1e-3);
             *ray_tf = Transform {
                 translation: (start + end) * 0.5,
                 rotation: Quat::from_rotation_arc(Vec3::Y, (end - start) / length),
-                scale: Vec3::new(1.0, length, 1.0),
+                scale: Vec3::new(k, length, k),
             };
             *ray_vis = Visibility::Visible;
         }
@@ -2655,8 +2660,10 @@ fn show_build(
     // A ring on the piece the ray is on: grip moves it, B deletes it.
     match placed.pointed.and(state.ray).filter(|_| mode.active && placed.dragging.is_none()) {
         Some((_, end, _)) => {
-            *marker_tf = Transform::from_translation(end + Vec3::Y * 0.05)
-                .with_rotation(Quat::from_rotation_arc(Vec3::Z, Vec3::Y));
+            let k = crate::xr::rig::marker_size(rig.scale);
+            *marker_tf = Transform::from_translation(end + Vec3::Y * 0.05 * k)
+                .with_rotation(Quat::from_rotation_arc(Vec3::Z, Vec3::Y))
+                .with_scale(Vec3::splat(k));
             *marker_vis = Visibility::Visible;
         }
         None => *marker_vis = Visibility::Hidden,

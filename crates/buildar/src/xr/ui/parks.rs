@@ -14,7 +14,7 @@ use super::pointer::UiPointer;
 use crate::xr::build::anchor::Anchors;
 use crate::engines::{Engine, Engines, Mode};
 use crate::xr::build::parks::{self as park, EngineFit, Here, ParkFile, Parks};
-use crate::xr::build::BuildMode;
+use crate::xr::build::{BuildMode, size};
 use crate::xr::panel::XrPanel;
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
@@ -67,6 +67,9 @@ enum Hit {
     More(usize),
     MenuRow(usize),
     Confirm(bool),
+    /// The course settings: its size a step bigger (true) or smaller, and Done.
+    SizeStep(bool),
+    SettingsDone,
     /// Around an open menu: closes it.
     Backdrop,
 }
@@ -123,6 +126,7 @@ enum Line {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum MenuAction {
+    Settings,
     Duplicate,
     PlaceElsewhere,
     Forget,
@@ -132,6 +136,7 @@ enum MenuAction {
 impl MenuAction {
     fn label(self) -> &'static str {
         match self {
+            Self::Settings => "Course settings",
             Self::Duplicate => "Duplicate",
             Self::PlaceElsewhere => "Put it somewhere else",
             Self::Forget => "Forget it in this room",
@@ -153,12 +158,33 @@ struct Model {
     menu: Option<(String, Vec<MenuAction>, usize)>,
     /// A park about to be deleted: its name, and which button is chosen.
     confirm: Option<(String, bool)>,
+    /// A course's settings open.
+    settings: Option<SettingsView>,
     /// The engine running, and (open) the dropdown's rows and the one chosen.
     engine: Option<(String, Option<(Vec<EngineRow>, usize)>)>,
     /// A park built for an engine that isn't installed: that engine's name, and whether "Play with current engine"
     /// is chosen.
     warning: Option<(String, bool)>,
     status: String,
+}
+
+/// A course's settings as shown: its title, its name, its size and whether it can go smaller and
+/// bigger, and the row chosen (the size, Done).
+#[derive(Clone, PartialEq, Debug)]
+struct SettingsView {
+    title: String,
+    name: String,
+    size: String,
+    smaller: bool,
+    bigger: bool,
+    row: SettingsRow,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+enum SettingsRow {
+    #[default]
+    Size,
+    Done,
 }
 
 /// An engine in the dropdown.
@@ -191,6 +217,10 @@ pub(crate) struct ParksScreen {
     menu: Option<(String, usize)>,
     /// The park asked to be deleted, and whether "Delete" is chosen.
     confirm: Option<(String, bool)>,
+    /// The course whose settings are open, the row chosen, and how long the trigger has been held on a stepper
+    /// button (it repeats, as a held stick does).
+    settings: Option<(String, SettingsRow)>,
+    step_held: f32,
     /// The engine dropdown is open: the row chosen.
     engines: Option<usize>,
     /// A park whose engine isn't installed, what opening it was going to do, and whether "Play with current engine"
@@ -361,7 +391,7 @@ fn moved(focus: Focus, nav: &Nav, items: &[Item], lines: &[Line]) -> Focus {
 }
 
 fn menu_for(here: Here, current: bool) -> Vec<MenuAction> {
-    let mut rows = vec![MenuAction::Duplicate, MenuAction::PlaceElsewhere];
+    let mut rows = vec![MenuAction::Settings, MenuAction::Duplicate, MenuAction::PlaceElsewhere];
     // (the open park is kept here: forgetting it would only anchor it again)
     if here == Here::Found && !current {
         rows.push(MenuAction::Forget);
@@ -485,9 +515,9 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
     let pressed = |hit: Option<Hit>| if point.click { hit } else { None };
     let mut outcome = Outcome::Stay;
 
-    let (menu, confirm, warning, dropdown) = {
+    let (menu, confirm, warning, dropdown, settings) = {
         let screen = world.resource::<ParksScreen>();
-        (screen.menu.clone(), screen.confirm.clone(), screen.warning.clone(), screen.engines)
+        (screen.menu.clone(), screen.confirm.clone(), screen.warning.clone(), screen.engines, screen.settings.clone())
     };
     let rows = engine_rows(world, mode);
     if let Some((id, then, play)) = warning {
@@ -549,6 +579,42 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
             Some(None) => None,
             None => Some(row),
         };
+    } else if let Some((id, row)) = settings {
+        // A course's settings: its size stepped (left/right on its row, or the laser's -/+, held to repeat), Done.
+        let mut row = row;
+        if nav.up || nav.down {
+            row = if row == SettingsRow::Size { SettingsRow::Done } else { SettingsRow::Size };
+        }
+        match hovered {
+            Some(Hit::SizeStep(_)) => row = SettingsRow::Size,
+            Some(Hit::SettingsDone) => row = SettingsRow::Done,
+            _ => {}
+        }
+        let dt = world.resource::<Time<Real>>().delta_secs();
+        let mut steps = 0;
+        if row == SettingsRow::Size {
+            steps += i32::from(nav.right) - i32::from(nav.left);
+        }
+        let held_on = match hovered {
+            Some(Hit::SizeStep(up)) if point.held || point.click => Some(up),
+            _ => None,
+        };
+        {
+            let mut screen = world.resource_mut::<ParksScreen>();
+            if super::repeat(&mut screen.step_held, held_on.is_some(), dt) {
+                steps += if held_on == Some(true) { 1 } else { -1 };
+            }
+        }
+        if steps != 0 {
+            let t = size::stepped(size::course_times(world, &id), steps);
+            size::set_course_times(world, &id, t);
+        }
+        let close = match pressed(hovered) {
+            Some(Hit::SettingsDone | Hit::Backdrop) => true,
+            Some(_) => false,
+            None => (nav.select && row == SettingsRow::Done) || nav.back || nav.more,
+        };
+        world.resource_mut::<ParksScreen>().settings = if close { None } else { Some((id, row)) };
     } else if let Some((id, delete)) = confirm {
         // Delete it? Delete / Keep it.
         let mut delete = delete;
@@ -609,6 +675,10 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
         if let Some(action) = action {
             world.resource_mut::<ParksScreen>().menu = None;
             outcome = match action {
+                MenuAction::Settings => {
+                    world.resource_mut::<ParksScreen>().settings = Some((id, SettingsRow::Size));
+                    Outcome::Stay
+                }
                 MenuAction::Duplicate => match park::duplicate(world, &id) {
                     Some(_) => Outcome::Say("Copied".into()),
                     None => Outcome::Stay,
@@ -716,11 +786,22 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
         (name(&id), rows, row)
     });
     let confirm = confirm.map(|(id, delete)| (name(&id), delete));
+    let settings = world.resource::<ParksScreen>().settings.clone().map(|(id, row)| {
+        let t = size::course_times(world, &id);
+        SettingsView {
+            title: "Course settings".into(),
+            name: name(&id),
+            size: size::label(t),
+            smaller: size::stepped(t, -1) < t,
+            bigger: size::stepped(t, 1) > t,
+            row,
+        }
+    });
     let status = {
         let ui = world.resource::<XrUi>();
         if ui.status.1 > 0.0 { ui.status.0.clone() } else { String::new() }
     };
-    let model = Model { tab, items, lines, first, focus: Some(focus), menu, confirm, engine, warning, status };
+    let model = Model { tab, items, lines, first, focus: Some(focus), menu, confirm, settings, engine, warning, status };
     let mut screen = world.resource_mut::<ParksScreen>();
     screen.first = first;
     screen.model = model;
@@ -1074,6 +1155,9 @@ pub(super) fn draw(world: &mut World) {
                 }
             });
         }
+        if let Some(view) = &model.settings {
+            settings_box(root, view, &fonts);
+        }
         if let Some((engine, play)) = &model.warning {
             modal_box(root, 640.0, |b| {
                 b.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(12), padding: UiRect::new(px(18), px(18), px(14), px(6)), ..default() }).with_children(|words| {
@@ -1215,6 +1299,79 @@ fn modal_box(root: &mut Spawner, width: f32, body: impl FnOnce(&mut Spawner)) {
             ))
             .with_children(body);
     });
+}
+
+/// A course's settings, over the cards: its size, a stepper (-, the size, +), and Done.
+fn settings_box(root: &mut Spawner, view: &SettingsView, fonts: &Fonts) {
+    modal_box(root, 680.0, |b| {
+        b.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::new(px(18), px(18), px(14), px(14)), ..default() }).with_children(|words| {
+            words.spawn((Text::new(view.title.clone()), fonts.display(28.0, 800), TextColor(Color::WHITE)));
+            words.spawn((Text::new(fitted(&view.name)), fonts.body(19.0, 500), TextColor(DIM)));
+        });
+        let on = view.row == SettingsRow::Size;
+        b.spawn((
+            Node {
+                width: percent(100),
+                padding: UiRect::axes(px(18), px(14)),
+                column_gap: px(18),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                border_radius: BorderRadius::all(px(12)),
+                ..default()
+            },
+            BackgroundColor(if on { SELECTED } else { CARD }),
+        ))
+        .with_children(|row| {
+            row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), flex_shrink: 1.0, ..default() }).with_children(|words| {
+                words.spawn((Text::new("Size"), fonts.display(22.0, 700), TextColor(Color::WHITE)));
+                words.spawn((Text::new("x1.0 is the game's own size for a room"), fonts.body(17.0, 400), TextColor(if on { Color::WHITE } else { DIM })));
+            });
+            row.spawn(Node { column_gap: px(12), align_items: AlignItems::Center, flex_shrink: 0.0, ..default() }).with_children(|stepper| {
+                step_button(stepper, false, view.smaller, fonts);
+                stepper
+                    .spawn(Node { width: px(96), justify_content: JustifyContent::Center, ..default() })
+                    .with_children(|v| {
+                        v.spawn((Text::new(view.size.clone()), fonts.display(28.0, 800), TextColor(TEAL)));
+                    });
+                step_button(stepper, true, view.bigger, fonts);
+            });
+        });
+        b.spawn(Node { padding: UiRect::all(px(18)), justify_content: JustifyContent::FlexEnd, ..default() }).with_children(|buttons| {
+            let on = view.row == SettingsRow::Done;
+            buttons
+                .spawn((
+                    Hit::SettingsDone,
+                    Node { padding: UiRect::axes(px(30), px(12)), border_radius: BorderRadius::all(px(99)), border: UiRect::all(px(1)), ..default() },
+                    BackgroundColor(if on { TEAL } else { Color::NONE }),
+                    BorderColor::all(if on { TEAL } else { LINE }),
+                ))
+                .with_children(|b| {
+                    b.spawn((Text::new("Done"), fonts.display(22.0, 700), TextColor(if on { INK } else { DIM })));
+                });
+        });
+    });
+}
+
+/// A stepper's round button: a step bigger ("+") or smaller ("−"); greyed at its end.
+fn step_button(parent: &mut Spawner, bigger: bool, can: bool, fonts: &Fonts) {
+    parent
+        .spawn((
+            Hit::SizeStep(bigger),
+            Node {
+                width: px(54),
+                height: px(54),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(27)),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+            BorderColor::all(if can { TEAL } else { LINE }),
+        ))
+        .with_children(|b| {
+            b.spawn((Text::new(if bigger { "+" } else { "\u{2212}" }), fonts.display(30.0, 700), TextColor(if can { Color::WHITE } else { OFF })));
+        });
 }
 
 /// A round button on a card: play (filled) or the pencil.
@@ -1488,8 +1645,9 @@ mod tests {
         // isn't in the app, opened)
         let dropdown = std::env::var_os("SK8_UI_SHOT_ENGINES").is_some();
         let warning = std::env::var_os("SK8_UI_SHOT_WARNING").is_some();
-        // (`SK8_UI_SHOT_TAB=1`: the Tracks tab)
+        // (`SK8_UI_SHOT_TAB=1`: the Tracks tab; `SK8_UI_SHOT_SETTINGS=1`: a park's settings open)
         let tracks = std::env::var_os("SK8_UI_SHOT_TAB").is_some();
+        let settings = std::env::var_os("SK8_UI_SHOT_SETTINGS").is_some();
         if warning {
             app.world_mut().resource_mut::<Parks>().list[1].file.engine = Some("skate3".into());
         }
@@ -1512,6 +1670,9 @@ mod tests {
                         }
                         if warning {
                             screen.warning = Some(("b".into(), Then::Open(false), false));
+                        }
+                        if settings && screen.settings.is_none() {
+                            screen.settings = Some(("b".into(), SettingsRow::Size));
                         }
                     }
                     frame(world, Nav::default(), &UiPointer::default());

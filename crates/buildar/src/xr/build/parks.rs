@@ -307,7 +307,7 @@ impl Parks {
         self.list.iter().find(|p| p.id == id)
     }
 
-    fn get_mut(&mut self, id: &str) -> Option<&mut ParkEntry> {
+    pub(crate) fn get_mut(&mut self, id: &str) -> Option<&mut ParkEntry> {
         self.list.iter_mut().find(|p| p.id == id)
     }
 
@@ -346,7 +346,7 @@ impl Parks {
         order
     }
 
-    fn save(&mut self, id: &str) {
+    pub(crate) fn save(&mut self, id: &str) {
         let (Some(dir), Some(entry)) = (self.dir.clone(), self.get_mut(id)) else { return };
         entry.edits += 1;
         if let Err(e) = write(&dir, id, &entry.file) {
@@ -366,8 +366,9 @@ pub(crate) struct PlaceJob {
     pub pieces: Vec<Placed>,
     pub pivot: Vec3,
     pub yaw: f32,
-    /// The world scale it is being put at.
+    /// The world scale it is being put at, and its engine's own (x1.0: `size`).
     pub scale: f32,
+    pub default: f32,
     /// Where it is now (tracking space), if the pointer is on a surface.
     pub at: Option<Vec3>,
     /// What was open before, to go back to if it is let go.
@@ -605,7 +606,7 @@ pub(crate) fn use_its_engine(world: &mut World, id: &str) {
 
 /// For a course of `mode`: the running engine if it is of that mode, else the first of that mode the menus offer
 /// that can run.
-fn engine_of_mode(world: &World, mode: Mode) -> Option<Engine> {
+pub(crate) fn engine_of_mode(world: &World, mode: Mode) -> Option<Engine> {
     let engines = world.get_resource::<Engines>()?;
     if engines.current().is_some_and(|e| e.mode() == mode) {
         return engines.current();
@@ -662,7 +663,8 @@ pub(crate) fn start_placing(world: &mut World, id: &str, edit: bool) -> bool {
         placed.park_scale = file.park_scale.clamp(MIN_PARK_SCALE, MAX_PARK_SCALE);
     }
     world.resource_mut::<Parks>().current = None;
-    world.resource_mut::<Placing>().0 = Some(PlaceJob { id: id.to_string(), edit, pivot: pivot(&file.pieces), pieces: file.pieces, yaw, scale, at: None, before, turned: false });
+    let default = super::size::default_of(world, &file);
+    world.resource_mut::<Placing>().0 = Some(PlaceJob { id: id.to_string(), edit, pivot: pivot(&file.pieces), pieces: file.pieces, yaw, scale, default, at: None, before, turned: false });
     info!("PARKS putting {id} down");
     true
 }
@@ -716,7 +718,8 @@ pub(crate) fn courses_name(mode: Mode) -> &'static str {
 
 /// A new course of `mode`, empty, opened here to build.
 pub(crate) fn new_park(world: &mut World, mode: Mode) -> String {
-    let scale = world.resource::<Rig>().scale;
+    // (at its engine's own size, x1.0)
+    let scale = engine_of_mode(world, mode).map_or(Engine::Skate3.default_scale(), Engine::default_scale);
     let id = {
         let mut parks = world.resource_mut::<Parks>();
         let id = new_id(&parks.list);
@@ -807,6 +810,35 @@ mod tests {
     }
 
     #[test]
+    fn a_closed_course_resized_and_back_is_as_it_was_and_the_same_real_size() {
+        use crate::xr::build::size::{MAX_TIMES, MIN_TIMES, resize_file, times};
+        let mut file = ParkFile {
+            version: VERSION,
+            name: "Track".into(),
+            created: 1,
+            opened: 1,
+            pieces: vec![piece(1, [8.0, 0.0, -16.0], 0.0)],
+            scale: 8.0,
+            park_scale: 0.4,
+            anchors: vec![AnchorRecord { uuid: "a".into(), offset: [0.0; 3], turn: 0.0, scale: 8.0, placed: 0 }],
+            engine: None,
+            engine_settings: None,
+            mode: "race".into(),
+        };
+        // (each piece's real place and size: game metres over the scale)
+        let real = |f: &ParkFile| (Vec3::from_array(f.pieces[0].position) / f.scale, f.park_scale / f.scale);
+        let before = real(&file);
+        for t in [MAX_TIMES, MIN_TIMES, 2.5] {
+            resize_file(&mut file, t, 8.0);
+            assert!((times(file.scale, 8.0) - t).abs() < 1e-4);
+            assert!((real(&file).0 - before.0).length() < 1e-4 && (real(&file).1 - before.1).abs() < 1e-6, "the same real size at x{t}");
+            assert!((file.anchors[0].scale - file.scale).abs() < 1e-3, "its room's record follows");
+        }
+        resize_file(&mut file, 1.0, 8.0);
+        assert!((file.park_scale - 0.4).abs() < 1e-5 && near(file.pieces[0].position, Vec3::new(8.0, 0.0, -16.0)), "back as it was");
+    }
+
+    #[test]
     fn a_park_goes_into_the_room_and_back_unchanged() {
         let pieces = vec![piece(1, [0.0, 0.0, 0.0], 0.0), piece(2, [8.0, 2.0, -4.0], 0.5)];
         let pose = ParkPose { at: Vec3::new(1.0, 0.7, -2.0), yaw: 1.2 };
@@ -844,7 +876,7 @@ mod tests {
     fn a_park_is_held_under_its_middle_and_put_where_the_pointer_is() {
         let pieces = vec![piece(1, [-4.0, 0.0, 2.0], 0.0), piece(2, [6.0, 1.0, -2.0], 0.0)];
         assert_eq!(pivot(&pieces), Vec3::new(1.0, 0.0, 0.0));
-        let job = PlaceJob { id: "p".into(), edit: false, pivot: pivot(&pieces), pieces: pieces.clone(), yaw: 0.7, scale: 4.0, at: None, before: None, turned: false };
+        let job = PlaceJob { id: "p".into(), edit: false, pivot: pivot(&pieces), pieces: pieces.clone(), yaw: 0.7, scale: 4.0, default: 12.0, at: None, before: None, turned: false };
         let at = Vec3::new(0.3, 0.74, -1.5);
         let pose = job.pose(at);
         // Its middle, at its lowest, is where the pointer is.

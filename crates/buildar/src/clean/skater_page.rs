@@ -15,7 +15,7 @@
 //!   (how far a rail is caught from) times it.
 use super::menu::Menu;
 use super::sim::CleanSkate;
-use crate::xr::ui::pages::{CONTROLS, set_skater_size, skater_size_widget};
+use crate::xr::ui::pages::{CONTROLS, size_widgets, step_size};
 use crate::xr::ui::{Act, Outcome, PageId, UiPage, UiProvider, Widget};
 use bevy::prelude::*;
 
@@ -75,7 +75,7 @@ impl UiProvider for CleanPages {
         }
         let sim = world.resource::<CleanSkate>();
         let menu = world.resource::<Menu>();
-        let mut w = vec![skater_size_widget(world)];
+        let mut w = Vec::from(size_widgets(world));
         for (id, label, range) in SLIDERS {
             let k = multiple(sim, id);
             w.push(Widget::slider(id, label, k, range, format!("{k:.2}x")));
@@ -99,7 +99,8 @@ impl UiProvider for CleanPages {
             return None;
         }
         match (widget, act) {
-            ("skater_size", Act::Set(v)) => set_skater_size(world, v),
+            ("size_down", _) => step_size(world, -1),
+            ("size_up", _) => step_size(world, 1),
             ("no_bail", _) => {
                 let mut menu = world.resource_mut::<Menu>();
                 let on = !menu.never_bail();
