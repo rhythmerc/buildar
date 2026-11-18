@@ -206,10 +206,12 @@ fn want(
 
 /// The pass reads the eye views' depth: their depth textures must allow it,
 /// from before they are first made.
-fn readable_eye_depth(add: On<Add, XrCamera>, mut cameras: Query<&mut Camera3d>) {
+fn readable_eye_depth(add: On<Add, XrCamera>, mut cameras: Query<&mut Camera3d>, mut commands: Commands) {
     if let Ok(mut camera) = cameras.get_mut(add.entity) {
         camera.depth_texture_usages = (TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING).into();
     }
+    // (2x: at 4x the eyes' passes were mostly moving their samples in and out of the GPU's tile memory)
+    commands.entity(add.entity).insert(Msaa::Sample2);
 }
 
 /// The depth provider and its images, once made, and the latest image.
@@ -299,7 +301,7 @@ struct Moves {
 
 /// The squares each way of the sheet the hands are moved on as
 /// (`occlusion_advance.wgsl`'s `SQUARES`).
-const ADVANCE_SQUARES: u32 = 160;
+const ADVANCE_SQUARES: u32 = 80;
 
 /// How old what the player sees of the room is when it is shown (the
 /// passthrough's own wait, by others' measurements): the hands are moved

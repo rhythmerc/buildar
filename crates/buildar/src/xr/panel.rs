@@ -93,6 +93,8 @@ fn setup(
                 ..default()
             },
             RenderTarget::Image(image.clone().into()),
+            // (UI draws its own smooth edges: the default 4x was a multisampled colour and depth pass for nothing)
+            Msaa::Off,
         ))
         .id();
     commands.spawn((

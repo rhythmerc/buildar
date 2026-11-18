@@ -146,8 +146,10 @@ fn base(@builtin(position) position: vec4<f32>) -> @builtin(frag_depth) f32 {
     return select(raw, depth_of(behind), behind > 0.0);
 }
 
-// The sheet's squares: this many each way, two texels to a side.
-const SQUARES: u32 = 160u;
+// The sheet's squares: this many each way, STEP texels to a side. (Four: at two, 160 each way, its 51 200 triangles
+// an eye cost 0.7 ms an eye just to set up on the headset.)
+const SQUARES: u32 = 80u;
+const STEP: u32 = 4u;
 
 @vertex
 fn mesh(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
@@ -162,7 +164,7 @@ fn mesh(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
     var moving = false;
     var mine = vec3(0.0);
     for (var c = 0u; c < 4u; c++) {
-        let at = min(vec2<i32>((cell + vec2(c % 2u, c / 2u)) * 2u), size - 1);
+        let at = min(vec2<i32>((cell + vec2(c % 2u, c / 2u)) * STEP), size - 1);
         let z = metres(textureLoad(room_depth, at, 0));
         nearest = min(nearest, z);
         farthest = max(farthest, z);
