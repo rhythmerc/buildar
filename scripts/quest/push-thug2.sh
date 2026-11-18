@@ -33,4 +33,7 @@ adb shell sh /data/local/tmp/thug2-mkdirs.sh
 adb shell rm /data/local/tmp/thug2-mkdirs.sh
 rm -f "$STAGE.mkdirs.sh"
 adb push --sync "$STAGE/." "$DEST/"
+# (what adb pushes is the shell's: opened to the app, which isn't in its group - other apps are still kept out of
+# Android/data by the storage layer)
+adb shell chmod -R a+rwX "$DEST"
 echo "Pushed to $DEST: pick THUG2 in Settings > Engine"

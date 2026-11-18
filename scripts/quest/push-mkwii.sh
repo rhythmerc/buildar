@@ -27,4 +27,7 @@ for f in dsp_coef.bin wii_bootstrap; do
   fi
 done
 adb push --sync "$LIB" "$DEST/libmkw_engine.so"
+# (what adb pushes is the shell's: opened to the app, which isn't in its group - other apps are still kept out of
+# Android/data by the storage layer)
+adb shell chmod -R a+rwX "$DEST"
 echo "Pushed to $DEST: pick Mario Kart Wii in the app (Settings > Engine), or open a track"

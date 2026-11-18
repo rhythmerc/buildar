@@ -25,4 +25,7 @@ if [ -n "$CACHE" ]; then
 fi
 # With the data there the app carries Skate 3 (switched in Settings > Engine); this starts the next launch on it.
 adb shell "printf skate3 > '$DEST/engine.txt'"
+# (what adb pushes is the shell's: opened to the app, which isn't in its group - other apps are still kept out of
+# Android/data by the storage layer)
+adb shell chmod -R a+rwX "$DEST/assets" "$DEST/Skate3RustEngine" 2>/dev/null || true
 echo "Pushed to $DEST; the next launch loads this data and starts on Skate 3 (Settings > Engine switches)"
