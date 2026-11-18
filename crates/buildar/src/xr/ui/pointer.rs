@@ -28,8 +28,9 @@ pub(crate) struct UiPointer {
     pub click: bool,
     /// The trigger is held.
     pub held: bool,
-    /// Tracking-space beam (from, to) and whether it ends on the panel.
-    beam: Option<(Vec3, Vec3, bool)>,
+    /// Tracking-space beams (from, to) and whether each ends on something (the panel, or Meta's keyboard): the
+    /// right controller's, and (with Meta's keyboard up, which both type on) the left's.
+    beams: [Option<(Vec3, Vec3, bool)>; 2],
 }
 
 /// A drag starts this close to a slider bar's ends, panel pixels.
@@ -95,6 +96,7 @@ pub(super) fn aim(
     panel: Res<XrPanel>,
     ui: Res<XrUi>,
     hands: Query<(&Hand, &Transform)>,
+    typing: Option<Res<crate::xr::virtual_keyboard::Typing>>,
     rows: Query<(&UiRow, &ComputedNode, &UiGlobalTransform)>,
     bars: Query<(&UiBar, &ComputedNode, &UiGlobalTransform)>,
     graphs: Query<(&ComputedNode, &UiGlobalTransform), With<UiGraph>>,
@@ -112,7 +114,17 @@ pub(super) fn aim(
     };
     let origin = controller.translation;
     let dir = (controller.rotation * Vec3::NEG_Z).normalize_or(Vec3::NEG_Z);
-    let hit = ray_panel(panel.pose(), origin, dir);
+    // (Meta's keyboard, where it's in front of the panel, takes the ray: its keys, not the panel's behind it)
+    let on_keys = typing.as_ref().and_then(|t| t.hit(origin, dir));
+    let hit = ray_panel(panel.pose(), origin, dir).filter(|(at, _)| on_keys.is_none_or(|k| k.distance(origin) > at.distance(origin)));
+    let left = typing.as_ref().filter(|t| t.up).and_then(|t| {
+        let (_, aim) = hands.iter().find(|(h, _)| matches!(h, Hand::Left))?;
+        let dir = (aim.rotation * Vec3::NEG_Z).normalize_or(Vec3::NEG_Z);
+        Some(match t.hit(aim.translation, dir) {
+            Some(at) => (aim.translation, at, true),
+            None => (aim.translation, aim.translation + dir * MISS_M, false),
+        })
+    });
     let px = hit.map(|(_, px)| px);
     let row = px.and_then(|p| {
         rows.iter()
@@ -130,17 +142,22 @@ pub(super) fn aim(
         graph: graphs.iter().find(|(node, _)| node.size().x > 0.0).map(|(node, tf)| (tf.translation, node.size())),
         click: *pressed && !was && hit.is_some(),
         held: *pressed,
-        beam: Some(match hit {
-            Some((point, _)) => (origin, point, true),
-            None => (origin, origin + dir * MISS_M, false),
-        }),
+        beams: [
+            Some(match (hit, on_keys) {
+                (Some((point, _)), _) => (origin, point, true),
+                (None, Some(at)) => (origin, at, true),
+                (None, None) => (origin, origin + dir * MISS_M, false),
+            }),
+            left,
+        ],
     };
 }
 
+/// A controller's beam, and the dot where it ends: [`UiPointer::beams`]'s index.
 #[derive(Component)]
-pub(super) struct Beam;
+pub(super) struct Beam(usize);
 #[derive(Component)]
-pub(super) struct BeamDot;
+pub(super) struct BeamDot(usize);
 
 pub(super) fn spawn_beam(
     mut commands: Commands,
@@ -153,48 +170,44 @@ pub(super) fn spawn_beam(
         alpha_mode: AlphaMode::Blend,
         ..default()
     });
-    commands.spawn((
-        Beam,
-        Mesh3d(meshes.add(Cylinder::new(1.0, 1.0))),
-        MeshMaterial3d(material.clone()),
-        Transform::default(),
-        Visibility::Hidden,
-    ));
-    commands.spawn((
-        BeamDot,
-        Mesh3d(meshes.add(Sphere::new(1.0))),
-        MeshMaterial3d(material),
-        Transform::default(),
-        Visibility::Hidden,
-    ));
+    let (cylinder, sphere) = (meshes.add(Cylinder::new(1.0, 1.0)), meshes.add(Sphere::new(1.0)));
+    for i in 0..2 {
+        commands.spawn((Beam(i), Mesh3d(cylinder.clone()), MeshMaterial3d(material.clone()), Transform::default(), Visibility::Hidden));
+        commands.spawn((BeamDot(i), Mesh3d(sphere.clone()), MeshMaterial3d(material.clone()), Transform::default(), Visibility::Hidden));
+    }
 }
 
 #[allow(clippy::type_complexity)]
 pub(super) fn draw_beam(
     rig: Res<Rig>,
     pointer: Res<UiPointer>,
-    mut beam: Query<(&mut Transform, &mut Visibility), (With<Beam>, Without<BeamDot>)>,
-    mut dot: Query<(&mut Transform, &mut Visibility), (With<BeamDot>, Without<Beam>)>,
+    mut beams: Query<(&Beam, &mut Transform, &mut Visibility), Without<BeamDot>>,
+    mut dots: Query<(&BeamDot, &mut Transform, &mut Visibility), Without<Beam>>,
 ) {
-    let (Ok((mut beam_tf, mut beam_vis)), Ok((mut dot_tf, mut dot_vis))) = (beam.single_mut(), dot.single_mut()) else {
-        return;
-    };
-    let (Some((from, to, on_panel)), Some(root)) = (pointer.beam, rig.root_transform()) else {
-        beam_vis.set_if_neq(Visibility::Hidden);
-        dot_vis.set_if_neq(Visibility::Hidden);
-        return;
-    };
-    let length = from.distance(to).max(1e-3);
-    let along = (to - from) / length;
-    let local = Transform {
-        translation: (from + to) / 2.0,
-        rotation: Quat::from_rotation_arc(Vec3::Y, along),
-        scale: Vec3::new(BEAM_RADIUS_M, length, BEAM_RADIUS_M),
-    };
-    *beam_tf = root.mul_transform(local);
-    beam_vis.set_if_neq(Visibility::Visible);
-    *dot_tf = root.mul_transform(Transform::from_translation(to).with_scale(Vec3::splat(DOT_RADIUS_M)));
-    dot_vis.set_if_neq(if on_panel { Visibility::Visible } else { Visibility::Hidden });
+    let root = rig.root_transform();
+    for (beam, mut beam_tf, mut beam_vis) in &mut beams {
+        let (Some((from, to, _)), Some(root)) = (pointer.beams[beam.0], root) else {
+            beam_vis.set_if_neq(Visibility::Hidden);
+            continue;
+        };
+        let length = from.distance(to).max(1e-3);
+        let along = (to - from) / length;
+        let local = Transform {
+            translation: (from + to) / 2.0,
+            rotation: Quat::from_rotation_arc(Vec3::Y, along),
+            scale: Vec3::new(BEAM_RADIUS_M, length, BEAM_RADIUS_M),
+        };
+        *beam_tf = root.mul_transform(local);
+        beam_vis.set_if_neq(Visibility::Visible);
+    }
+    for (dot, mut dot_tf, mut dot_vis) in &mut dots {
+        let (Some((_, to, true)), Some(root)) = (pointer.beams[dot.0], root) else {
+            dot_vis.set_if_neq(Visibility::Hidden);
+            continue;
+        };
+        *dot_tf = root.mul_transform(Transform::from_translation(to).with_scale(Vec3::splat(DOT_RADIUS_M)));
+        dot_vis.set_if_neq(Visibility::Visible);
+    }
 }
 
 #[cfg(test)]

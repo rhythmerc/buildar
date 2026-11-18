@@ -91,6 +91,9 @@ struct Wanted {
     /// in the game world, and the radius about it.
     holes: [Vec4; HOLES],
     hole_count: u32,
+    /// A box no real thing hides (Meta's keyboard, while it's up): the box's from the game world's, as a cube of
+    /// half-size 1 about the origin.
+    keep: Option<Mat4>,
 }
 
 /// How many bowls' mouths the pass knows of.
@@ -124,7 +127,7 @@ impl Plugin for OcclusionPlugin {
             .init_resource::<HandPoses>()
             .add_systems(Update, (super::occlusion_capture::log_frames, occlusion_edges::keep_head_poses))
             .add_plugins(ExtractResourcePlugin::<Wanted>::default())
-            .add_systems(PostUpdate, want)
+            .add_systems(PostUpdate, want.after(super::virtual_keyboard::KeyboardSystems))
             .add_observer(readable_eye_depth);
         let Some(render) = app.get_sub_app_mut(RenderApp) else { return };
         render
@@ -159,9 +162,20 @@ fn want(
     heads: Query<&GlobalTransform, With<XrCamera>>,
     poses: Res<HeadPoses>,
     hand_poses: Res<HandPoses>,
+    typing: Option<Res<super::virtual_keyboard::Typing>>,
     mut wanted: ResMut<Wanted>,
 ) {
     let root = rig.root_transform();
+    // (the keyboard's area, tracking space, to the game world's, then to the unit cube)
+    wanted.keep = match (root, typing.as_ref().and_then(|t| t.area.filter(|_| t.up))) {
+        (Some(root), Some(area)) => {
+            let box_in_world = root.to_matrix()
+                * area.to_matrix()
+                * Mat4::from_scale_rotation_translation(super::virtual_keyboard::AREA_HALF, Quat::IDENTITY, super::virtual_keyboard::AREA_CENTRE);
+            Some(box_in_world.inverse())
+        }
+        _ => None,
+    };
     wanted.mode = if root.is_some() { settings.occlusion } else { Occlusion::Off };
     wanted.edges = wanted.mode.on() && settings.occlusion_edges;
     wanted.steady = wanted.mode.on() && settings.occlusion_steady;
@@ -329,6 +343,9 @@ struct Eye {
     /// Not 0: the near/far mix at edges is read from the eye's matte.
     edges: u32,
     holes: [Vec4; HOLES],
+    /// Not 0: what's in the box `keep_from_world` takes to the unit cube isn't hidden.
+    keep: u32,
+    keep_from_world: Mat4,
 }
 
 /// The filtered image's format: halves, so the far end of the depth range
@@ -952,6 +969,8 @@ fn prepare(
             hole_count: wanted.hole_count,
             below: BELOW_M * wanted.world_from_tracking.x_axis.truncate().length(),
             holes: wanted.holes,
+            keep: wanted.keep.is_some() as u32,
+            keep_from_world: wanted.keep.unwrap_or(Mat4::IDENTITY),
         };
         let buffer = depth.eyes[layer].get_or_insert_with(UniformBuffer::default);
         buffer.set(eye);

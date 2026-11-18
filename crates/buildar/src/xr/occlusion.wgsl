@@ -19,6 +19,9 @@ struct Eye {
     edges: u32,
     // The mouths of the bowls sunk into real surfaces: the centre (world), and the radius.
     holes: array<vec4<f32>, 4>,
+    // Not 0: what's in this box (to the unit cube) isn't hidden - Meta's keyboard, while it's up.
+    keep: u32,
+    keep_from_world: mat4x4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -106,6 +109,12 @@ fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let ndc = vec3(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth);
     let clip = view.world_from_clip * vec4(ndc, 1.0);
     var world = clip.xyz / clip.w;
+    if eye.keep != 0u {
+        let local = eye.keep_from_world * vec4(world, 1.0);
+        if all(abs(local.xyz / local.w) <= vec3(1.0)) {
+            return vec4(1.0);
+        }
+    }
     // In a bowl, under the real surface it is sunk into (which would hide
     // all of it): the point that counts is where the line of sight goes in
     // through the bowl's mouth, and only what is really in front of that,

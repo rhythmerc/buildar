@@ -40,7 +40,10 @@ impl Plugin for VirtualKeyboardPlugin {
         // at its end)
         app.init_resource::<Typing>()
             .add_oxr_event_handler(on_event)
-            .add_systems(PostUpdate, run.run_if(resource_exists::<OxrSession>).before(bevy::transform::TransformSystems::Propagate))
+            .add_systems(
+                PostUpdate,
+                run.run_if(resource_exists::<OxrSession>).in_set(KeyboardSystems).before(bevy::transform::TransformSystems::Propagate),
+            )
             .add_systems(Last, |mut typing: ResMut<Typing>| typing.wanted = None);
     }
 }
@@ -60,7 +63,34 @@ pub(crate) struct Typing {
     pub up: bool,
     /// What was typed since the menus last took it.
     pub typed: Vec<Typed>,
+    /// Where it is while it's up: the model's place in tracking space (its own units: a metre wide at scale 1).
+    pub area: Option<Transform>,
 }
+
+/// The model's extent about its root, its own units: the keys' board (1 by 0.45) and the typed-text strip above it,
+/// with room to spare - what the lasers end on, and what no real thing hides.
+pub(crate) const AREA_CENTRE: Vec3 = Vec3::new(0.0, 0.045, 0.0);
+pub(crate) const AREA_HALF: Vec3 = Vec3::new(0.55, 0.315, 0.05);
+
+impl Typing {
+    /// Where a ray (tracking space) meets the keyboard, if it's up and in the way.
+    pub(crate) fn hit(&self, origin: Vec3, dir: Vec3) -> Option<Vec3> {
+        let area = self.area.filter(|_| self.up)?;
+        let to_local = area.compute_affine().inverse();
+        let (o, d) = (to_local.transform_point3(origin), to_local.transform_vector3(dir));
+        if d.z.abs() < 1e-6 {
+            return None;
+        }
+        let t = -o.z / d.z;
+        let p = o + d * t;
+        let off = (p - AREA_CENTRE).abs();
+        (t > 0.0 && off.x <= AREA_HALF.x && off.y <= AREA_HALF.y).then(|| area.transform_point(p))
+    }
+}
+
+/// The keyboard's frame's work (the occlusion pass reads where it is after).
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct KeyboardSystems;
 
 /// What was typed on the keyboard.
 #[derive(Clone, PartialEq, Debug)]
@@ -175,6 +205,7 @@ fn run(
     }
     let (Some((keyboard, space)), Some(root)) = (state.keyboard, state.model.as_ref().map(|m| m.root)) else {
         typing.up = false;
+        typing.area = None;
         return;
     };
 
@@ -213,6 +244,7 @@ fn run(
     }
     typing.up = state.up;
     if !state.up {
+        typing.area = None;
         return;
     }
 
@@ -252,6 +284,7 @@ fn run(
             rotation: Quat::from_xyzw(p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w),
             scale: Vec3::splat(scale),
         };
+        typing.area = Some(*tf);
     }
 
     // The animations where the runtime has them.
@@ -610,6 +643,20 @@ fn blank(w: u32, h: u32) -> Image {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A ray meets the keyboard where it's up, on its board, in front - at its scale.
+    #[test]
+    fn a_ray_meets_the_keyboard() {
+        let mut typing = Typing { up: true, area: Some(Transform::from_xyz(0.0, 1.0, -1.0).with_scale(Vec3::splat(0.7))), ..default() };
+        let at = typing.hit(Vec3::new(0.0, 1.0, 0.0), Vec3::NEG_Z).unwrap();
+        assert!(at.distance(Vec3::new(0.0, 1.0, -1.0)) < 1e-5);
+        // Past its edge (0.55 of its units each side: 0.385 m at 0.7), behind the ray, or put away: nothing.
+        assert!(typing.hit(Vec3::new(0.38, 1.0, 0.0), Vec3::NEG_Z).is_some());
+        assert!(typing.hit(Vec3::new(0.40, 1.0, 0.0), Vec3::NEG_Z).is_none());
+        assert!(typing.hit(Vec3::new(0.0, 1.0, 0.0), Vec3::Z).is_none());
+        typing.up = false;
+        assert!(typing.hit(Vec3::new(0.0, 1.0, 0.0), Vec3::NEG_Z).is_none());
+    }
 
     #[test]
     fn a_runtime_texture_is_known_by_its_uri() {
