@@ -41,8 +41,8 @@ gltf = { version = "1.4", default-features = false, optional = true }
 skate3-sim = { workspace = true, optional = true }
 skate-core = { workspace = true, optional = true }
 skate-data = { workspace = true, optional = true }
-# Skate 3's side of the engine contract (its HUD), Bevy-free; to move into skate3-headless.
-skate3-engine = { path = "../skate3-engine", optional = true }
+# Skate 3 as the engine contract, Bevy-free (skate3-headless's).
+skate3-engine = { workspace = true, optional = true }
 serde_json.workspace = true
 # Steam Audio (libphonon.so) is loaded at run time, if it is there (src/binaural.rs).
 libloading = "0.8"

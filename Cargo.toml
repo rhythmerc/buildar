@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/skate-game", "crates/skate-quest", "crates/skate-lite-sys", "crates/roomtone-sys", "crates/skate3-engine", "crates/engine-api"]
+members = ["crates/skate-game", "crates/skate-quest", "crates/skate-lite-sys", "crates/roomtone-sys", "crates/engine-api"]
 resolver = "3"
 
 [workspace.package]
@@ -22,10 +22,13 @@ serde_json = "1.0"
 # The engine contract: https://github.com/rhythmerc/buildar-engine-core (Bevy-free; engine-api wraps it for Bevy).
 engine-core = { git = "https://github.com/rhythmerc/buildar-engine-core", rev = "1da95abb6dc14ea3d6cc72f8964014f8a1d24678" }
 # The Skate 3 engine's simulation: https://github.com/rhythmerc/skate3-headless (Bevy-free; the app renders).
-# Bump all three revs together. To build against a local checkout instead, uncomment the [patch] block below.
-skate3-sim = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
-skate-core = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
-skate-data = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
+# Bump all four revs together; its engine-core rev must be the one above. To build against a local checkout instead,
+# uncomment the [patch] block below.
+skate3-sim = { git = "https://github.com/rhythmerc/skate3-headless", rev = "92148872e482962806a8ebcc2dcb6a1e1df91455" }
+skate-core = { git = "https://github.com/rhythmerc/skate3-headless", rev = "92148872e482962806a8ebcc2dcb6a1e1df91455" }
+skate-data = { git = "https://github.com/rhythmerc/skate3-headless", rev = "92148872e482962806a8ebcc2dcb6a1e1df91455" }
+# Skate 3 as the engine contract, over the sim.
+skate3-engine = { git = "https://github.com/rhythmerc/skate3-headless", rev = "92148872e482962806a8ebcc2dcb6a1e1df91455" }
 # The THUG2 engine: https://github.com/rhythmerc/thug2-headless (thug2-decomp run headless, its C API and THUG2 as the
 # engine contract; built with CMake, its decomp a pinned submodule). Bump both revs together; its engine-core rev must
 # be the one above.
@@ -54,6 +57,7 @@ opt-level = 3
 # Local skate3-headless checkout (a sibling of this repo):
 # [patch."https://github.com/rhythmerc/skate3-headless"]
 # skate3-sim = { path = "../skate3-headless/sim" }
+# skate3-engine = { path = "../skate3-headless/engine" }
 # skate-core = { path = "../skate3-headless/skate-core" }
 # skate-data = { path = "../skate3-headless/skate-data" }
 # skate-audio-formats = { path = "../skate3-headless/skate-audio-formats" }

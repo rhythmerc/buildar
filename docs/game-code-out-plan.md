@@ -636,6 +636,12 @@ the two pins move together. The crates' tests run in thug2-headless (all passed 
 the APK passed against the pin, built from the submodule). Left in the app: `skate-game`'s `thug2.rs` (where its files
 are, its settings and page). The code is now under thug2-headless's MIT licence.
 
+**`skate3-engine` into skate3-headless (2026-11-17):** the crate moved as it was (`engine/`, 9214887) and the app
+depends on it by revision with the sim's other crates (all four pinned together, and skate3-headless pins
+`engine-core` too). Its tests run there (all passed), and the app's Skate 3 tests and the APK passed against the pin.
+Left in the app: `skate-game`'s `skate3.rs` (where its data is, its asset source, its light, its settings and page).
+With steps 1-10 and this, no game's code is in the app's workspace but SK8's.
+
 **Skate 3's floor, its own (2026-11-17):** the app put the room's floor at Skate 3's test course floor
 (`FLOOR_HEIGHT`, -1.535 m) for every engine when Skate 3 was carried (`xr::rig::WorldOrigin`), a Skate 3 need in the
 host. Now `skate3_engine::stage` converts at its boundary: the stage, rails and placements go into the sim raised by
