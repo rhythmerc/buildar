@@ -27,7 +27,7 @@ struct Thug2Files {
 
 /// The game's folder for the app's files folder.
 fn game_folder(files: &Path) -> PathBuf {
-    std::env::var_os("THUG2_GAME_DIR").map(PathBuf::from).unwrap_or_else(|| files.join("thug2"))
+    std::env::var_os("THUG2_GAME_DIR").map(PathBuf::from).unwrap_or_else(|| thug2_engine::DATA.kept_in(files))
 }
 
 

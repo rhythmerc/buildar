@@ -33,7 +33,7 @@ pub(crate) fn assets(files: &Path) -> PathBuf {
             given = args.next().map(PathBuf::from);
         }
     }
-    let root = given.unwrap_or_else(|| if cfg!(target_os = "android") { files.join("assets") } else { PathBuf::from("assets") });
+    let root = given.unwrap_or_else(|| skate3_engine::DATA.kept_in(files));
     // (absolute: an asset source's reader resolves a relative folder against Bevy's base path, not this one)
     std::path::absolute(&root).unwrap_or(root)
 }
@@ -235,6 +235,38 @@ mod tests {
         assert_eq!(lights, [(11000., true, Color::WHITE, Transform::from_xyz(4., 7., 4.).looking_at(Vec3::ZERO, Vec3::Y))]);
         assert_eq!(world.resource::<GlobalAmbientLight>().brightness, 350.);
         assert_eq!(world.resource::<ClearColor>().0, Color::srgb(0.065, 0.08, 0.10));
+    }
+
+    /// Carried before its data is there: it can't be picked; once the data comes (an import while the app runs), it
+    /// can, and its asset source reads it.
+    #[test]
+    fn its_data_can_come_after_the_app_opened() {
+        use bevy::asset::io::{AssetSourceId, Reader};
+        let dir = std::env::temp_dir().join(format!("skate3-later-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // (its own folder, never the one `assets` is given: that may be the player's real data)
+        let assets = skate3_engine::DATA.kept_in(&dir);
+        let mut app = App::new();
+        register_assets(&mut app, &assets);
+        app.add_plugins((MinimalPlugins, bevy::asset::AssetPlugin::default()));
+        app.insert_resource(Data(assets.clone()));
+        app.update();
+        assert!(available(app.world()).is_err(), "no data yet");
+
+        std::fs::create_dir_all(assets.join("private")).unwrap();
+        std::fs::write(assets.join("private/game.json"), b"{}").unwrap();
+        std::fs::write(assets.join("private/skater.glb"), b"glb").unwrap();
+        assert_eq!(available(app.world()), Ok(()));
+        let server = app.world().resource::<AssetServer>();
+        let source = server.get_source(AssetSourceId::Name(ASSETS.into())).expect("its source");
+        let bytes = bevy::tasks::block_on(async {
+            let mut reader = source.reader().read(Path::new("private/skater.glb")).await.expect("read");
+            let mut bytes = Vec::new();
+            reader.read_to_end(&mut bytes).await.expect("its bytes");
+            bytes
+        });
+        assert_eq!(bytes, b"glb");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The circle always shown unless the player turned it off; files from before it existed load with it on.

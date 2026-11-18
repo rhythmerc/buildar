@@ -126,7 +126,8 @@ pub trait EngineCore: Send {
 - **One space and unit** (`engine_core::stage`'s docs): the runtime's world frame (the room as the rig lays it out,
   y up) in metres as the game sees them (the player's world scale makes a real metre more or fewer). `Stage`,
   `Focus`, `Frame` and `PlacePlayer` are all in it; an engine converts inside itself (THUG2's inches and `OFFSET`
-  are `thug2_engine::stage`'s; Skate 3's and SK8's worlds are this space as it is).
+  are `thug2_engine::stage`'s; Skate 3's floor, raised to its own, is `skate3_engine::stage`'s; SK8's world is this
+  space as it is).
 - **`Stage`** is what every mode stands on (as built in step 5):
   - the room's flat faces as quads and its other faces as triangles (quads stay quads: Skate 3 treats them apart);
   - the placed objects' solid faces, each a `Solid { id, quads }` (a skate piece's body, then its rail tubes);
