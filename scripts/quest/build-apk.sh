@@ -28,6 +28,9 @@ fi
 # The workspace compiles at opt-level 3 and rustc needs a large stack for
 # the game crate (see the desktop build notes).
 export RUST_MIN_STACK="${RUST_MIN_STACK:-268435456}"
+# (crates whose build scripts run bindgen - MKWii's model reader, on a bindgen too old for per-target settings - see
+# the headset's target and the NDK's headers, not the host's)
+export BINDGEN_EXTRA_CLANG_ARGS="${BINDGEN_EXTRA_CLANG_ARGS:---target=aarch64-linux-android32 --sysroot=$ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot}"
 # The commit, for developer captures' notes (`-dirty` with changes not in it).
 if [ -z "${SK8_COMMIT:-}" ] && SK8_COMMIT="$(git rev-parse --short HEAD 2>/dev/null)"; then
   git diff --quiet HEAD 2>/dev/null || SK8_COMMIT="$SK8_COMMIT-dirty"

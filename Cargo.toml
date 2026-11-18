@@ -64,6 +64,8 @@ engine-core = { path = "../buildar-engine-core" }
 # skate-audio-core = { path = "../skate3-headless/skate-audio-core" }
 
 [patch.crates-io]
+# (MKWii's model reader, with its C strings typed for arm64: ../mkw-headless/third_party/brres-sys/BUILDAR.md)
+brres-sys = { path = "../mkw-headless/third_party/brres-sys" }
 bevy_pbr = { path = "vendor/bevy_pbr" }
 bevy_core_pipeline = { path = "vendor/bevy_core_pipeline" }
 winit = { path = "vendor/winit" }
