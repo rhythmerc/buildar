@@ -347,6 +347,10 @@ impl Parks {
     }
 
     pub(crate) fn save(&mut self, id: &str) {
+        // (a course the dev flag `course=` opened in its debug room is never written: `xr::debug_course`)
+        if self.current.as_ref().is_some_and(|c| c.id == id && c.anchor.as_deref() == Some(DEBUG_ANCHOR)) {
+            return;
+        }
         let (Some(dir), Some(entry)) = (self.dir.clone(), self.get_mut(id)) else { return };
         entry.edits += 1;
         if let Err(e) = write(&dir, id, &entry.file) {
@@ -632,6 +636,34 @@ fn open_as(world: &mut World, id: &str, file: &ParkFile, pose: ParkPose, scale: 
     }
     parks.save(id);
     info!("PARKS opened {id} ({} pieces, world scale {scale:.2})", file.pieces.len());
+}
+
+/// The anchor a course opened by `xr::debug_course` is "kept by": none in the room (no anchor is made for it, and it
+/// is never saved).
+pub(crate) const DEBUG_ANCHOR: &str = "debug-room";
+
+/// Opens park `id` for measuring (`xr::debug_course`): its middle at `target` (tracking space), turned `yaw`, kept
+/// by no anchor and never written; the player dropped onto its middle. Returns the park's id if there is one.
+pub(crate) fn open_for_debug(world: &mut World, id: &str, target: Vec3, yaw: f32) -> bool {
+    let Some(file) = world.resource::<Parks>().get(id).map(|p| p.file.clone()) else { return false };
+    let scale = file.scale.clamp(MIN_SCALE, MAX_SCALE);
+    let middle = pivot(&file.pieces);
+    let pose = ParkPose { at: target - Quat::from_rotation_y(yaw) * (middle / scale), yaw };
+    world.resource_mut::<Rig>().scale = scale;
+    {
+        let mut placed = world.resource_mut::<PlacedPieces>();
+        placed.replace(in_room(&file.pieces, pose, scale));
+        placed.park_scale = file.park_scale.clamp(MIN_PARK_SCALE, MAX_PARK_SCALE);
+    }
+    world.resource_mut::<Parks>().current = Some(Current { id: id.to_string(), pose, anchor: Some(DEBUG_ANCHOR.into()) });
+    info!("PARKS opened {id} for measuring ({} pieces, world scale {scale:.2}) at {target:.2?}", file.pieces.len());
+    drop_skater_on(world, target, yaw);
+    true
+}
+
+/// The parks, for picking one by name: (id, name, pieces).
+pub(crate) fn listed(world: &World) -> Vec<(String, String, usize)> {
+    world.resource::<Parks>().list.iter().map(|p| (p.id.clone(), p.file.name.clone(), p.file.pieces.len())).collect()
 }
 
 /// Opens park `id` where one of its anchors has it.

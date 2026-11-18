@@ -522,7 +522,8 @@ fn frame(world: &mut World) {
     // (the menu's home: the parks, or with no engine to play them the game data, to bring one's files)
     let home = if cfg!(any(feature = "retail", feature = "thug2")) && pages::no_engine(world) { pages::DATA } else { pages::PARKS };
     // (the headset's dev flag `menu_closed`: not at launch, for measuring an engine as it plays)
-    let closed_at_launch = world.get_resource::<crate::xr::dev_flags::DevFlags>().is_some_and(|f| f.has("menu_closed"));
+    let closed_at_launch =
+        world.get_resource::<crate::xr::dev_flags::DevFlags>().is_some_and(|f| f.has("menu_closed") || f.value("course").is_some());
     {
         // Open at launch: the intro the first time, else the home page
         // (the scripted demo, SK8_DEMO, starts skating).

@@ -611,8 +611,20 @@ fn locate_surfaces(
     focus: Res<super::link::PlayerFocus>,
     engines: Option<Res<crate::engines::Engines>>,
     mut free_floor: Local<Option<(bool, [i32; 2], u32)>>,
+    debug_room: Option<Res<super::debug_course::DebugRoom>>,
 ) {
     let Some(frame_state) = frame_state else { return };
+    // A course opened for measuring: its debug box, nothing of the room (`debug_course`).
+    if let Some(boxed) = debug_room.as_ref().and_then(|d| d.0.as_ref()) {
+        if shapes.0 != *boxed {
+            shapes.0 = boxed.clone();
+            labels.0 = std::iter::once("FLOOR".to_string()).chain(std::iter::repeat_n("WALL_FACE".to_string(), boxed.len() - 1)).collect();
+            room.0 = None;
+            revision.0 += 1;
+            info!("PLANES the room replaced by the debug box ({} surfaces)", boxed.len());
+        }
+        return;
+    }
     if query.changed {
         query.changed = false;
         was_located.clear();

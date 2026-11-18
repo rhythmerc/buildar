@@ -27,6 +27,7 @@ pub(crate) mod panel;
 pub(crate) mod panel_layer;
 mod frame_timing;
 pub(crate) mod dev_flags;
+pub(crate) mod debug_course;
 mod plane_view;
 pub(crate) mod planes;
 mod real_world;
@@ -123,6 +124,7 @@ impl Plugin for XrPlugin {
             .add_plugins(occlusion::OcclusionPlugin)
             .add_plugins(controller_shapes::ControllerShapesPlugin)
             .add_plugins((virtual_keyboard::VirtualKeyboardPlugin, panel_layer::PanelLayerPlugin, frame_timing::FrameTimingPlugin))
+            .add_plugins(debug_course::DebugCoursePlugin)
             .insert_resource(OxrSessionConfig {
                 blend_mode_preference: vec![
                     openxr::EnvironmentBlendMode::ALPHA_BLEND,

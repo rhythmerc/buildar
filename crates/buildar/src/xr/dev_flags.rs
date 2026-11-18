@@ -4,6 +4,8 @@
 //!
 //! - `single_main`: the update world's schedules run on one thread (no task hand-offs to the compute worker).
 //! - `single_render`: the render world's likewise.
+//! - `course=<id, name or busiest>`: that course opened in front of the head in a debug box, the room ignored
+//!   (`xr::debug_course`; implies `menu_closed`).
 //! - `cluster_single`: one light cluster for the eyes, not Bevy's grid of them (a handful of lights).
 //! - `menu_closed`: the menu doesn't open itself at launch (an engine measured as it plays).
 //! Read where the plugins are made (`clean::dev_plugins`):
@@ -29,6 +31,11 @@ impl DevFlags {
 
     pub(crate) fn has(&self, flag: &str) -> bool {
         self.0.contains(flag)
+    }
+
+    /// A `name=value` flag's value.
+    pub(crate) fn value(&self, name: &str) -> Option<String> {
+        self.0.iter().find_map(|f| Some(f.strip_prefix(name)?.strip_prefix('=')?.trim().to_string()))
     }
 
     /// A `name=N` flag's number.
