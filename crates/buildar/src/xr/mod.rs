@@ -24,6 +24,7 @@ pub(crate) mod occlusion_capture;
 pub(crate) mod occlusion_edges;
 mod mesh_planes;
 pub(crate) mod panel;
+pub(crate) mod panel_layer;
 mod plane_view;
 pub(crate) mod planes;
 mod real_world;
@@ -66,6 +67,7 @@ pub(crate) fn plugins(base: PluginGroupBuilder) -> PluginGroupBuilder {
     controller_shapes::enable(raw);
     // Meta's keyboard, for typing a name (`virtual_keyboard`).
     virtual_keyboard::enable(raw);
+    panel_layer::enable(raw);
     // The room's triangle mesh, for objects Scene has no plane or box for.
     raw.meta_spatial_entity_mesh = true;
     // In-app "rescan the room" (runs Space Setup).
@@ -114,7 +116,7 @@ impl Plugin for XrPlugin {
             .add_plugins(bevy_mod_openxr::features::fb_passthrough::OxrFbPassthroughPlugin)
             .add_plugins(occlusion::OcclusionPlugin)
             .add_plugins(controller_shapes::ControllerShapesPlugin)
-            .add_plugins(virtual_keyboard::VirtualKeyboardPlugin)
+            .add_plugins((virtual_keyboard::VirtualKeyboardPlugin, panel_layer::PanelLayerPlugin))
             .insert_resource(OxrSessionConfig {
                 blend_mode_preference: vec![
                     openxr::EnvironmentBlendMode::ALPHA_BLEND,

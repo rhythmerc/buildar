@@ -26,8 +26,14 @@ const DROP_M: f32 = 0.12 * DISTANCE_M / 0.7;
 #[derive(Component)]
 pub(crate) struct XrPanelCamera;
 
+/// The panel's quad in the scene (its picture, or where it's a compositor layer, the hole it shows through:
+/// `panel_layer`).
 #[derive(Component)]
-struct PanelQuad;
+pub(crate) struct PanelQuad;
+
+/// Where the panel is put each frame (`panel_layer` reads it after).
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct PanelSystems;
 
 #[derive(Resource)]
 pub(crate) struct XrPanel {
@@ -38,13 +44,15 @@ pub(crate) struct XrPanel {
     pub recenter: bool,
     /// Tracking-space pose of the quad.
     pose: Transform,
+    /// The picture the UI camera draws.
+    pub image: Handle<Image>,
 }
 
 impl XrPanel {
     /// A panel drawn by `camera`, for a test that renders the menus without a headset.
     #[cfg(test)]
     pub(crate) fn drawn_by(camera: Entity) -> Self {
-        Self { camera, visible: true, recenter: false, pose: Transform::default() }
+        Self { camera, visible: true, recenter: false, pose: Transform::default(), image: Handle::default() }
     }
 
     /// Tracking-space pose of the quad: its front (+Z) faces the player,
@@ -59,7 +67,7 @@ pub(crate) struct PanelPlugin;
 impl Plugin for PanelPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(PreStartup, setup)
-            .add_systems(PostUpdate, place.before(bevy::transform::TransformSystems::Propagate))
+            .add_systems(PostUpdate, place.in_set(PanelSystems).before(bevy::transform::TransformSystems::Propagate))
             .add_systems(Last, report_on_open);
     }
 }
@@ -72,6 +80,8 @@ fn setup(
 ) {
     let mut image = Image::new_target_texture(WIDTH_PX, HEIGHT_PX, TextureFormat::Rgba8UnormSrgb, None);
     image.sampler = ImageSampler::linear();
+    // (copied into the compositor layer's swapchain: `panel_layer`)
+    image.texture_descriptor.usage |= bevy::render::render_resource::TextureUsages::COPY_SRC;
     let image = images.add(image);
     let camera = commands
         .spawn((
@@ -89,7 +99,7 @@ fn setup(
         PanelQuad,
         Mesh3d(meshes.add(Rectangle::new(WIDTH_M, HEIGHT_M))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color_texture: Some(image),
+            base_color_texture: Some(image.clone()),
             unlit: true,
             alpha_mode: AlphaMode::Blend,
             double_sided: true,
@@ -104,6 +114,7 @@ fn setup(
         visible: false,
         recenter: true,
         pose: Transform::from_xyz(0.0, 1.2, -DISTANCE_M),
+        image,
     });
 }
 
