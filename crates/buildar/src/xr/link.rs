@@ -52,9 +52,10 @@ impl Plugin for LinkPlugin {
     }
 }
 
-/// The running skate engine's focus: its skater (the rider, else the board), as the link has it now.
+/// The running skate engine's focus: its skater (the rider, else the board), as the link has it now. (An engine of
+/// another mode gives its own: `engine_driver`.)
 fn focus_from_link(engines: Option<Res<Engines>>, link: Res<SkaterLink>, mut focus: ResMut<PlayerFocus>) {
-    if let Some(running) = engines.and_then(|e| e.current()) {
+    if let Some(running) = engines.and_then(|e| e.current()).filter(|e| e.mode() == crate::engines::Mode::Skate) {
         focus.set(running, link.focus());
     }
 }

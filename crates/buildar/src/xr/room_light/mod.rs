@@ -567,9 +567,11 @@ fn show(
     }
     set_visibility(&mut probe_visibility, mix > 0.0);
 
-    // The key lights.
+    // The key lights: settled in the room's own terms (where they are and face in the room, a lamp's strength at the
+    // room's metres), made the world's as they're shown - a rescale changes nothing that settles, so the light
+    // doesn't drift to a new place and strength after it.
     for n in 0..2 {
-        let made = shade::key(&content.lights[n], &root, scale);
+        let made = shade::key(&content.lights[n], &Transform::IDENTITY, scale);
         light.keys[n] = match (light.keys[n], made) {
             (Key::Directional { color, illuminance, toward }, Key::Directional { color: c, illuminance: i, toward: t }) => {
                 Key::Directional {
@@ -596,6 +598,7 @@ fn show(
         };
         directional.color = Color::linear_rgb(color.x, color.y, color.z);
         directional.illuminance = illuminance * mix;
+        let toward = (root.rotation * toward).normalize_or(Vec3::Y);
         *transform = Transform::default().looking_to(-toward, if toward.y.abs() > 0.99 { Vec3::X } else { Vec3::Y });
         set_visibility(&mut visibility, mix > 0.0);
     }
@@ -605,9 +608,10 @@ fn show(
             continue;
         };
         point.color = Color::linear_rgb(color.x, color.y, color.z);
-        point.intensity = intensity * mix;
+        // (an inverse-square lamp: the world's distances are the room's times the rig's scale)
+        point.intensity = intensity * mix * root.scale.x * root.scale.x;
         point.range = POINT_REACH_M * root.scale.x;
-        transform.translation = position;
+        transform.translation = root.transform_point(position);
         set_visibility(&mut visibility, mix > 0.0);
     }
 }

@@ -213,7 +213,16 @@ pub(crate) fn install<M: Hosted>(app: &mut App, factory: EngineFactory, marker: 
             (place_stand_in::<M>, pose_models::<M>.in_set(engine_api::BodiesSet))
                 .before(bevy::transform::TransformSystems::Propagate)
                 .in_set(EngineSet(M::ENGINE)),
-        );
+        )
+        .add_systems(PostUpdate, publish_focus::<M>.in_set(crate::xr::link::FocusSet).in_set(EngineSet(M::ENGINE)));
+}
+
+/// Where its player is, for the shared layer ([`engine_api::PlayerFocus`]) - an engine of a mode whose player isn't
+/// a skater (a skate engine's is the skater link's: `xr::link`): its focus after its last step.
+fn publish_focus<M: Hosted>(driver: Res<Driver<M>>, mut focus: ResMut<crate::xr::link::PlayerFocus>) {
+    if M::ENGINE.mode() != engine_api::Mode::Skate {
+        focus.set(M::ENGINE, driver.focus[1]);
+    }
 }
 
 fn boot<M: Hosted>(mut driver: ResMut<Driver<M>>) {
