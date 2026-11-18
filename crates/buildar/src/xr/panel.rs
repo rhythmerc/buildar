@@ -62,13 +62,15 @@ pub(crate) struct XrPanel {
     pose: Transform,
     /// The picture the UI camera draws.
     pub image: Handle<Image>,
+    /// The panel is a compositor layer (`panel_layer`): its quad in the scene is hidden for the hole beside it.
+    pub layered: bool,
 }
 
 impl XrPanel {
     /// A panel drawn by `camera`, for a test that renders the menus without a headset.
     #[cfg(test)]
     pub(crate) fn drawn_by(camera: Entity) -> Self {
-        Self { camera, visible: true, recenter: false, pose: Transform::default(), image: Handle::default() }
+        Self { camera, visible: true, recenter: false, pose: Transform::default(), image: Handle::default(), layered: false }
     }
 
     /// Tracking-space pose of the quad: its front (+Z) faces the player,
@@ -140,6 +142,7 @@ fn setup(
         recenter: true,
         pose: Transform::from_xyz(0.0, 1.2, -DISTANCE_M),
         image,
+        layered: false,
     });
 }
 
@@ -216,7 +219,7 @@ fn place(
         }
     }
     let Ok((mut tf, mut vis)) = quad.single_mut() else { return };
-    let want = if panel.visible { Visibility::Visible } else { Visibility::Hidden };
+    let want = if panel.visible && !panel.layered { Visibility::Visible } else { Visibility::Hidden };
     if *vis != want {
         *vis = want;
     }

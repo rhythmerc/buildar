@@ -880,10 +880,12 @@ pub fn specialize_prepass_material_meshes(
             else {
                 continue;
             };
-            let entity_tick = entity_specialization_ticks
-                .get(visible_entity)
-                .unwrap()
-                .system_tick;
+            // (local patch, as in `specialize_material_meshes`)
+            let Some(entity_tick) = entity_specialization_ticks.get(visible_entity) else {
+                crate::warn_missing_specialization_tick(*visible_entity);
+                continue;
+            };
+            let entity_tick = entity_tick.system_tick;
             let last_specialized_tick = view_specialized_material_pipeline_cache
                 .get(visible_entity)
                 .map(|(tick, _)| *tick);

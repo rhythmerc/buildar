@@ -141,3 +141,14 @@ that merged pass: the resolve target is still written, the samples aren't. Only
 for cameras nothing loads the multisampled colour on after the main pass (no
 UI drawn on the camera, no MSAA writeback). buildAR's eye cameras use it.
 
+
+## Missing specialization ticks skipped, not unwrapped
+
+`bevy_pbr`'s `specialize_material_meshes` (`material.rs`), its prepass twin
+(`prepass/mod.rs`) and the shadow one (`render/light.rs`) `unwrap()` the
+visible entity's entry in `EntitySpecializationTicks`. A material swapped on a
+visible mesh (one `MeshMaterial3d` removed, another inserted) can leave a frame
+where the entity is visible with no entry, and the app panicked at boot on the
+Quest. These now skip the entity for that frame and log it once
+(`warn_missing_specialization_tick`). buildAR also stopped swapping the
+menu quad's material (`xr/panel_layer.rs` keeps a separate hole quad).

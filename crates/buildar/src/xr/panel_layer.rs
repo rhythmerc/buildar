@@ -43,6 +43,7 @@ impl Plugin for PanelLayerPlugin {
         app.add_plugins((MaterialPlugin::<PanelHole>::default(), ExtractResourcePlugin::<Wanted>::default()))
             .init_resource::<Wanted>()
             .insert_resource(live.clone())
+            .add_systems(Startup, spawn_hole)
             .add_systems(PostUpdate, (want, punch).chain().after(super::panel::PanelSystems));
         let Some(render) = app.get_sub_app_mut(RenderApp) else { return };
         render
@@ -87,25 +88,45 @@ fn want(panel: Res<XrPanel>, redraw: Res<super::panel::PanelRedraw>, instance: O
     wanted.settings = instance.is_some_and(|i| i.exts().fb_composition_layer_settings.is_some());
 }
 
-/// The panel's quad: its picture, or (the layer live) the hole the layer shows through.
+/// The hole the layer shows through: its own quad, beside the panel's (made at startup, hidden). Not the panel's
+/// quad with its material swapped: a material swapped on a visible mesh raced Bevy 0.18's specialization (a frame
+/// with the entity visible and its ticks gone) and panicked at boot.
+#[derive(Component)]
+struct HoleQuad;
+
+fn spawn_hole(
+    panel: Res<XrPanel>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut holes: ResMut<Assets<PanelHole>>,
+    mut commands: Commands,
+) {
+    commands.spawn((
+        HoleQuad,
+        Mesh3d(meshes.add(Rectangle::new(WIDTH_M, HEIGHT_M))),
+        MeshMaterial3d(holes.add(PanelHole { picture: panel.image.clone() })),
+        Transform::default(),
+        Visibility::Hidden,
+    ));
+}
+
+/// Where the layer is live: the panel's own quad hidden (`XrPanel::layered`), the hole shown where it was.
 #[allow(clippy::type_complexity)]
 fn punch(
     live: Res<Live>,
-    panel: Res<XrPanel>,
-    quads: Query<(Entity, Has<MeshMaterial3d<PanelHole>>), With<PanelQuad>>,
-    mut holes: ResMut<Assets<PanelHole>>,
-    mut hole: Local<Option<Handle<PanelHole>>>,
-    mut commands: Commands,
+    mut panel: ResMut<XrPanel>,
+    quads: Query<&Transform, (With<PanelQuad>, Without<HoleQuad>)>,
+    mut holes: Query<(&mut Transform, &mut Visibility), With<HoleQuad>>,
 ) {
-    if !live.0.load(Ordering::Acquire) {
-        return;
+    let layered = live.0.load(Ordering::Acquire);
+    if layered && !panel.layered {
+        info!("PANEL: drawn as a compositor layer");
     }
-    for (quad, punched) in &quads {
-        if !punched {
-            let hole = hole.get_or_insert_with(|| holes.add(PanelHole { picture: panel.image.clone() })).clone();
-            commands.entity(quad).remove::<MeshMaterial3d<StandardMaterial>>().insert(MeshMaterial3d(hole));
-            info!("PANEL: drawn as a compositor layer");
-        }
+    panel.layered = layered;
+    let (Ok(quad), Ok((mut tf, mut vis))) = (quads.single(), holes.single_mut()) else { return };
+    let want = if layered && panel.visible { Visibility::Visible } else { Visibility::Hidden };
+    vis.set_if_neq(want);
+    if *tf != *quad {
+        *tf = *quad;
     }
 }
 

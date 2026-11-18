@@ -393,3 +393,12 @@ pub fn stbn_placeholder() -> Image {
         copy_on_resize: false,
     }
 }
+
+/// (Local patch) A visible entity with a material instance but no specialization ticks yet - upstream panics on it.
+/// Logged once, with the entity, so the cause can be found; the entity is specialized when its ticks arrive.
+pub(crate) fn warn_missing_specialization_tick(entity: bevy_render::sync_world::MainEntity) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        tracing::warn!("bevy_pbr (local patch): {entity:?} is visible with no specialization ticks; skipped until they arrive");
+    });
+}
