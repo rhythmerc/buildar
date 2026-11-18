@@ -5,7 +5,7 @@
 //! park scale and the pieces' game positions move the other way), in every room it was put down in, and the player
 //! stays on the same real spot (the room is scaled about its feet: the rig's anchor moves, the player doesn't).
 //!
-//! A resize asked for is made at the start of the next frame ([`apply_rescale`], PreUpdate): before anything is placed
+//! A resize asked for is made at the start of the next frame ([`apply_rescale`], First): before anything is placed
 //! or drawn that frame, so the pieces, the room and the headset's view all change in the same frame.
 use super::parks::{self, ParkFile, Parks};
 use super::{MAX_PARK_SCALE, MIN_PARK_SCALE, PlacedPieces};
@@ -92,7 +92,7 @@ pub(crate) fn set_current_times(world: &mut World, times: f32) {
     }
 }
 
-/// The resize asked for, made (PreUpdate).
+/// The resize asked for, made (First: before anything places or draws from the rig).
 pub(crate) fn apply_rescale(world: &mut World) {
     let Some(scale) = world.get_resource_mut::<Rescale>().and_then(|mut r| r.0.take()) else { return };
     rescale_now(world, scale);
@@ -122,17 +122,22 @@ pub(crate) fn rescale_now(world: &mut World, scale: f32) {
         }
     }
     // (the player's feet, in the game: where they are in the room now is where they stay)
+    // (only a player in the room: one still at its game's own start would throw the room far off)
     let feet = world
         .get_resource::<Engines>()
         .and_then(|e| e.current())
         .and_then(|e| world.get_resource::<PlayerFocus>().and_then(|f| f.of(e)))
-        .map(|f| f.feet);
+        .map(|f| f.feet)
+        .filter(|&p| world.get_resource::<crate::xr::link::CurrentStage>().is_some_and(|s| crate::xr::link::in_stage(s, p)));
     {
         let mut rig = world.resource_mut::<Rig>();
-        if let (Some(feet), Some(root), Some((_, yaw))) = (feet, rig.root_transform(), rig.anchor) {
+        let before = rig.root_transform();
+        if let (Some(feet), Some(root), Some((_, yaw))) = (feet, before, rig.anchor) {
             rig.anchor = Some((anchor_keeping(root, feet, scale, yaw), yaw));
         }
         rig.scale = scale;
+        let spot = |root: Option<Transform>| feet.zip(root).map(|(f, r)| r.compute_affine().inverse().transform_point3(f));
+        info!("SIZE world scale {old:.3} -> {scale:.3}; the player's feet in the room {:?} -> {:?}", spot(before), spot(rig.root_transform()));
     }
     world.resource_mut::<PlacedPieces>().revision += 1; // saves the layout (it carries the scale)
 }

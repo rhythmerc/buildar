@@ -71,7 +71,33 @@ impl Plugin for RigPlugin {
         .add_systems(
             PostUpdate,
             apply_root.before(bevy::transform::TransformSystems::Propagate),
-        );
+        )
+        .init_resource::<RigAtStart>()
+        .add_systems(PreUpdate, note_start)
+        .add_systems(PostUpdate, warn_mid_frame.before(apply_root));
+    }
+}
+
+/// The rig as the frame started (after `First`, where resizes are made).
+#[derive(Resource, Default)]
+struct RigAtStart(Option<(f32, Option<(Vec3, f32)>)>);
+
+fn note_start(rig: Res<Rig>, mut at: ResMut<RigAtStart>) {
+    at.0 = Some((rig.scale, rig.anchor));
+}
+
+/// Something changed the rig during the frame (not in `First`): pieces placed earlier in it were drawn at the old
+/// scale while the headset's view had the new one - the world jumps for a frame. Said, to find the writers left.
+fn warn_mid_frame(rig: Res<Rig>, at: Res<RigAtStart>, mut times: Local<u64>) {
+    if let Some((scale, anchor)) = at.0
+        && (scale != rig.scale || anchor != rig.anchor)
+    {
+        // (the first time, then every 90th: a stick held changes it every frame)
+        *times += 1;
+        if *times % 90 != 1 {
+            return;
+        }
+        warn!("RIG changed mid-frame: world scale {scale:.3} -> {:.3}, anchor {anchor:?} -> {:?}", rig.scale, rig.anchor);
     }
 }
 

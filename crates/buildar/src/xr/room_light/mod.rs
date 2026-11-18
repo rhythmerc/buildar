@@ -314,15 +314,15 @@ fn feed_head(
 }
 
 /// The room's surfaces, for the capture's depth: Space Setup's, as ridden. In the room's own space (the stage through
-/// the root it was built with): a new stage that is the same room - the world rescaled, the pieces edited - isn't fed
-/// again, so the light isn't made again from it.
+/// the root it was built with): a new stage of the same room (the same scene and settings: the world rescaled, the
+/// pieces edited) isn't fed again, so the light isn't made again from it.
 fn feed_surfaces(
     feed: Res<RoomFeed>,
     settings: Res<ArSettings>,
     stage_root: Res<crate::xr::real_world::StageRoot>,
     world: Res<CurrentStage>,
     mut seen: Local<Option<(u64, bool)>>,
-    mut fed: Local<Option<Vec<[Vec3; 3]>>>,
+    mut fed: Local<Option<(u64, u64)>>,
 ) {
     let key = (world.revision, settings.room_light && !settings.free_roam());
     if seen.as_ref() == Some(&key) {
@@ -334,7 +334,12 @@ fn feed_surfaces(
         feed.0.set_surfaces(None);
         return;
     }
-    let Some(root) = stage_root.0 else { return };
+    // (the same room as fed - the world rescaled, the pieces edited: kept as it is)
+    let Some((root, room)) = stage_root.0 else { return };
+    if *fed == Some(room) {
+        return;
+    }
+    *fed = Some(room);
     let tracking_from_world = GlobalTransform::from(root).affine().inverse();
     let triangles: Vec<[Vec3; 3]> = world
         .room()
@@ -342,14 +347,7 @@ fn feed_surfaces(
         // (A fallback floor has no end.)
         .filter(|t| t.iter().all(|p| p.abs().max_element() < 50.0))
         .collect();
-    // (the same room, to a millimetre: kept as it is)
-    let same = fed.as_ref().is_some_and(|before| {
-        before.len() == triangles.len() && before.iter().zip(&triangles).all(|(a, b)| a.iter().zip(b).all(|(p, q)| p.distance(*q) < 1e-3))
-    });
-    if same {
-        return;
-    }
-    *fed = Some(triangles.clone());
+
     let surfaces = depth::Surfaces::new(triangles);
     info!("Room light: depth from {} room triangles", surfaces.len());
     feed.0.set_surfaces((surfaces.len() > 0).then(|| Arc::new(surfaces)));

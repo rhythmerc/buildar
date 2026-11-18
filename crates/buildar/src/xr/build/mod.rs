@@ -581,7 +581,7 @@ impl Plugin for BuildPlugin {
             .init_resource::<pool::PoolAssets>()
             .init_resource::<BuildMode>()
             .init_resource::<size::Rescale>()
-            .add_systems(PreUpdate, size::apply_rescale)
+            .add_systems(First, size::apply_rescale)
             .init_resource::<PlacedPieces>()
             .init_resource::<BuildState>()
             .init_resource::<PieceAssets>()

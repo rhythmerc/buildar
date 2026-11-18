@@ -48,10 +48,11 @@ impl Plugin for RealWorldPlugin {
     }
 }
 
-/// The rig's root the [`CurrentStage`] was built through (the room into the game's space): the room's own surfaces
-/// are the stage's through its inverse, whatever the rig has become since.
+/// The rig's root the [`CurrentStage`] was built through (the room into the game's space: the room's own surfaces
+/// are the stage's through its inverse, whatever the rig has become since), and what the room in it was made from
+/// (the Space Setup scene's revision, the AR settings'): a new stage of the same room has the same.
 #[derive(Resource, Default, Clone, Copy, PartialEq)]
-pub(crate) struct StageRoot(pub Option<Transform>);
+pub(crate) struct StageRoot(pub Option<(Transform, (u64, u64))>);
 
 fn rebuild_collision(
     rig: Res<Rig>,
@@ -80,6 +81,8 @@ fn rebuild_collision(
         return;
     }
     *built = Some(key);
+    // (what the room in it is made from)
+    let room_from = (revision.0, settings.revision);
     let started = std::time::Instant::now();
     // Flat surfaces found in the room mesh ride like Scene planes, with
     // grindable edges, and replace the lumpy triangles under them.
@@ -176,7 +179,7 @@ fn rebuild_collision(
     let revision = stage.revision + 1;
     let pieces = placed.items.iter().map(|item| (item.id, item.world_transform(&root, placed.park_scale), item.geometry()));
     (stage.0, park.0) = assemble(revision, room_quads, room_triangles, room_edges, pieces);
-    stage_root.0 = Some(root);
+    stage_root.0 = Some((root, room_from));
     sunk_holes.0 = sunk;
     let piece_count = stage.solids.len();
     let rail_count = park.rails.len();

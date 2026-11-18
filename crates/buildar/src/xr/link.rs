@@ -127,21 +127,24 @@ fn keep_spot_on_rescale(
 #[derive(Resource, Default)]
 struct CarriedSpot(Option<(Vec3, Vec3)>);
 
-fn note_spot(world: &mut World, left: Engine) {
-    let focus = world.resource::<PlayerFocus>().of(left);
-    // (only a spot in the room or the park: an engine whose player was never put in it - the menu open since launch -
-    // may still have it at its own level's start)
-    let stage = world.resource::<CurrentStage>();
+/// Whether game point `p` is in the room or the park (within 2 game metres of the stage's bounds): an engine whose
+/// player was never put in it - the menu open since launch - may still have it at its own level's start.
+pub(crate) fn in_stage(stage: &engine_core::Stage, p: Vec3) -> bool {
     let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
     for t in stage.triangles() {
-        for p in t {
-            lo = lo.min(p);
-            hi = hi.max(p);
+        for q in t {
+            lo = lo.min(q);
+            hi = hi.max(q);
         }
     }
     let margin = Vec3::splat(2.0);
-    let inside = |p: Vec3| lo.x <= hi.x && p.cmpge(lo - margin).all() && p.cmple(hi + margin).all();
-    world.resource_mut::<CarriedSpot>().0 = focus.map(|f| (f.feet, f.forward)).filter(|(p, _)| inside(*p));
+    lo.x <= hi.x && p.cmpge(lo - margin).all() && p.cmple(hi + margin).all()
+}
+
+fn note_spot(world: &mut World, left: Engine) {
+    let focus = world.resource::<PlayerFocus>().of(left);
+    let stage = world.resource::<CurrentStage>();
+    world.resource_mut::<CarriedSpot>().0 = focus.map(|f| (f.feet, f.forward)).filter(|(p, _)| in_stage(stage, *p));
 }
 
 /// After a switch: the link cleared for the new engine to fill, the trick readout emptied, and the player put where
