@@ -580,6 +580,8 @@ impl Plugin for BuildPlugin {
             .add_plugins(pool_shadow::PoolShadowPlugin)
             .init_resource::<pool::PoolAssets>()
             .init_resource::<BuildMode>()
+            .init_resource::<size::Rescale>()
+            .add_systems(PreUpdate, size::apply_rescale)
             .init_resource::<PlacedPieces>()
             .init_resource::<BuildState>()
             .init_resource::<PieceAssets>()

@@ -581,11 +581,6 @@ fn park_from_slider(v: f32) -> f32 {
     (PARK_SLIDER.0 * ((PARK_SLIDER.1 / PARK_SLIDER.0).ln() * v).exp()).clamp(PARK_SLIDER.0, PARK_SLIDER.1)
 }
 
-/// The world's scale (the player is put back on the same real spot once it settles: `xr::link`).
-pub(crate) fn set_world_scale(world: &mut World, scale: f32) {
-    world.resource_mut::<Rig>().scale = scale;
-    world.resource_mut::<PlacedPieces>().revision += 1; // saves the layout (it carries the scale)
-}
 
 fn build_widgets(world: &World) -> Vec<Widget> {
     let placed = world.resource::<PlacedPieces>();

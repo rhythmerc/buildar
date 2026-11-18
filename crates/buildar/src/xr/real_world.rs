@@ -44,9 +44,14 @@ pub(crate) struct RealWorldPlugin;
 
 impl Plugin for RealWorldPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, rebuild_collision);
+        app.init_resource::<StageRoot>().add_systems(Update, rebuild_collision);
     }
 }
+
+/// The rig's root the [`CurrentStage`] was built through (the room into the game's space): the room's own surfaces
+/// are the stage's through its inverse, whatever the rig has become since.
+#[derive(Resource, Default, Clone, Copy, PartialEq)]
+pub(crate) struct StageRoot(pub Option<Transform>);
 
 fn rebuild_collision(
     rig: Res<Rig>,
@@ -59,6 +64,7 @@ fn rebuild_collision(
     mut stage: ResMut<CurrentStage>,
     mut park: ResMut<CurrentPark>,
     mut sunk_holes: ResMut<SunkHoles>,
+    mut stage_root: ResMut<StageRoot>,
     hints: Option<ResMut<SurfaceHints>>,
     mut built: Local<Option<((Vec3, f32), u64, u64, u64)>>,
 ) {
@@ -170,6 +176,7 @@ fn rebuild_collision(
     let revision = stage.revision + 1;
     let pieces = placed.items.iter().map(|item| (item.id, item.world_transform(&root, placed.park_scale), item.geometry()));
     (stage.0, park.0) = assemble(revision, room_quads, room_triangles, room_edges, pieces);
+    stage_root.0 = Some(root);
     sunk_holes.0 = sunk;
     let piece_count = stage.solids.len();
     let rail_count = park.rails.len();

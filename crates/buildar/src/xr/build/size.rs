@@ -2,10 +2,15 @@
 //! ([`Engine::default_scale`]: x1.0 is a skater 1/12 life size, a kart toy-sized), in tenths from x0.1 to x15.
 //!
 //! Resizing a course changes only how big its game is in the room: its pieces keep their real size and place (the
-//! park scale and the pieces' game positions move the other way), in every room it was put down in.
+//! park scale and the pieces' game positions move the other way), in every room it was put down in, and the player
+//! stays on the same real spot (the room is scaled about its feet: the rig's anchor moves, the player doesn't).
+//!
+//! A resize asked for is made at the start of the next frame ([`apply_rescale`], PreUpdate): before anything is placed
+//! or drawn that frame, so the pieces, the room and the headset's view all change in the same frame.
 use super::parks::{self, ParkFile, Parks};
 use super::{MAX_PARK_SCALE, MIN_PARK_SCALE, PlacedPieces};
 use crate::engines::{Engine, Engines};
+use crate::xr::link::PlayerFocus;
 use crate::xr::rig::Rig;
 use bevy::prelude::*;
 
@@ -64,17 +69,42 @@ pub(crate) fn current_default(world: &World) -> f32 {
     }
 }
 
-/// The open course's size now.
-pub(crate) fn current_times(world: &World) -> f32 {
-    times(world.resource::<Rig>().scale, current_default(world))
+/// A resize asked for: the world scale it goes to ([`apply_rescale`] makes it).
+#[derive(Resource, Default)]
+pub(crate) struct Rescale(pub Option<f32>);
+
+/// The world scale now, or the one asked for next frame.
+fn wanted_scale(world: &World) -> f32 {
+    world.get_resource::<Rescale>().and_then(|r| r.0).unwrap_or_else(|| world.resource::<Rig>().scale)
 }
 
-/// The open course (or, none open, the room) resized to `times`: its pieces keep their real size and place, and its
-/// other rooms' records of it follow.
+/// The open course's size now (or as asked for, next frame).
+pub(crate) fn current_times(world: &World) -> f32 {
+    times(wanted_scale(world), current_default(world))
+}
+
+/// The open course (or, none open, the room) resized to `times`, at the start of the next frame.
 pub(crate) fn set_current_times(world: &mut World, times: f32) {
-    let default = current_default(world);
+    let scale = scale_of(times, current_default(world));
+    match world.get_resource_mut::<Rescale>() {
+        Some(mut asked) => asked.0 = Some(scale),
+        None => rescale_now(world, scale),
+    }
+}
+
+/// The resize asked for, made (PreUpdate).
+pub(crate) fn apply_rescale(world: &mut World) {
+    let Some(scale) = world.get_resource_mut::<Rescale>().and_then(|mut r| r.0.take()) else { return };
+    rescale_now(world, scale);
+}
+
+/// The world scale made `scale` now: the pieces keep their real size and place, the open course's other rooms'
+/// records of it follow, and the player stays on the same real spot - the room is scaled about its feet.
+pub(crate) fn rescale_now(world: &mut World, scale: f32) {
     let old = world.resource::<Rig>().scale;
-    let scale = scale_of(times, default);
+    if (scale - old).abs() < 1e-6 {
+        return;
+    }
     let factor = scale / old;
     {
         let mut placed = world.resource_mut::<PlacedPieces>();
@@ -91,7 +121,27 @@ pub(crate) fn set_current_times(world: &mut World, times: f32) {
             }
         }
     }
-    crate::xr::ui::pages::set_world_scale(world, scale);
+    // (the player's feet, in the game: where they are in the room now is where they stay)
+    let feet = world
+        .get_resource::<Engines>()
+        .and_then(|e| e.current())
+        .and_then(|e| world.get_resource::<PlayerFocus>().and_then(|f| f.of(e)))
+        .map(|f| f.feet);
+    {
+        let mut rig = world.resource_mut::<Rig>();
+        if let (Some(feet), Some(root), Some((_, yaw))) = (feet, rig.root_transform(), rig.anchor) {
+            rig.anchor = Some((anchor_keeping(root, feet, scale, yaw), yaw));
+        }
+        rig.scale = scale;
+    }
+    world.resource_mut::<PlacedPieces>().revision += 1; // saves the layout (it carries the scale)
+}
+
+/// The anchor at which the game point `feet` (where `root` has it in the room now) stays on the same real spot at
+/// world scale `scale` (the rig's root: the game point of room point `t` is `R(-yaw) * scale * (t - anchor)`).
+fn anchor_keeping(root: Transform, feet: Vec3, scale: f32, yaw: f32) -> Vec3 {
+    let spot = root.compute_affine().inverse().transform_point3(feet);
+    spot - Quat::from_rotation_y(-yaw).inverse() * feet / scale
 }
 
 /// A course's file resized to `times` (a course not open): its pieces' game positions, its park scale, its scale and
@@ -135,6 +185,21 @@ pub(crate) fn course_times(world: &World, id: &str) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_resize_keeps_the_players_feet_on_the_same_real_spot() {
+        use crate::xr::rig::root_transform;
+        let (anchor, yaw, old) = (Vec3::new(0.4, 0.0, -1.2), 0.7, 8.0);
+        let root = root_transform(old, anchor, yaw);
+        // (the player's feet in the game: a room point 1.5 m off the anchor, on the floor)
+        let spot = Vec3::new(1.9, 0.0, -0.3);
+        let feet = root.transform_point(spot);
+        for scale in [6.0, 9.5, 1.0, 80.0] {
+            let moved = anchor_keeping(root, feet, scale, yaw);
+            let after = root_transform(scale, moved, yaw);
+            assert!((after.compute_affine().inverse().transform_point3(feet) - spot).length() < 1e-4, "the same spot at world scale {scale}");
+        }
+    }
 
     #[test]
     fn sizes_step_in_tenths_between_their_caps() {

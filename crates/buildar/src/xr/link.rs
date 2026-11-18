@@ -62,6 +62,9 @@ fn focus_from_link(engines: Option<Res<Engines>>, link: Res<SkaterLink>, mut foc
 /// How long the world scale is left alone before the player is put back: one placement for a whole slider drag.
 const RESCALE_SETTLE_S: f32 = 0.25;
 
+/// A player this near its spot from before a rescale (real metres) is still on it.
+const STILL_THERE_M: f32 = 0.02;
+
 /// A world-scale change in progress: the scale and root last seen, and the player's spot in the room (tracking space)
 /// from before it began.
 #[derive(Default)]
@@ -71,7 +74,8 @@ struct Rescale {
     changed_at: f32,
 }
 
-/// The world rescaled (any menu's slider): the player is put back on the same real spot once the scale settles. The
+/// The world rescaled: the player is put back on the same real spot once the scale settles - when it isn't still on it
+/// (a course resized keeps it there: `xr::build::size`; a park put down at another size doesn't). The
 /// spot is taken once, from the focus before the change: while a slider moves, the engine hasn't yet taken the last
 /// placement (Skate 3 turns one down while another is pending), so a focus read then is the old one, in a world
 /// that has since been rescaled.
@@ -103,7 +107,16 @@ fn keep_spot_on_rescale(
             if now - state.changed_at >= RESCALE_SETTLE_S
                 && let Some((spot, forward)) = state.spot.take()
             {
-                place.write(PlacePlayer::new(root.transform_point(spot), root.rotation * forward));
+                // (still there: left alone - putting it down again would stop it)
+                let to_room = root.compute_affine().inverse();
+                let there = engines
+                    .as_ref()
+                    .and_then(|e| e.current())
+                    .and_then(|e| focus.of(e))
+                    .is_some_and(|f| to_room.transform_point3(f.feet).distance(spot) < STILL_THERE_M);
+                if !there {
+                    place.write(PlacePlayer::new(root.transform_point(spot), root.rotation * forward));
+                }
             }
         }
     }
