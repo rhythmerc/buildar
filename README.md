@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="docs/images/skating-crab.png" alt="Rust crab riding a skateboard" width="480">
-</p>
-
 # buildAR for Meta Quest 3 (alpha)
 
 Build a course in your real room, then play it with a real game's engine. buildAR is a passthrough AR runtime
