@@ -12,7 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 # The headset app: SK8, plus Skate 3 and THUG2 on the player's own data.
-buildar = { path = "../buildar", default-features = false, features = ["xr", "retail", "thug2"] }
+buildar = { path = "../buildar", default-features = false, features = ["xr", "retail", "thug2", "mkwii"] }
 bevy = { workspace = true, features = ["android-native-activity"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
