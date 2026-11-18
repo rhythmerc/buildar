@@ -535,6 +535,8 @@ fn frame(world: &mut World) {
     if std::mem::take(&mut world.resource_mut::<XrUi>().request_recenter) {
         world.resource_mut::<crate::xr::spawn::PlaceSkater>().0 = true;
     }
+    // (how the menu opened this frame: by its button, or asked for)
+    let mut opened: Option<bool> = None;
     {
         let mut ui = world.resource_mut::<XrUi>();
         if ui.status.1 > 0.0 {
@@ -542,16 +544,25 @@ fn frame(world: &mut World) {
         }
         if let Some(page) = ui.request.take() {
             ui.show(page);
+            opened = Some(false);
         } else if nav.toggle {
             if ui.open || ui.external.is_some() {
                 ui.close();
             } else {
-                ui.show(if onboarded { home } else { pages::INTRO });
+                let page = if onboarded { home } else { pages::INTRO };
+                ui.show(page);
+                opened = Some(page == pages::PARKS);
             }
         } else if building && ui.open {
             // Holding the menu button for build mode closes the menu.
             ui.close();
         }
+    }
+    // (the menu button, playing a course: its details; else the parks)
+    match opened {
+        Some(true) => parks::opened_by_menu(world),
+        Some(false) => parks::opened_on_parks(world),
+        None => {}
     }
     let (open, external) = {
         let ui = world.resource::<XrUi>();

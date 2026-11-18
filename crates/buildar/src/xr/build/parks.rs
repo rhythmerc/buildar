@@ -733,6 +733,41 @@ pub(crate) fn new_park(world: &mut World, mode: Mode) -> String {
     id
 }
 
+/// Course `id` named `name` (trimmed; an empty name leaves it as it was).
+pub(crate) fn rename(world: &mut World, id: &str, name: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() {
+        return false;
+    }
+    let mut parks = world.resource_mut::<Parks>();
+    let Some(entry) = parks.get_mut(id) else { return false };
+    entry.file.name = name.to_string();
+    parks.save(id);
+    true
+}
+
+/// Course `id` made a course of `mode` (it moves to that mode's tab): the engine it was played with is forgotten, and
+/// when it is the open one, that mode's engine runs it.
+pub(crate) fn set_mode(world: &mut World, id: &str, mode: Mode) {
+    {
+        let mut parks = world.resource_mut::<Parks>();
+        let Some(entry) = parks.get_mut(id) else { return };
+        if entry.file.mode() == Some(mode) {
+            return;
+        }
+        entry.file.mode = mode.key().to_string();
+        entry.file.engine = None;
+        entry.file.engine_settings = None;
+        parks.save(id);
+    }
+    if world.resource::<Parks>().is_current(id)
+        && let Some(engine) = engine_of_mode(world, mode)
+        && world.get_resource::<Engines>().and_then(|e| e.current()) != Some(engine)
+    {
+        world.resource_mut::<Engines>().request(engine);
+    }
+}
+
 /// A copy of park `id`, in the same places.
 pub(crate) fn duplicate(world: &mut World, id: &str) -> Option<String> {
     let mut parks = world.resource_mut::<Parks>();
