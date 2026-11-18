@@ -1,7 +1,7 @@
 //! What the headset app and an engine say to each other (docs/engine-packaging-proposal.md,
 //! docs/buildar-proposal.md).
 //!
-//! The app (`skate-game`) carries the engines and the shared XR layer: the room, the courses, the menus, the
+//! The app (`buildar`) carries the engines and the shared XR layer: the room, the courses, the menus, the
 //! controllers. An engine implements a [`Mode`]: it runs that mode's game in that world. The root of this crate is
 //! what every mode shares:
 //! - **To the engine:** the controllers ([`LatestTouch`]) and whether the shared layer has them ([`PadHeld`]); the
@@ -14,7 +14,7 @@
 //!
 //! Each mode's own part is a module: [`skate`] (the park over the stage, the skater, its trick text).
 //!
-//! The registry that runs the engines and switches between them is the app's (`skate-game`'s `engines`).
+//! The registry that runs the engines and switches between them is the app's (`buildar`'s `engines`).
 use bevy::prelude::*;
 use std::collections::HashMap;
 

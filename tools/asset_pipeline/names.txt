@@ -2271,7 +2271,7 @@ signup
 skate
 skate3rust.rc
 skate3rust.res
-skate_game::riding_trace
+buildar::riding_trace
 skateboard
 skater
 skater-collections.json

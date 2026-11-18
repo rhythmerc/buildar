@@ -35,7 +35,7 @@ function Find-Installation {
 }
 
 Write-Host ""
-Write-Host "Skate 3 AR - making the Quest import zip from your own converted disc" -ForegroundColor Cyan
+Write-Host "buildAR - making the Quest import zip from your own converted disc" -ForegroundColor Cyan
 Write-Host ""
 
 if (-not $Assets) { $Assets = Find-Installation }
@@ -88,4 +88,4 @@ Write-Host ""
 Write-Host "Next:"
 Write-Host "  1. Plug the Quest into this PC, allow file access in the headset."
 Write-Host "  2. Copy Skate3-Quest.zip into the Quest's  Download\Skate3  folder (make the Skate3 folder)."
-Write-Host "  3. In Skate 3 AR: menu > Skate 3 data > Import, then close and reopen the app."
+Write-Host "  3. In buildAR: menu > Game data > Skate 3 > Import."

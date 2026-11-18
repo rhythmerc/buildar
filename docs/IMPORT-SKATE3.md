@@ -1,6 +1,6 @@
 # Play with your own Skate 3 (optional)
 
-Skate 3 AR runs on your own game files. If you own Skate 3 for Xbox 360, this brings the
+buildAR runs on your own game files. If you own Skate 3 for Xbox 360, this brings the
 **full Skate 3 tier** into the app: the retail skater, animations, controls and sounds, run
 from data converted from **your own disc**. Nothing from EA is in this repo or
 the APK, and nothing is downloaded: you bring the disc.
@@ -20,7 +20,7 @@ You need a Windows PC once (to convert the disc) and about 5 GB free on the Ques
 
 ## 2. Make the Quest zip
 
-1. From the [Skate 3 AR release](https://github.com/andrewnakas/skate3-quest-ar/releases/latest)
+1. From the [Skate 3 AR release (upstream)](https://github.com/andrewnakas/skate3-quest-ar/releases/latest)
    download `MAKE-QUEST-ZIP.bat` and `make-bundle.ps1`, and put both **in the same folder as
    `skate3rust.exe`**.
 2. Double-click `MAKE-QUEST-ZIP.bat`. It finds your converted data by itself and writes
@@ -32,7 +32,7 @@ says "Sound banks: none yet", skate in the desktop game for a minute and run it 
 
 ## 3. Put it on the Quest
 
-1. Install Skate 3 AR (see the main README) and open it once, then close it.
+1. Install buildAR (see the main README) and open it once, then close it.
 2. Plug the Quest into the PC. In the headset, allow access to files when it asks.
 3. In File Explorer open **Quest 3 > Internal shared storage > Download**, make a folder named
    **`Skate3`**, and copy **`Skate3-Quest.zip`** into it.
@@ -41,7 +41,7 @@ says "Sound banks: none yet", skate in the desktop game for a minute and run it 
 
 ## 4. Import in the headset
 
-1. Open Skate 3 AR, tap the **left menu** button, go to **Game data > Skate 3 > Import from
+1. Open buildAR, tap the **left menu** button, go to **Game data > Skate 3 > Import from
    Download/Skate3**, then press the zip it found.
 2. The first time, the Quest opens an "All files access" page for the app: switch it **on**,
    come back to the app and press **Import** again.
@@ -60,7 +60,7 @@ after importing to free the space.
 - **No sound in the Skate 3 tier:** the zip had no sound banks. Skate in the desktop game for a
   minute, make the zip again, re-import.
 - **Import can't see the zip:** it must be in `Download/Skate3/` and the app needs "All files
-  access" (Settings > Apps > Skate 3 AR > Permissions), or run
-  `adb shell appops set com.andrewnakas.skate3ar MANAGE_EXTERNAL_STORAGE allow`.
+  access" (Settings > Apps > buildAR > Permissions), or run
+  `adb shell appops set io.github.rhythmerc.buildar MANAGE_EXTERNAL_STORAGE allow`.
 - **From a Mac/Linux with adb instead:** run `MAKE-QUEST-ZIP.bat -NoZip` on the PC to get a
   `quest-data` folder, copy it over, then `scripts/quest/push-assets.sh quest-data/assets quest-data/audio-pcm-cache`.

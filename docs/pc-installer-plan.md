@@ -52,7 +52,7 @@ M1 + M2 (about 2.5 weeks) is the smallest useful slice.
 
 1. Should the installer also install the desktop game (Windows only today)?
 2. Keep the `com.andrewnakas.skate3ar` package (existing installs and data carry over) and retire the `sk8ar` store
-   build?
+   build? (Decided 2026-11-17: the app is buildAR, package `io.github.rhythmerc.buildar`.)
 3. Is Skate 3 conversion straight from an ISO on Linux needed in v1?
 4. Build the THUG2 C++ core for Android inside the main workspace, or ship a prebuilt library?
 5. Whole THUG2 `Data/` (1.4 GB) on the Quest, or only the files the engine opens? Which THUG2 versions must work?

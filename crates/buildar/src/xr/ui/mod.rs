@@ -1,0 +1,1231 @@
+//! The headset menus, shared by both tiers: pages of buttons, toggles and
+//! sliders drawn on the XR panel ([`super::panel`]), worked with the right
+//! controller's laser (trigger clicks, drags a slider) or the sticks
+//! (stick moves, A selects, stick left/right adjusts, B goes back).
+//!
+//! A tap of the left menu button opens and closes it. The first launch opens
+//! the intro ([`pages`]) instead of the start page.
+//!
+//! Pages come from [`UiProvider`]s: the shared one (start, intro, AR
+//! settings, build, Skate 3 data, controls) and whatever a tier adds (the
+//! clean tier's skater page). A provider builds a page from the world each
+//! frame and carries out what is pressed on it, so a page always shows live
+//! values and needs no state of its own.
+//!
+//! Another menu can borrow the panel ([`XrUi::external`]): the clean tier's
+//! full SK8 sheet. This module then only listens for the menu tap that
+//! closes everything.
+pub(crate) mod hud;
+#[cfg(any(feature = "retail", feature = "thug2"))]
+pub(crate) mod import;
+pub(crate) mod pages;
+pub(crate) mod parks;
+mod sound_lab;
+mod pointer;
+
+use super::actions::LatestTouch;
+use super::build::BuildMode;
+use super::panel::XrPanel;
+use crate::engines::{Engine, Engines};
+use engine_api::Control;
+use bevy::prelude::*;
+use std::sync::Arc;
+
+/// Rows on the panel at once; longer pages scroll with the cursor.
+const VISIBLE_ROWS: usize = 13;
+/// And under a page's graph.
+const GRAPH_ROWS: usize = 8;
+/// A graph's plot, panel pixels.
+pub(crate) const GRAPH_SIZE: Vec2 = Vec2::new(916.0, 290.0);
+/// How many steps a graph's curve is drawn in.
+pub(crate) const GRAPH_COLUMNS: usize = 229;
+const GRAPH_LINES: usize = 10;
+const GRAPH_HANDLES: usize = 6;
+/// A menu press shorter than this (with nothing else held) is a tap.
+const TAP_SECONDS: f32 = 0.35;
+const STICK: f32 = 0.6;
+const REPEAT_DELAY: f32 = 0.35;
+const REPEAT_EVERY: f32 = 0.09;
+pub(crate) const UI_FONT: &str = crate::fonts::HEADING;
+/// The menus' running text (variable weight).
+pub(crate) const UI_BODY_FONT: &str = crate::fonts::BODY;
+
+pub(crate) type PageId = &'static str;
+
+/// One row of a page.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Widget {
+    /// Opens another page.
+    Link { label: String, page: PageId },
+    Button { id: &'static str, label: String },
+    Toggle { id: &'static str, label: String, on: bool },
+    /// `text` is the value as shown ("1.5x", "on the floor").
+    Slider { id: &'static str, label: String, value: f32, min: f32, max: f32, step: f32, text: String },
+    /// Not selectable.
+    Info(String),
+}
+
+impl Widget {
+    pub(crate) fn link(label: impl Into<String>, page: PageId) -> Self {
+        Widget::Link { label: label.into(), page }
+    }
+    pub(crate) fn button(id: &'static str, label: impl Into<String>) -> Self {
+        Widget::Button { id, label: label.into() }
+    }
+    pub(crate) fn toggle(id: &'static str, label: impl Into<String>, on: bool) -> Self {
+        Widget::Toggle { id, label: label.into(), on }
+    }
+    pub(crate) fn slider(
+        id: &'static str,
+        label: impl Into<String>,
+        value: f32,
+        (min, max, step): (f32, f32, f32),
+        text: impl Into<String>,
+    ) -> Self {
+        Widget::Slider { id, label: label.into(), value, min, max, step, text: text.into() }
+    }
+    pub(crate) fn info(text: impl Into<String>) -> Self {
+        Widget::Info(text.into())
+    }
+
+    fn selectable(&self) -> bool {
+        !matches!(self, Widget::Info(_))
+    }
+
+    fn id(&self) -> &'static str {
+        match self {
+            Widget::Button { id, .. } | Widget::Toggle { id, .. } | Widget::Slider { id, .. } => id,
+            Widget::Link { page, .. } => page,
+            Widget::Info(_) => "",
+        }
+    }
+}
+
+/// A plot above a page's rows, worked with the laser alone: a curve, and
+/// handles on it to grab and drag. Every place is a fraction of the plot,
+/// (0, 0) its top left.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Graph {
+    pub id: &'static str,
+    /// The curve's height left to right, in [`GRAPH_COLUMNS`] steps.
+    pub curve: Vec<f32>,
+    /// The height the curve is filled from.
+    pub zero: f32,
+    pub handles: Vec<GraphHandle>,
+    /// Grid lines across the plot's width and down its height: where, the
+    /// label (or none), and whether it is a strong one.
+    pub across: Vec<(f32, &'static str, bool)>,
+    pub down: Vec<(f32, &'static str, bool)>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct GraphHandle {
+    pub at: Vec2,
+    pub label: &'static str,
+    pub color: Color,
+    pub selected: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct UiPage {
+    pub title: String,
+    pub graph: Option<Graph>,
+    pub widgets: Vec<Widget>,
+}
+
+impl UiPage {
+    pub(crate) fn new(title: impl Into<String>, widgets: Vec<Widget>) -> Self {
+        Self { title: title.into(), graph: None, widgets }
+    }
+}
+
+/// What a row was asked to do: pressed (buttons, toggles) or set to a value
+/// (sliders, already clamped and on the step grid). A graph: the laser's
+/// trigger pulled at a place on it, then held and moved to another.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Act {
+    Press,
+    Set(f32),
+    Grab(Vec2),
+    Drag(Vec2),
+}
+
+/// What the menu does after a row acted.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Outcome {
+    Stay,
+    Open(PageId),
+    /// Replace the current page (intro steps).
+    Replace(PageId),
+    Back,
+    /// Back to the bottom page (the parks).
+    Home,
+    Close,
+    Say(String),
+    /// Hand the panel to another menu (see [`XrUi::external`]).
+    External(&'static str),
+}
+
+pub(crate) trait UiProvider: Send + Sync + 'static {
+    /// The page `id`, if this provider makes it.
+    fn page(&self, id: PageId, world: &World) -> Option<UiPage>;
+    /// Carry out `act` on row `widget` of page `page`; `None` if it isn't this
+    /// provider's.
+    fn act(&self, page: PageId, widget: &'static str, act: Act, world: &mut World) -> Option<Outcome>;
+    /// Rows this provider adds to the start page.
+    fn start_items(&self, _world: &World) -> Vec<Widget> {
+        Vec::new()
+    }
+    /// The engine whose pages these are (shown only while it runs); none: every engine's.
+    fn engine(&self) -> Option<Engine> {
+        None
+    }
+}
+
+#[derive(Resource, Default, Clone)]
+pub(crate) struct UiProviders(pub Vec<Arc<dyn UiProvider>>);
+
+impl UiProviders {
+    /// The providers whose pages show now: the shared ones and the running engine's.
+    pub(crate) fn active(world: &World) -> Vec<Arc<dyn UiProvider>> {
+        let running = world.get_resource::<Engines>().and_then(Engines::current);
+        world.resource::<UiProviders>().0.iter().filter(|p| p.engine().is_none_or(|e| Some(e) == running)).cloned().collect()
+    }
+}
+
+/// The shared layer's own controls, listed after an engine's.
+pub(crate) const HOST_CONTROLS: &[Control] = &[
+    Control::new("Left grip + trigger", "aim, let go to put the skater there"),
+    Control::new("Left menu (tap)", "this menu"),
+    Control::new("Left menu (hold 1 s)", "build mode"),
+];
+
+/// The controls list shown under "Controls": each engine's own (from the engine), then the shared layer's.
+#[derive(Resource, Clone, Default)]
+pub(crate) struct ControlsSheet(std::collections::HashMap<Engine, Vec<Control>>);
+
+impl ControlsSheet {
+    /// `engine`'s rows, the shared layer's after them.
+    #[cfg_attr(not(any(feature = "retail", feature = "thug2")), allow(dead_code))]
+    pub(crate) fn set(&mut self, engine: Engine, rows: Vec<Control>) {
+        self.0.insert(engine, rows.into_iter().chain(HOST_CONTROLS.iter().cloned()).collect());
+    }
+
+    /// `engine`'s rows as they are: they list the shared layer's themselves (SK8's, whose own menu's chord comes
+    /// after them).
+    pub(crate) fn set_whole(&mut self, engine: Engine, rows: Vec<Control>) {
+        self.0.insert(engine, rows);
+    }
+
+    /// The running engine's (none running: the shared layer's).
+    pub(crate) fn rows(world: &World) -> Vec<Control> {
+        let running = world.get_resource::<Engines>().and_then(Engines::current);
+        running
+            .and_then(|e| world.resource::<ControlsSheet>().0.get(&e).cloned())
+            .unwrap_or_else(|| HOST_CONTROLS.to_vec())
+    }
+}
+
+/// Set while a headset menu owns the controllers (the skater gets neutral
+/// input).
+#[derive(Resource, Default)]
+pub(crate) struct UiOwnsControllers(pub bool);
+
+#[derive(Resource, Default)]
+pub(crate) struct XrUi {
+    pub open: bool,
+    stack: Vec<PageId>,
+    cursor: usize,
+    first: usize,
+    status: (String, f32),
+    /// Another menu has the panel (the clean tier's SK8 sheet); it hands it
+    /// back by clearing this.
+    pub external: Option<&'static str>,
+    /// Open on this page next frame (other systems' requests).
+    pub request: Option<PageId>,
+    /// Start placing the skater (`xr::spawn::PlaceSkater`) next frame.
+    pub request_recenter: bool,
+    drag: Option<usize>,
+    /// The laser has hold of the page's graph.
+    graph_drag: bool,
+    view: View,
+    /// The menu opened itself at launch.
+    started: bool,
+}
+
+impl XrUi {
+    /// Opens on `page`, over the parks (and, for a settings page, over the
+    /// settings' start page).
+    fn show(&mut self, page: PageId) {
+        self.open = true;
+        self.external = None;
+        self.stack = vec![pages::PARKS];
+        if page != pages::PARKS {
+            if page != pages::START && page != pages::INTRO {
+                self.stack.push(pages::START);
+            }
+            self.stack.push(page);
+        }
+        self.cursor = 0;
+        self.first = 0;
+    }
+
+    fn close(&mut self) {
+        self.open = false;
+        self.external = None;
+        self.drag = None;
+        self.graph_drag = false;
+    }
+
+    /// The parks screen is what the menu shows.
+    pub(crate) fn on_parks(&self) -> bool {
+        self.open && self.external.is_none() && self.stack.last() == Some(&pages::PARKS)
+    }
+
+    pub(crate) fn say(&mut self, text: impl Into<String>) {
+        self.status = (text.into(), 3.0);
+    }
+
+    /// What the menu does after something on it acted.
+    fn apply(&mut self, outcome: Outcome) {
+        match outcome {
+            Outcome::Stay => {}
+            Outcome::Open(p) => {
+                self.stack.push(p);
+                self.cursor = 0;
+                self.first = 0;
+            }
+            Outcome::Replace(p) => {
+                self.stack.pop();
+                self.stack.push(p);
+                self.cursor = 0;
+                self.first = 0;
+            }
+            Outcome::Back => {
+                if self.stack.len() > 1 {
+                    self.stack.pop();
+                    self.cursor = 0;
+                    self.first = 0;
+                } else {
+                    self.close();
+                }
+            }
+            Outcome::Home => {
+                self.stack.truncate(1);
+                self.cursor = 0;
+                self.first = 0;
+            }
+            Outcome::Close => self.close(),
+            Outcome::Say(text) => self.say(text),
+            Outcome::External(what) => {
+                self.open = false;
+                self.external = Some(what);
+            }
+        }
+    }
+}
+
+/// What the panel shows this frame (written by `frame`, drawn by `draw`).
+#[derive(Clone, Debug, Default, PartialEq)]
+struct View {
+    title: String,
+    trail: String,
+    graph: Option<Graph>,
+    rows: Vec<RowView>,
+    footer: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+struct RowView {
+    label: String,
+    value: String,
+    /// Slider position 0..1.
+    bar: Option<f32>,
+    on: Option<bool>,
+    selected: bool,
+    dim: bool,
+}
+
+/// One frame of stick / button navigation.
+#[derive(Clone, Copy, Debug, Default)]
+struct Nav {
+    toggle: bool,
+    up: bool,
+    down: bool,
+    left: bool,
+    right: bool,
+    select: bool,
+    back: bool,
+    fast: bool,
+    /// The right grip was pressed (more on what is chosen).
+    more: bool,
+}
+
+#[derive(Resource, Default)]
+struct UiNav(Nav);
+
+pub(crate) struct XrUiPlugin;
+
+impl Plugin for XrUiPlugin {
+    fn build(&self, app: &mut App) {
+        crate::fonts::embed(app);
+        #[cfg(any(feature = "retail", feature = "thug2"))]
+        app.add_plugins(import::ImportPlugin);
+        let mut providers = UiProviders::default();
+        providers.0.push(Arc::new(pages::Shared));
+        providers.0.push(Arc::new(sound_lab::SoundLabPages));
+        app.insert_resource(providers)
+            .init_resource::<ControlsSheet>()
+            .init_resource::<XrUi>()
+            .init_resource::<UiNav>()
+            .init_resource::<UiOwnsControllers>()
+            .init_resource::<pointer::UiPointer>()
+            .add_plugins(hud::HudPlugin)
+            .init_resource::<parks::ParksScreen>()
+            .add_systems(Startup, (spawn_ui, parks::spawn, pointer::spawn_beam))
+            .add_systems(
+                Update,
+                (touch_nav, pointer::aim, frame, draw, draw_graph, parks::draw, pointer::draw_beam)
+                    .chain()
+                    .in_set(UiSet),
+            );
+    }
+}
+
+/// The headset menu's frame; tiers order their own menu glue around it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct UiSet;
+
+// ---------------------------------------------------------------- input
+
+#[derive(Default)]
+struct NavState {
+    held: Option<(f32, bool)>,
+    previous: super::touch::TouchState,
+    repeat: [f32; 4],
+}
+
+/// Held-direction auto-repeat: true on the press, then every
+/// `REPEAT_EVERY` after `REPEAT_DELAY`.
+fn repeat(held: &mut f32, down: bool, dt: f32) -> bool {
+    if !down {
+        *held = 0.0;
+        return false;
+    }
+    let before = *held;
+    *held += dt;
+    if before == 0.0 {
+        return true;
+    }
+    let a = ((before - REPEAT_DELAY) / REPEAT_EVERY).floor();
+    let b = ((*held - REPEAT_DELAY) / REPEAT_EVERY).floor();
+    *held > REPEAT_DELAY && b > a
+}
+
+fn touch_nav(
+    touch: Res<LatestTouch>,
+    time: Res<Time<Real>>,
+    ui: Res<XrUi>,
+    mut state: Local<NavState>,
+    mut nav: ResMut<UiNav>,
+) {
+    let t = touch.0;
+    let p = state.previous;
+    let dt = time.delta_secs();
+    let mut n = Nav::default();
+    // Menu tap (nothing chorded with it: holds are build mode, menu + grips
+    // the SK8 sheet; a stick or X moved meanwhile is not a tap either).
+    let chorded = |t: &super::touch::TouchState| {
+        t.x || t.left_grip > 0.5 || t.right_grip > 0.5 || t.left_stick[0].abs() > 0.3 || t.left_stick[1].abs() > 0.3
+    };
+    state.held = match (state.held, t.menu) {
+        (None, true) => Some((0.0, chorded(&t))),
+        (Some((s, c)), true) => Some((s + dt, c || chorded(&t))),
+        (Some((s, c)), false) => {
+            n.toggle = !c && s < TAP_SECONDS;
+            None
+        }
+        (None, false) => None,
+    };
+    if ui.open && !t.menu {
+        let pick = |a: f32, b: f32| if a.abs() > b.abs() { a } else { b };
+        let y = pick(t.right_stick[1], t.left_stick[1]);
+        let x = pick(t.right_stick[0], t.left_stick[0]);
+        let r = &mut state.repeat;
+        n.up = repeat(&mut r[0], y > STICK, dt);
+        n.down = repeat(&mut r[1], y < -STICK, dt);
+        n.left = repeat(&mut r[2], x < -STICK, dt);
+        n.right = repeat(&mut r[3], x > STICK, dt);
+        n.select = t.a && !p.a;
+        n.back = t.b && !p.b;
+        n.fast = t.left_trigger > 0.5;
+        n.more = t.right_grip > 0.6 && p.right_grip <= 0.6;
+    }
+    state.previous = t;
+    nav.0 = n;
+}
+
+// ---------------------------------------------------------------- logic
+
+fn find_page(providers: &[Arc<dyn UiProvider>], id: PageId, world: &World) -> UiPage {
+    providers
+        .iter()
+        .find_map(|p| p.page(id, world))
+        .unwrap_or_else(|| UiPage::new("Menu", vec![Widget::info(format!("No page \"{id}\""))]))
+}
+
+/// `value` moved `steps` steps, clamped, on the step grid.
+pub(crate) fn step_value(value: f32, steps: f32, min: f32, max: f32, step: f32) -> f32 {
+    snap((value + steps * step).clamp(min, max), min, max, step)
+}
+
+/// The slider value at `frac` (0..1) along its bar.
+pub(crate) fn value_at(frac: f32, min: f32, max: f32, step: f32) -> f32 {
+    snap(min + frac.clamp(0.0, 1.0) * (max - min), min, max, step)
+}
+
+fn snap(v: f32, min: f32, max: f32, step: f32) -> f32 {
+    if step <= 0.0 {
+        return v;
+    }
+    (min + ((v - min) / step).round() * step).clamp(min, max)
+}
+
+/// The next selectable row from `from` going `dir`, wrapping.
+fn next_selectable(widgets: &[Widget], from: usize, dir: isize) -> usize {
+    let n = widgets.len() as isize;
+    if n == 0 {
+        return 0;
+    }
+    let mut i = from as isize;
+    for _ in 0..n {
+        i = (i + dir).rem_euclid(n);
+        if widgets[i as usize].selectable() {
+            return i as usize;
+        }
+    }
+    from
+}
+
+fn first_selectable(widgets: &[Widget]) -> usize {
+    widgets.iter().position(Widget::selectable).unwrap_or(0)
+}
+
+/// Opens, closes and navigates the menu and carries out what was pressed.
+fn frame(world: &mut World) {
+    let nav = world.resource::<UiNav>().0;
+    let point = world.resource::<pointer::UiPointer>().clone();
+    let dt = world.resource::<Time<Real>>().delta_secs();
+    let providers = UiProviders::active(world);
+    let building = world.resource::<BuildMode>().active;
+    let onboarded = world.resource::<super::ar_settings::ArSettings>().onboarding_done;
+    // (the menu's home: the parks, or with no engine to play them the game data, to bring one's files)
+    let home = if cfg!(any(feature = "retail", feature = "thug2")) && pages::no_engine(world) { pages::DATA } else { pages::PARKS };
+    {
+        // Open at launch: the intro the first time, else the home page
+        // (the scripted demo, SK8_DEMO, starts skating).
+        let mut ui = world.resource_mut::<XrUi>();
+        if !ui.started {
+            ui.started = true;
+            if std::env::var_os("SK8_DEMO").is_none() {
+                ui.request = Some(if onboarded { home } else { pages::INTRO });
+            }
+        }
+    }
+    if std::mem::take(&mut world.resource_mut::<XrUi>().request_recenter) {
+        world.resource_mut::<crate::xr::spawn::PlaceSkater>().0 = true;
+    }
+    {
+        let mut ui = world.resource_mut::<XrUi>();
+        if ui.status.1 > 0.0 {
+            ui.status.1 -= dt;
+        }
+        if let Some(page) = ui.request.take() {
+            ui.show(page);
+        } else if nav.toggle {
+            if ui.open || ui.external.is_some() {
+                ui.close();
+            } else {
+                ui.show(if onboarded { home } else { pages::INTRO });
+            }
+        } else if building && ui.open {
+            // Holding the menu button for build mode closes the menu.
+            ui.close();
+        }
+    }
+    let (open, external) = {
+        let ui = world.resource::<XrUi>();
+        (ui.open, ui.external.is_some())
+    };
+    // The panel shows this menu or the borrowed one; menus and build mode
+    // both own the controllers.
+    {
+        let showing = open || external;
+        let mut panel = world.resource_mut::<XrPanel>();
+        if showing && !panel.visible {
+            panel.recenter = true;
+        }
+        panel.visible = showing;
+        world.resource_mut::<UiOwnsControllers>().0 = showing;
+        if showing {
+            world.resource_mut::<BuildMode>().active = false;
+        }
+    }
+    if !open || external {
+        world.resource_mut::<XrUi>().view = View::default();
+        return;
+    }
+
+    let id = *world.resource::<XrUi>().stack.last().unwrap_or(&pages::PARKS);
+    if id == pages::PARKS {
+        let outcome = parks::frame(world, nav, &point);
+        let mut ui = world.resource_mut::<XrUi>();
+        ui.apply(outcome);
+        ui.view = View::default();
+        return;
+    }
+    let page = find_page(&providers, id, world);
+    let mut outcome = Outcome::Stay;
+    let mut acted: Option<(&'static str, Act)> = None;
+    {
+        let mut ui = world.resource_mut::<XrUi>();
+        let w = &page.widgets;
+        if ui.cursor >= w.len() || !w.get(ui.cursor).is_some_and(Widget::selectable) {
+            ui.cursor = first_selectable(w);
+        }
+        if nav.up {
+            ui.cursor = next_selectable(w, ui.cursor, -1);
+        }
+        if nav.down {
+            ui.cursor = next_selectable(w, ui.cursor, 1);
+        }
+        // The laser picks the row it points at.
+        let hovered = point.row.map(|slot| ui.first + slot).filter(|&i| w.get(i).is_some_and(Widget::selectable));
+        if let Some(i) = hovered.filter(|_| ui.drag.is_none()) {
+            ui.cursor = i;
+        }
+        if !point.held {
+            ui.drag = None;
+            ui.graph_drag = false;
+        }
+        // The graph: a pull of the trigger on it takes hold, and it is held
+        // until the trigger is let go, wherever the laser goes.
+        if let Some((graph, (at, inside))) = page.graph.as_ref().and_then(|g| Some((g.id, point.graph_at()?))) {
+            if point.click && inside {
+                ui.graph_drag = true;
+                acted = Some((graph, Act::Grab(at)));
+            } else if ui.graph_drag {
+                acted = Some((graph, Act::Drag(at)));
+            }
+        }
+        let cursor = ui.cursor;
+        match w.get(cursor).filter(|_| !ui.graph_drag) {
+            Some(Widget::Slider { value, min, max, step, .. }) => {
+                // Held left trigger: five steps at a time.
+                let gain = if nav.fast { 5.0 } else { 1.0 };
+                if nav.left || nav.right {
+                    let dir = if nav.left { -gain } else { gain };
+                    acted = Some((w[cursor].id(), Act::Set(step_value(*value, dir, *min, *max, *step))));
+                }
+                if point.click && hovered == Some(cursor) && point.over_bar(ui.first, cursor) {
+                    ui.drag = Some(cursor);
+                }
+                if ui.drag == Some(cursor) {
+                    if let Some(frac) = point.bar_frac(ui.first, cursor) {
+                        let v = value_at(frac, *min, *max, *step);
+                        if v != *value {
+                            acted = Some((w[cursor].id(), Act::Set(v)));
+                        }
+                    }
+                }
+            }
+            Some(widget) if widget.selectable() => {
+                if nav.select || (point.click && hovered == Some(cursor)) {
+                    match widget {
+                        Widget::Link { page, .. } => outcome = Outcome::Open(page),
+                        _ => acted = Some((widget.id(), Act::Press)),
+                    }
+                }
+            }
+            _ => {}
+        }
+        if nav.back && acted.is_none() && outcome == Outcome::Stay {
+            outcome = Outcome::Back;
+        }
+    }
+    if let Some((widget, act)) = acted {
+        outcome = providers.iter().find_map(|p| p.act(id, widget, act, world)).unwrap_or(Outcome::Stay);
+    }
+    {
+        let mut ui = world.resource_mut::<XrUi>();
+        ui.apply(outcome);
+        if !ui.open || ui.on_parks() {
+            ui.view = View::default();
+            return;
+        }
+    }
+    // Draw the page as it is now (values changed by this frame's press).
+    let id = *world.resource::<XrUi>().stack.last().unwrap_or(&pages::PARKS);
+    let page = find_page(&providers, id, world);
+    let trail = {
+        let ui = world.resource::<XrUi>();
+        ui.stack
+            .iter()
+            .map(|&p| find_page(&providers, p, world).title)
+            .collect::<Vec<_>>()
+            .join("  >  ")
+    };
+    let mut ui = world.resource_mut::<XrUi>();
+    if ui.cursor >= page.widgets.len() || !page.widgets[ui.cursor].selectable() {
+        ui.cursor = first_selectable(&page.widgets);
+    }
+    let cursor = ui.cursor;
+    // Scroll so the cursor is on screen.
+    let visible = if page.graph.is_some() { GRAPH_ROWS } else { VISIBLE_ROWS };
+    if cursor < ui.first {
+        ui.first = cursor;
+    } else if cursor >= ui.first + visible {
+        ui.first = cursor + 1 - visible;
+    }
+    ui.first = ui.first.min(page.widgets.len().saturating_sub(visible));
+    let rows = page
+        .widgets
+        .iter()
+        .enumerate()
+        .skip(ui.first)
+        .take(visible)
+        .map(|(i, w)| row_view(w, i == cursor))
+        .collect();
+    let hint = "Point + trigger, or stick + A.   B: back   Menu: close";
+    let footer = if ui.status.1 > 0.0 { format!("{}\n{hint}", ui.status.0) } else { hint.to_string() };
+    ui.view = View { title: page.title, trail, graph: page.graph, rows, footer };
+}
+
+fn row_view(w: &Widget, selected: bool) -> RowView {
+    match w {
+        Widget::Link { label, .. } => RowView { label: label.clone(), value: ">".into(), selected, ..default() },
+        Widget::Button { label, .. } => RowView { label: label.clone(), selected, ..default() },
+        Widget::Toggle { label, on, .. } => RowView {
+            label: label.clone(),
+            value: if *on { "ON".into() } else { "OFF".into() },
+            on: Some(*on),
+            selected,
+            ..default()
+        },
+        Widget::Slider { label, value, min, max, text, .. } => RowView {
+            label: label.clone(),
+            value: text.clone(),
+            bar: Some(if max > min { (value - min) / (max - min) } else { 0.0 }),
+            selected,
+            ..default()
+        },
+        Widget::Info(text) => RowView { label: text.clone(), dim: true, ..default() },
+    }
+}
+
+// ---------------------------------------------------------------- view
+
+#[derive(Component)]
+pub(crate) struct UiRoot;
+#[derive(Component)]
+struct UiTitle;
+#[derive(Component)]
+struct UiTrail;
+#[derive(Component)]
+struct UiFooter;
+/// Row slot `i` (the hit test reads its rectangle).
+#[derive(Component)]
+pub(crate) struct UiRow(pub usize);
+#[derive(Component)]
+struct UiLabel(usize);
+#[derive(Component)]
+struct UiValue(usize);
+/// A slider's bar in row slot `i` (the hit test reads it too).
+#[derive(Component)]
+pub(crate) struct UiBar(pub usize);
+#[derive(Component)]
+struct UiBarFill(usize);
+/// The graph's plot (the hit test reads its rectangle).
+#[derive(Component)]
+pub(crate) struct UiGraph;
+/// A piece of the graph.
+#[derive(Component, Clone, Copy)]
+enum GraphPart {
+    Plot,
+    Across(usize),
+    AcrossLabel(usize),
+    Down(usize),
+    DownLabel(usize),
+    /// The curve's step `i`: its fill from the zero line, and its line.
+    Fill(usize),
+    Line(usize),
+    Handle(usize),
+    HandleCore(usize),
+    HandleLabel(usize),
+}
+
+const TEAL: Color = Color::srgb(0.45, 0.9, 0.85);
+const SELECTED: Color = Color::srgb(0.12, 0.42, 0.4);
+const DIM: Color = Color::srgb(0.72, 0.78, 0.8);
+const OFF: Color = Color::srgb(0.55, 0.58, 0.6);
+
+fn spawn_ui(mut commands: Commands, panel: Res<XrPanel>, assets: Res<AssetServer>) {
+    let font = assets.load(UI_FONT);
+    let text = |s: &str, size: f32, color: Color| {
+        (Text::new(s), TextFont { font_size: size, ..default() }, TextColor(color))
+    };
+    let heavy = TextFont { font: font.clone(), font_size: 44.0, weight: FontWeight(800), ..default() };
+    commands
+        .spawn((
+            UiRoot,
+            Node {
+                width: percent(100),
+                height: percent(100),
+                position_type: PositionType::Absolute,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                display: Display::None,
+                ..default()
+            },
+            GlobalZIndex(20),
+            UiTargetCamera(panel.camera),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    width: px(960),
+                    max_width: percent(98),
+                    padding: UiRect::all(px(22)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(5),
+                    border_radius: BorderRadius::all(px(18)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.03, 0.05, 0.07, 0.92)),
+            ))
+            .with_children(|panel| {
+                panel.spawn((UiTitle, Text::new("buildAR"), heavy.clone(), TextColor(Color::WHITE)));
+                panel.spawn((UiTrail, text("", 20.0, TEAL)));
+                let part = |part: GraphPart, color: Color| {
+                    (part, Node { position_type: PositionType::Absolute, display: Display::None, ..default() }, BackgroundColor(color))
+                };
+                panel
+                    .spawn((
+                        UiGraph,
+                        GraphPart::Plot,
+                        Node {
+                            // (the panel's width: a width in pixels here makes the panel twice as tall)
+                            width: percent(100),
+                            height: px(GRAPH_SIZE.y),
+                            flex_shrink: 0.0,
+                            overflow: Overflow::clip(),
+                            border_radius: BorderRadius::all(px(8)),
+                            display: Display::None,
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgb(0.07, 0.09, 0.12)),
+                    ))
+                    .with_children(|g| {
+                        for i in 0..GRAPH_LINES {
+                            g.spawn(part(GraphPart::Across(i), Color::NONE));
+                            g.spawn(part(GraphPart::Down(i), Color::NONE));
+                        }
+                        for i in 0..GRAPH_COLUMNS {
+                            g.spawn(part(GraphPart::Fill(i), Color::srgba(0.45, 0.9, 0.85, 0.22)));
+                        }
+                        for i in 0..GRAPH_COLUMNS {
+                            g.spawn(part(GraphPart::Line(i), TEAL));
+                        }
+                        for i in 0..GRAPH_LINES {
+                            for label in [GraphPart::AcrossLabel(i), GraphPart::DownLabel(i)] {
+                                g.spawn((label, text("", 17.0, DIM), Node { position_type: PositionType::Absolute, ..default() }));
+                            }
+                        }
+                        for i in 0..GRAPH_HANDLES {
+                            g.spawn((
+                                GraphPart::Handle(i),
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    padding: UiRect::all(px(4)),
+                                    border_radius: BorderRadius::all(px(8)),
+                                    display: Display::None,
+                                    ..default()
+                                },
+                                BackgroundColor(Color::BLACK),
+                            ))
+                            .with_children(|h| {
+                                h.spawn((
+                                    GraphPart::HandleCore(i),
+                                    Node {
+                                        width: percent(100),
+                                        height: percent(100),
+                                        align_items: AlignItems::Center,
+                                        justify_content: JustifyContent::Center,
+                                        border_radius: BorderRadius::all(px(5)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(TEAL),
+                                ))
+                                .with_children(|c| {
+                                    c.spawn((GraphPart::HandleLabel(i), text("", 17.0, Color::BLACK)));
+                                });
+                            });
+                        }
+                    });
+                for i in 0..VISIBLE_ROWS {
+                    panel
+                        .spawn((
+                            UiRow(i),
+                            Node {
+                                width: percent(100),
+                                min_height: px(46),
+                                padding: UiRect::axes(px(12), px(4)),
+                                align_items: AlignItems::Center,
+                                column_gap: px(14),
+                                border_radius: BorderRadius::all(px(8)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::NONE),
+                        ))
+                        .with_children(|r| {
+                            r.spawn((UiLabel(i), text("", 26.0, Color::WHITE), Node { flex_grow: 1.0, ..default() }));
+                            r.spawn((
+                                UiBar(i),
+                                Node {
+                                    width: px(230),
+                                    height: px(14),
+                                    border_radius: BorderRadius::all(px(7)),
+                                    display: Display::None,
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)),
+                            ))
+                            .with_children(|bar| {
+                                bar.spawn((
+                                    UiBarFill(i),
+                                    Node {
+                                        width: percent(0),
+                                        height: percent(100),
+                                        border_radius: BorderRadius::all(px(7)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(TEAL),
+                                ));
+                            });
+                            r.spawn((
+                                UiValue(i),
+                                text("", 26.0, TEAL),
+                                Node { min_width: px(110), justify_content: JustifyContent::FlexEnd, ..default() },
+                            ));
+                        });
+                }
+                panel.spawn((UiFooter, text("", 19.0, DIM)));
+            });
+        });
+}
+
+#[allow(clippy::type_complexity)]
+fn draw(
+    ui: Res<XrUi>,
+    mut drawn: Local<View>,
+    mut root: Query<&mut Node, (With<UiRoot>, Without<UiRow>, Without<UiBar>, Without<UiBarFill>)>,
+    mut texts: ParamSet<(
+        Query<&mut Text, With<UiTitle>>,
+        Query<&mut Text, With<UiTrail>>,
+        Query<&mut Text, With<UiFooter>>,
+        Query<(&UiLabel, &mut Text, &mut TextColor)>,
+        Query<(&UiValue, &mut Text, &mut TextColor)>,
+    )>,
+    mut rows: Query<(&UiRow, &mut BackgroundColor, &mut Node), (Without<UiRoot>, Without<UiBar>, Without<UiBarFill>)>,
+    mut bars: Query<(&UiBar, &mut Node), (Without<UiRoot>, Without<UiRow>, Without<UiBarFill>)>,
+    mut fills: Query<(&UiBarFill, &mut Node), (Without<UiRoot>, Without<UiRow>, Without<UiBar>)>,
+) {
+    let Ok(mut node) = root.single_mut() else { return };
+    let display = if ui.open && ui.external.is_none() && !ui.on_parks() { Display::Flex } else { Display::None };
+    if node.display != display {
+        node.display = display;
+    }
+    if *drawn == ui.view {
+        return;
+    }
+    *drawn = ui.view.clone();
+    let v = &ui.view;
+    for mut t in &mut texts.p0() {
+        **t = v.title.clone();
+    }
+    for mut t in &mut texts.p1() {
+        **t = v.trail.clone();
+    }
+    for mut t in &mut texts.p2() {
+        **t = v.footer.clone();
+    }
+    for (UiLabel(i), mut t, mut color) in &mut texts.p3() {
+        let r = v.rows.get(*i);
+        **t = r.map(|r| r.label.clone()).unwrap_or_default();
+        color.0 = if r.is_some_and(|r| r.dim) { DIM } else { Color::WHITE };
+    }
+    for (UiValue(i), mut t, mut color) in &mut texts.p4() {
+        let r = v.rows.get(*i);
+        **t = r.map(|r| r.value.clone()).unwrap_or_default();
+        color.0 = match r.and_then(|r| r.on) {
+            Some(false) => OFF,
+            _ => TEAL,
+        };
+    }
+    for (UiRow(i), mut bg, mut node) in &mut rows {
+        let r = v.rows.get(*i);
+        bg.0 = if r.is_some_and(|r| r.selected) { SELECTED } else { Color::NONE };
+        let display = if r.is_some() { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    for (UiBar(i), mut node) in &mut bars {
+        let display = if v.rows.get(*i).is_some_and(|r| r.bar.is_some()) { Display::Flex } else { Display::None };
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    for (UiBarFill(i), mut node) in &mut fills {
+        let frac = v.rows.get(*i).and_then(|r| r.bar).unwrap_or(0.0);
+        node.width = percent(frac.clamp(0.0, 1.0) * 100.0);
+    }
+}
+
+/// The page's graph, laid out in the plot's pixels.
+fn draw_graph(
+    ui: Res<XrUi>,
+    mut drawn: Local<Option<Graph>>,
+    mut parts: Query<(&GraphPart, &mut Node, Option<&mut BackgroundColor>, Option<&mut Text>)>,
+) {
+    let graph = if ui.open && ui.external.is_none() { ui.view.graph.as_ref() } else { None };
+    if drawn.as_ref() == graph {
+        return;
+    }
+    *drawn = graph.cloned();
+    let Some(graph) = graph else {
+        for (part, mut node, ..) in &mut parts {
+            if matches!(part, GraphPart::Plot) {
+                node.display = Display::None;
+            }
+        }
+        return;
+    };
+    let (w, h) = (GRAPH_SIZE.x, GRAPH_SIZE.y);
+    let height = |i: usize| -> f32 {
+        let n = graph.curve.len();
+        if n == 0 { graph.zero } else { graph.curve[(i * n / GRAPH_COLUMNS).min(n - 1)] }.clamp(0.0, 1.0)
+    };
+    let step = w / GRAPH_COLUMNS as f32;
+    for (part, mut node, color, text) in &mut parts {
+        let mut show = true;
+        match *part {
+            GraphPart::Plot => {}
+            GraphPart::Across(i) | GraphPart::Down(i) => {
+                let across = matches!(part, GraphPart::Across(_));
+                match if across { graph.across.get(i) } else { graph.down.get(i) } {
+                    Some(&(at, _, strong)) => {
+                        let thick = if strong { 2.0 } else { 1.0 };
+                        if across {
+                            (node.left, node.top, node.width, node.height) = (px(at * w), px(0), px(thick), px(h));
+                        } else {
+                            (node.left, node.top, node.width, node.height) = (px(0), px(at * h), px(w), px(thick));
+                        }
+                        if let Some(mut color) = color {
+                            color.0 = Color::srgba(1.0, 1.0, 1.0, if strong { 0.22 } else { 0.09 });
+                        }
+                    }
+                    None => show = false,
+                }
+            }
+            GraphPart::AcrossLabel(i) | GraphPart::DownLabel(i) => {
+                let across = matches!(part, GraphPart::AcrossLabel(_));
+                let line = if across { graph.across.get(i) } else { graph.down.get(i) };
+                if let Some(&(at, _, _)) = line {
+                    // Beside its line: along the bottom, or down the left side.
+                    (node.left, node.top) = if across {
+                        (px(at * w + 5.0), px(h - 24.0))
+                    } else {
+                        (px(6), px((at * h - 22.0).max(2.0)))
+                    };
+                }
+                if let Some(mut text) = text {
+                    **text = line.map(|l| l.1.to_string()).unwrap_or_default();
+                }
+            }
+            GraphPart::Fill(i) => {
+                let (y, zero) = (height(i) * h, graph.zero * h);
+                (node.left, node.width) = (px(i as f32 * step), px(step + 0.5));
+                (node.top, node.height) = (px(y.min(zero)), px((y - zero).abs()));
+            }
+            GraphPart::Line(i) => {
+                // From the step before's height to this one's, so a steep curve stays joined.
+                let (y, before) = (height(i) * h, height(i.saturating_sub(1)) * h);
+                (node.left, node.width) = (px(i as f32 * step), px(step + 0.5));
+                (node.top, node.height) = (px(y.min(before) - 1.5), px((y - before).abs() + 3.0));
+            }
+            GraphPart::Handle(i) => match graph.handles.get(i) {
+                Some(handle) => {
+                    let size = if handle.selected { 38.0 } else { 30.0 };
+                    (node.width, node.height) = (px(size), px(size));
+                    (node.left, node.top) = (px(handle.at.x * w - size / 2.0), px(handle.at.y * h - size / 2.0));
+                    if let Some(mut color) = color {
+                        color.0 = if handle.selected { Color::WHITE } else { Color::BLACK };
+                    }
+                }
+                None => show = false,
+            },
+            GraphPart::HandleCore(i) => {
+                if let (Some(handle), Some(mut color)) = (graph.handles.get(i), color) {
+                    color.0 = handle.color;
+                }
+            }
+            GraphPart::HandleLabel(i) => {
+                if let Some(mut text) = text {
+                    **text = graph.handles.get(i).map(|h| h.label.to_string()).unwrap_or_default();
+                }
+            }
+        }
+        if !matches!(part, GraphPart::HandleCore(_) | GraphPart::HandleLabel(_) | GraphPart::AcrossLabel(_) | GraphPart::DownLabel(_)) {
+            let display = if show { Display::Flex } else { Display::None };
+            if node.display != display {
+                node.display = display;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_page_with_a_graph_shows_it() {
+        let mut world = World::new();
+        let plot = world.spawn((GraphPart::Plot, Node { display: Display::None, ..default() })).id();
+        let fill = world.spawn((GraphPart::Fill(3), Node { display: Display::None, ..default() }, BackgroundColor(TEAL))).id();
+        let handle = world.spawn((GraphPart::Handle(0), Node { display: Display::None, ..default() }, BackgroundColor(TEAL))).id();
+        let graph = Graph {
+            id: "g",
+            curve: vec![0.25; GRAPH_COLUMNS],
+            zero: 0.5,
+            handles: vec![GraphHandle { at: Vec2::splat(0.5), label: "L", color: TEAL, selected: true }],
+            ..default()
+        };
+        world.insert_resource(XrUi { open: true, view: View { graph: Some(graph), ..default() }, ..default() });
+        let mut schedule = Schedule::default();
+        schedule.add_systems(draw_graph);
+        schedule.run(&mut world);
+        let node = |world: &World, e| world.get::<Node>(e).unwrap().clone();
+        assert_eq!(node(&world, plot).display, Display::Flex);
+        assert_eq!(node(&world, fill).height, px(GRAPH_SIZE.y * 0.25));
+        assert_eq!(node(&world, handle).left, px(GRAPH_SIZE.x * 0.5 - 19.0));
+        world.resource_mut::<XrUi>().view.graph = None;
+        schedule.run(&mut world);
+        assert_eq!(node(&world, plot).display, Display::None);
+    }
+
+    /// The EQ page as the headset draws it, saved as a picture to look at:
+    /// `SK8_UI_SHOT=/path/eq.png cargo test ... a_picture_of_the_eq_page -- --ignored`
+    #[test]
+    #[ignore = "needs a GPU; writes a picture"]
+    fn a_picture_of_the_eq_page() {
+        use bevy::camera::RenderTarget;
+        use bevy::render::render_resource::TextureFormat;
+        use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+        use crate::clean_mix::{Band, FLAT};
+        let Some(path) = std::env::var_os("SK8_UI_SHOT") else { return };
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .build()
+                .disable::<bevy::winit::WinitPlugin>()
+                .set(WindowPlugin { primary_window: None, exit_condition: bevy::window::ExitCondition::DontExit, ..default() }),
+        );
+        crate::fonts::embed(&mut app);
+        let image = Image::new_target_texture(super::super::panel::WIDTH_PX, super::super::panel::HEIGHT_PX, TextureFormat::Rgba8UnormSrgb, None);
+        let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
+        let camera = app
+            .world_mut()
+            .spawn((Camera2d, Camera { clear_color: ClearColorConfig::Custom(Color::srgb(0.3, 0.3, 0.3)), ..default() }, RenderTarget::Image(image.clone().into())))
+            .id();
+        app.insert_resource(XrPanel::drawn_by(camera));
+        let mut eq = FLAT;
+        eq[0].gain = -9.0;
+        eq[1] = Band { freq: 700.0, gain: 8.0, q: 2.5 };
+        eq[3].gain = 4.0;
+        let widgets = [
+            Widget::slider("a", "Sound", 0.0, (0.0, 14.0, 1.0), "roll smooth"),
+            Widget::toggle("b", "Hold it playing", true),
+            Widget::toggle("c", "Solo (the other sounds are muted)", false),
+            Widget::slider("d", "Band (or grab one on the graph)", 1.0, (0.0, 3.0, 1.0), "Peak 1"),
+            Widget::slider("e", "Peak 1: sharpness (Q)", 0.6, (0.0, 1.0, 0.005), "2.50"),
+            Widget::slider("f", "Peak 1: at", 0.5, (0.0, 1.0, 0.005), "700 Hz"),
+            Widget::slider("g", "Peak 1: gain", 8.0, (-18.0, 18.0, 0.5), "+8.0 dB"),
+            Widget::button("h", "Flat"),
+        ];
+        let view = View {
+            title: "EQ".into(),
+            trail: "buildAR  >  Sound lab  >  EQ".into(),
+            graph: Some(sound_lab::eq_graph(&eq, 1)),
+            rows: widgets.iter().enumerate().map(|(i, w)| row_view(w, i == 4)).collect(),
+            footer: "Point + trigger, or stick + A.   B: back   Menu: close".into(),
+        };
+        app.insert_resource(XrUi { open: true, view, ..default() });
+        app.add_systems(Startup, spawn_ui).add_systems(Update, (draw, draw_graph).chain());
+        app.finish();
+        app.cleanup();
+        for _ in 0..30 {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // The whole page is on the panel, and the plot is the size the laser's arithmetic takes it for.
+        let mut plots = app.world_mut().query_filtered::<(&ComputedNode, &UiGlobalTransform), With<UiGraph>>();
+        let (plot, at) = plots.single(app.world()).map(|(node, at)| (node.size(), at.translation)).unwrap();
+        assert_eq!(plot, GRAPH_SIZE);
+        let mut rows = app.world_mut().query::<(&UiRow, &ComputedNode, &UiGlobalTransform)>();
+        let lowest = rows.iter(app.world()).filter(|(_, node, _)| node.size().y > 0.0).map(|(_, node, at)| at.translation.y + node.size().y / 2.0).fold(0.0, f32::max);
+        let height = super::super::panel::HEIGHT_PX as f32;
+        assert!(at.y - plot.y / 2.0 > 60.0 && lowest < height - 30.0, "plot at {}, rows to {lowest}", at.y);
+        app.world_mut().spawn(Screenshot::image(image)).observe(save_to_disk(std::path::PathBuf::from(path)));
+        for _ in 0..30 {
+            app.update();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn sliders_clamp_and_snap() {
+        assert_eq!(step_value(1.0, 1.0, 0.5, 4.0, 0.25), 1.25);
+        assert_eq!(step_value(3.9, 1.0, 0.5, 4.0, 0.25), 4.0);
+        assert_eq!(step_value(0.5, -1.0, 0.5, 4.0, 0.25), 0.5);
+        assert_eq!(value_at(0.0, 0.5, 4.0, 0.25), 0.5);
+        assert_eq!(value_at(1.0, 0.5, 4.0, 0.25), 4.0);
+        assert_eq!(value_at(0.5, 0.0, 2.0, 0.1), 1.0);
+        assert_eq!(value_at(2.0, 0.0, 2.0, 0.1), 2.0);
+    }
+
+    #[test]
+    fn cursor_skips_info_rows_and_wraps() {
+        let w = vec![
+            Widget::info("a"),
+            Widget::button("b", "b"),
+            Widget::info("c"),
+            Widget::toggle("d", "d", true),
+        ];
+        assert_eq!(first_selectable(&w), 1);
+        assert_eq!(next_selectable(&w, 1, 1), 3);
+        assert_eq!(next_selectable(&w, 3, 1), 1);
+        assert_eq!(next_selectable(&w, 1, -1), 3);
+        assert_eq!(next_selectable(&[Widget::info("x")], 0, 1), 0);
+    }
+
+    #[test]
+    fn taps_repeat_after_the_delay() {
+        let mut h = 0.0;
+        assert!(repeat(&mut h, true, 0.016));
+        let fired: u32 = (0..60).map(|_| repeat(&mut h, true, 0.016) as u32).sum();
+        assert!(fired >= 4, "{fired}");
+        assert!(!repeat(&mut h, false, 0.016));
+    }
+}

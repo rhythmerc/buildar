@@ -30,7 +30,7 @@ Or over adb, only the files the engine reads:
    ```
 
    `<your THUG2 folder>` is the installed game, the folder holding `Data`. The files go to
-   `Android/data/com.andrewnakas.skate3ar/files/thug2/`.
+   `Android/data/io.github.rhythmerc.buildar/files/thug2/`.
 3. In the app: Settings > Engine > THUG2.
 
 The short list (`scripts/quest/thug2-files.txt`) is what a run of the engine reads: its scripts,
@@ -95,7 +95,7 @@ The menu button, build mode and placing the skater work as they do for the other
 
 ## Building
 
-The app's GitHub build (`crates/skate-quest`) has the `thug2` feature. THUG2's code is
+The app's GitHub build (`crates/buildar-quest`) has the `thug2` feature. THUG2's code is
 [thug2-headless](https://github.com/rhythmerc/thug2-headless)'s, pinned by revision in the workspace's `Cargo.toml`:
 its `thug2-sys` (the C API, `app/thug2_engine.h`, and the CMake build of the engine) and `thug2-engine` (THUG2 as the
 engine contract). Its decomp (github.com/rhythmerc/thug2-decomp, branch `linux-headless`: CanuckAussieKev's with the
@@ -110,16 +110,16 @@ git clone https://github.com/rhythmerc/thug2-headless ../thug2-headless
 git clone -b linux-headless https://github.com/rhythmerc/thug2-decomp ../thug2-decomp
 ```
 
-On the desktop: `cargo build -p skate-game --features xr,thug2`. Engine tests on your own files:
+On the desktop: `cargo build -p buildar --features xr,thug2`. Engine tests on your own files:
 `THUG2_GAME_DIR=<folder holding Data> cargo test --release` in thug2-headless, and
-`cargo test -p skate-game --features xr,retail,thug2 thug2::` here.
+`cargo test -p buildar --features xr,retail,thug2 thug2::` here.
 
 `SK8_ENGINE_SCRIPT="8:thug2,16:sk8,24:skate3"` switches engines at those seconds after launch, to
 test switching without the menu.
 
 ## How the switching works
 
-`crates/skate-game/src/engines.rs`. Each engine's plugins are added inside `add_engine`:
+`crates/buildar/src/engines.rs`. Each engine's plugins are added inside `add_engine`:
 
 - Their per-frame systems run only while that engine runs.
 - Their start-up systems run the first time the engine is picked, not at launch.

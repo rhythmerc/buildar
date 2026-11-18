@@ -5,7 +5,7 @@ Each sample is made here from noise, decaying sines and filters, modelled on
 what makes the sound (urethane wheels on a surface, a wooden deck struck on
 the ground, a truck dragged along a rail); nothing is read from a recording
 or a game. Seeded, so the output is reproducible. Writes 48 kHz mono 16-bit
-WAVs into crates/skate-game/clean-audio/ with its sounds.json and
+WAVs into crates/buildar/clean-audio/ with its sounds.json and
 CREDITS.json.
 
 Loops are built in the frequency domain, so they repeat without a seam, and
@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 RATE = 48000
-OUT = Path(__file__).resolve().parents[2] / "crates/skate-game/clean-audio"
+OUT = Path(__file__).resolve().parents[2] / "crates/buildar/clean-audio"
 LOOP_SECONDS = 3.0
 #: Loops are mastered quiet so they sit under the hits (the driver restores them).
 LOOP_RMS_DB = -24.0

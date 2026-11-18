@@ -1,6 +1,6 @@
 # Quest 3 build (run on the Mac)
 
-The Quest app is built as an Android library (`crates/skate-quest`) with the
+The Quest app is built as an Android library (`crates/buildar-quest`) with the
 `xr` feature: OpenXR, colour passthrough, Touch controllers. It always starts
 in XR mode, as a miniature skater in your real room.
 
@@ -10,7 +10,7 @@ It has two tiers:
   (`crates/skate-lite-sys`, vendored from skatecore-cpp `clean/`), written
   from scratch for this app: its own physics, flick recogniser, tricks and
   tuning. The skater, board, poses and bails are built in code
-  (`crates/skate-game/src/clean/`), and the sounds are CC0 recordings or
+  (`crates/buildar/src/clean/`), and the sounds are CC0 recordings or
   original synthesis. It reads no game data at all, and
   `scripts/cleanroom/audit.py` checks it against a retail tree.
 - **Imported disc.** The faithful engine port, run on data you converted from
@@ -38,6 +38,19 @@ scripts/quest/build-apk.sh --install
 
 The APK carries no game data; the clean tier needs none.
 
+## Moving over from Skate 3 AR (`com.andrewnakas.skate3ar`)
+
+buildAR is a new package (`io.github.rhythmerc.buildar`) and installs beside the old app. To bring over the
+imported game data, parks and settings, install buildAR, open it once, close it, then:
+
+```sh
+adb shell 'cp -r /sdcard/Android/data/com.andrewnakas.skate3ar/files/. /sdcard/Android/data/io.github.rhythmerc.buildar/files/'
+```
+
+(Or import the game data again from `Download`.) A park's spatial anchors belong to the app that made them: each
+saved park asks to be put down by hand once in buildAR, and keeps a new anchor from then on. Uninstall the old app
+when everything is there: `adb uninstall com.andrewnakas.skate3ar`.
+
 ## Imported disc (optional)
 
 Player guide: [docs/IMPORT-SKATE3.md](../../docs/IMPORT-SKATE3.md) (`MAKE-QUEST-ZIP.bat` makes
@@ -53,7 +66,7 @@ bundle with `scripts/quest/make-bundle.ps1` on the PC (`quest-data/` holds
   on the headset (USB file transfer, or `adb push quest-data /sdcard/Download/Skate3/`),
   open the menu > Skate 3 data > Import. The first time, the app opens the
   "All files access" setting for it; switch it on, come back and press Import
-  again (or `adb shell appops set com.andrewnakas.skate3ar MANAGE_EXTERNAL_STORAGE allow`).
+  again (or `adb shell appops set io.github.rhythmerc.buildar MANAGE_EXTERNAL_STORAGE allow`).
   A folder is moved in (copied if the storage won't move it), a zip unzipped.
   Then "Close the app now" and open it again.
 - **With the script**, after installing the APK once:
@@ -62,7 +75,7 @@ bundle with `scripts/quest/make-bundle.ps1` on the PC (`quest-data/` holds
 scripts/quest/push-assets.sh quest-data/assets quest-data/audio-pcm-cache
 ```
 
-That lands in `/sdcard/Android/data/com.andrewnakas.skate3ar/files/`:
+That lands in `/sdcard/Android/data/io.github.rhythmerc.buildar/files/`:
 `assets/` (the converted installation) and
 `Skate3RustEngine/audio-pcm-cache/` (pre-decoded player sound banks; the
 headset has no ffmpeg). `push-assets.sh` also writes `skate3` to
@@ -72,11 +85,11 @@ Game data imports the same from `Download/Skate3` (and THUG2's files from
 
 ## Run and read logs
 
-Launch "Skate 3 AR" from the headset's library (Unknown Sources), or:
+Launch "buildAR" from the headset's library (Unknown Sources), or:
 
 ```sh
-adb shell am start -n com.andrewnakas.skate3ar/android.app.NativeActivity
-adb logcat -s skate3 bevy RustStdoutStderr
+adb shell am start -n io.github.rhythmerc.buildar/android.app.NativeActivity
+adb logcat -s buildar bevy RustStdoutStderr
 ```
 
 Every desktop console line (`REPORT_META ...`, errors, panics) appears
@@ -205,7 +218,7 @@ it only the real floor (y = 0) is used.
 ### Sound
 
 Both tiers on the Quest play the clean sounds in
-`crates/skate-game/clean-audio/`: rolling, grinds (metal on placed rails and
+`crates/buildar/clean-audio/`: rolling, grinds (metal on placed rails and
 copings), powerslides, pops, flips, catches, landings, pushes, footsteps and
 bails. Every sound is spatial: the headset is the listener and the skater
 the source, with distance measured in real metres (full volume within 1 m,

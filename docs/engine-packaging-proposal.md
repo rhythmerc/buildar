@@ -21,7 +21,7 @@ Workspace members (`Cargo.toml`), with Rust line counts (`src/**/*.rs`):
 
 | Crate | Lines | What it is | Depends on (workspace) |
 |---|---:|---|---|
-| `skate-game` | 150,353 | **Everything app-side**: the Skate 3 port's Bevy integration, the SK8 adapter, the THUG2 adapter, the XR layer, menus, audio, the desktop game, `engines.rs` | all below (mostly optional) |
+| `buildar` | 150,353 | **Everything app-side**: the Skate 3 port's Bevy integration, the SK8 adapter, the THUG2 adapter, the XR layer, menus, audio, the desktop game, `engines.rs` | all below (mostly optional) |
 | `skate-core` | 90,714 | Skate 3 "recovered calculations", no ECS/IO | none |
 | `skate-audio-core` | 61,727 | Skate 3 audio graph ported from the native C++ | none |
 | `skate-data` | 7,841 | Skate 3 stock data, manifests, bank storage | skate-core, skate-audio-* |
@@ -33,20 +33,20 @@ Workspace members (`Cargo.toml`), with Rust line counts (`src/**/*.rs`):
 | `thug2-sys` | 868 | THUG2 C API + safe wrapper; CMake-builds `../thug2-headless` + `../thug2-decomp` (`links = "thug2_engine"`) | none |
 | `skate-lite-sys` | 823 | **SK8 core**: bindings to the clean-room C++ `sk8` engine vendored from skatecore-cpp `clean/` (GPL-3.0-only) | none |
 | `roomtone-sys` | 648 | Room light estimation (MIT, vendored) | none |
-| `skate-quest` | 452 | GitHub Quest APK shell (`cdylib`, cargo-apk) | `skate-game` features `xr, retail, thug2` |
-| `sk8-quest` | 46 | Store Quest APK shell; reuses skate-quest's `src/*.rs` via `#[path]` | `skate-game` features `xr` |
+| `buildar-quest` | 452 | GitHub Quest APK shell (`cdylib`, cargo-apk) | `buildar` features `xr, retail, thug2` |
+| `sk8-quest` | 46 | Store Quest APK shell; reuses buildar-quest's `src/*.rs` via `#[path]` | `buildar` features `xr` |
 
 Dependency graph today:
 
 ```
-skate-quest ──► skate-game[xr,retail,thug2] ──► thug2-sys ──(cmake)──► ../thug2-headless, ../thug2-decomp
-sk8-quest   ──► skate-game[xr]               ├─► skate-lite-sys (SK8 core, C++)
+buildar-quest ──► buildar[xr,retail,thug2] ──► thug2-sys ──(cmake)──► ../thug2-headless, ../thug2-decomp
+sk8-quest   ──► buildar[xr]               ├─► skate-lite-sys (SK8 core, C++)
                                              ├─► roomtone-sys (xr)
                                              └─► [retail] skate-core, skate-data, skate-audio-core,
                                                  skate-audio-formats, skate-mods, skate-vehicles, skate-net
 ```
 
-`skate-game` features: `default = [dev-dynamic, retail]`; `retail` = the whole Skate 3 port plus its
+`buildar` features: `default = [dev-dynamic, retail]`; `retail` = the whole Skate 3 port plus its
 crates; `xr` = OpenXR layer; `thug2 = [xr, dep:thug2-sys]`; `xr-window`. Bins: `skate3rust` (desktop
 game, built for the Windows release in `.github/workflows/release.yml`), `skate3-audio-check`,
 `skate3-multiplayer`, `skate3-custom-models` (all `required-features = ["retail"]`).
@@ -54,17 +54,17 @@ game, built for the Windows release in `.github/workflows/release.yml`), `skate3
 **The three engines are packaged unevenly:**
 
 - **THUG2**: the engine is an external package (thug2-headless, own repo, MIT, C API) behind `thug2-sys`.
-  The *adapter* (`thug2.rs` 1,269 + `thug2/hud.rs` 663 + `thug2/hud.wgsl`) still lives in `skate-game`.
+  The *adapter* (`thug2.rs` 1,269 + `thug2/hud.rs` 663 + `thug2/hud.wgsl`) still lives in `buildar`.
 - **SK8**: the engine is *also* already an external package. `skate-lite-sys` wraps skatecore-cpp's
   `clean/` (vendored by `scripts/cleanroom/sync-lite.sh`, local changes tracked in `LOCAL-CHANGES.md`,
   mirrored at github.com/rhythmerc/skatecore). That's the thug2-headless model already. The adapter
   (`clean/`, 5,375 lines: `sim.rs` 211, `input.rs` 840, `menu.rs` 1,140, `skater.rs` 767,
-  `procedural.rs` 899, `view.rs` 397, `xr_menu.rs` 141, `skater_page.rs` 155, …) lives in `skate-game`.
+  `procedural.rs` 899, `view.rs` 397, `xr_menu.rs` 141, `skater_page.rs` 155, …) lives in `buildar`.
 - **Skate 3**: the Bevy-free lower layers are already crates (`skate-core`, `skate-data`,
   `skate-audio-*`), but the engine as a playable thing is roughly **114k lines of `#[cfg(feature =
-  "retail")]` modules inside `skate-game`**. There is no Skate 3 package boundary, only a feature flag.
+  "retail")]` modules inside `buildar`**. There is no Skate 3 package boundary, only a feature flag.
 
-### 1.2 Where the Skate 3 code lives (inside `skate-game/src`)
+### 1.2 Where the Skate 3 code lives (inside `buildar/src`)
 
 Everything `lib.rs` gates with `#[cfg(feature = "retail")]`, about 114k of the crate's 150k lines:
 
@@ -187,7 +187,7 @@ Adapters reach into XR internals well beyond that table. `thug2.rs`/`thug2/hud.r
 - *Menus:* `xr/ui/mod.rs` adds `import::ImportPlugin` under `retail`; `xr/ui/pages.rs` has the
   "Skate 3 data" page, Skate 3-specific engine text, and `ENGINE_IDS`/`engine_about` hard-coded for all
   three engines. `xr/mod.rs` picks the OpenXR app name by feature.
-- *Fonts:* the shared menus' fonts are `embedded://skate_game/clean/assets/fonts/...`
+- *Fonts:* the shared menus' fonts are `embedded://buildar/clean/assets/fonts/...`
   (`xr/ui/mod.rs:48-50`), embedded by `clean::embed_font`, so the shared UI depends on the SK8
   module (`XrUiPlugin::build` calls it).
 - *Audio:* `xr/real_world.rs` fills `skate_audio::clean::SurfaceHints`; `xr/spatial_audio.rs` uses
@@ -233,7 +233,7 @@ Adapters reach into XR internals well beyond that table. `thug2.rs`/`thug2/hud.r
 
 ### 1.7 Tests
 
-- Counts (`#[test]`): skate-game 749 (physics 115, graph_host 71, player_audio 137, xr 150, `src/tests` 74,
+- Counts (`#[test]`): buildar 749 (physics 115, graph_host 71, player_audio 137, xr 150, `src/tests` 74,
   engines 4, thug2 4, clean 4, scoring_runtime 8, profiling 4, retail shader tests 4), skate-core 789,
   skate-audio-core 776, skate-vehicles 74, skate-audio-formats 66, skate-data 59, skate-net 29,
   skate-mods 27, roomtone-sys 6, thug2-sys 5, skate-lite-sys 5.
@@ -342,16 +342,16 @@ crates/
                            clean-audio/ WAVs. Used by the app (SK8, sound lab, spatial audio) and Skate 3
                            (its Android fallback). Depends on skate-engine-api only.
   engine-thug2/       NEW  thug2.rs, thug2/hud.rs, hud.wgsl → depends on thug2-sys + api.
-  engine-skate3/      NEW  every `retail` module of skate-game, link_retail, scoring_hud, the
+  engine-skate3/      NEW  every `retail` module of buildar, link_retail, scoring_hud, the
                            importer's logic, clean_pack, shaders, tests, examples. Depends on api,
                            skate-clean-audio, skate-core, skate-data, skate-audio-*, skate-mods,
                            skate-vehicles, skate-net.
   skate3-desktop/     NEW (or a bin inside engine-skate3): the non-XR `skate3rust` Windows game,
                            updater/crash report/profiling, its build.rs (provenance, Windows icon).
-  skate-game/         The app/host: xr/, engines.rs (registry), menus, parks, config (XrOptions),
+  buildar/         The app/host: xr/, engines.rs (registry), menus, parks, config (XrOptions),
                       android, SK8 adapter (clean/). Features `skate3`, `thug2` become optional deps.
-  skate-quest/        deps: skate-game[skate3, thug2]
-  sk8-quest/          deps: skate-game (no engines beyond SK8)
+  buildar-quest/        deps: buildar[skate3, thug2]
+  sk8-quest/          deps: buildar (no engines beyond SK8)
   (unchanged) skate-lite-sys, thug2-sys, roomtone-sys, skate-core, skate-data, skate-audio-*, ...
 ```
 
@@ -397,7 +397,7 @@ must be carried back to skatecore-cpp before the next `sync-lite.sh`.
 ## 3. Technical proposal: incremental migration
 
 Each step builds and keeps tests green on its own. "Verify" always includes: `cargo test --release
--p skate-game` (and the crates touched), building `sk8-quest` and `skate-quest` APKs, and the switch
+-p buildar` (and the crates touched), building `sk8-quest` and `buildar-quest` APKs, and the switch
 smoke test `SK8_ENGINE_SCRIPT="5:thug2,12:skate3,20:sk8"` on headset. Release builds only, given the disk.
 
 Sizes are rough, for one focused developer: S ≤ 1 day, M 2-3 days, L 4-6 days.
@@ -419,7 +419,7 @@ Sizes are rough, for one focused developer: S ≤ 1 day, M 2-3 days, L 4-6 days.
   (from `xr/link.rs`), `TrickHud` (data only; the drawing stays in `xr/ui/hud.rs`), `HandHud` (the
   component; placement stays in `xr/hand_hud.rs`), `UiProvider` + `UiPage`/`Widget`/`Act`/`Outcome`/
   `PageId`, `ControlsSheet`, `TouchState` → `PadInput`.
-- **skate-game** re-exports them at the old paths (`pub(crate) use skate_engine_api::…`), so no call
+- **buildar** re-exports them at the old paths (`pub(crate) use skate_engine_api::…`), so no call
   site changes yet.
 - **engines.rs:** unchanged in logic; types come from the API.
 - **Risks:** low. Watch `HandHud` because it depends on `HudHand` (move that enum too), and on Bevy
@@ -526,7 +526,7 @@ Sizes are rough, for one focused developer: S ≤ 1 day, M 2-3 days, L 4-6 days.
 - **Moves:** `thug2.rs` → `crates/engine-thug2/src/lib.rs`, `thug2/hud.rs` → `src/hud.rs`,
   `thug2/hud.wgsl` → `src/hud.wgsl`. Depends on `thug2-sys`, `skate-engine-api`, bevy.
 - **Embedded paths:** `hud.rs` uses `concat!("embedded://", env!("CARGO_CRATE_NAME"),
-  "/thug2/hud.wgsl")`. The crate name updates itself (`skate_game` → `engine_thug2`), but the
+  "/thug2/hud.wgsl")`. The crate name updates itself (`buildar` → `engine_thug2`), but the
   **`/thug2/` part is the file's path under `src/`** and must become `/hud.wgsl` to match
   `embedded_asset!(app, "hud.wgsl")` from `src/hud.rs`. A mismatch doesn't fail to compile; the shader
   is just missing at runtime (a magenta or invisible HUD). Add a test that loads every `ShaderRef`
@@ -534,7 +534,7 @@ Sizes are rough, for one focused developer: S ≤ 1 day, M 2-3 days, L 4-6 days.
   equal `embedded_path!` output.
 - `stream_pcm` comes from `skate-clean-audio`. The tests (`thug2.rs` ~1117+) move with it and use the
   API's `EngineSet`.
-- `skate-game` feature `thug2 = ["xr", "dep:engine-thug2"]`. `skate-quest` unchanged.
+- `buildar` feature `thug2 = ["xr", "dep:engine-thug2"]`. `buildar-quest` unchanged.
 - **Risks:** Android CMake build through cargo-apk (`ANDROID_NDK_*`, `THUG2_CXX`, sibling checkouts):
   unchanged, but run `build-apk.sh` once. `links = "thug2_engine"` stays on `thug2-sys`.
 - **Verify:** `THUG2_SHOT=… THUG2_SHOT_AFTER=2` picture before and after; on-headset THUG2 HUD panel,
@@ -544,33 +544,33 @@ Sizes are rough, for one focused developer: S ≤ 1 day, M 2-3 days, L 4-6 days.
 
 - **Moves:** every `retail` module in `lib.rs`, `xr/link_retail.rs`, `scoring_hud.rs`, the importer
   logic (`xr/ui/import.rs`; it's a Skate 3 `UiProvider` after step 3), `clean_pack.rs`, all `.wgsl`
-  next to them, `src/tests/`, `examples/`. `skate-game` loses `retail` and gains
+  next to them, `src/tests/`, `examples/`. `buildar` loses `retail` and gains
   `skate3 = ["dep:engine-skate3"]`.
 - **Keep the `src/` layout identical** (`src/physics/...`, `src/scoring_hud.rs`, …) so every
   `embedded_asset!`/`embedded_path!` relative path stays valid. Only the crate segment changes, and
   `concat!(..., env!("CARGO_CRATE_NAME"), ...)` (`scoring_hud.rs:33,49`) and `embedded_path!`
-  (`retail_render.rs`) handle that. Grep for hard-coded `embedded://skate_game/` (today:
+  (`retail_render.rs`) handle that. Grep for hard-coded `embedded://buildar/` (today:
   `xr/ui/mod.rs` fonts, `clean/menu.rs`, `clean/skater.rs`, `xr/build/mod.rs` occluder; none of them in
   Skate 3 code) and keep it that way.
 - **Relative `include_bytes!`/`include_str!` paths break with directory depth:**
   `skate_world.rs` (`../../../maps/format-demo.skate`, `../../skate-data/tests/fixtures/
   retail-collision.rwcmset`), `tests/map_startup.rs`, `map_render.rs`, `retail_shadow_geometry.rs`,
   `physics/offboard/contact_toolkit/tests.rs`, `retail_shader_tests.rs` (`../../../vendor/bevy_pbr/...`).
-  If the crate sits at `crates/engine-skate3/` (same depth as `skate-game`) they keep working.
+  If the crate sits at `crates/engine-skate3/` (same depth as `buildar`) they keep working.
   Switch them to `concat!(env!("CARGO_MANIFEST_DIR"), "/../..")` anyway.
 - **build.rs:** `SKATE_BUILD_ID`/`SKATE_RELEASE_REVISION`/`SKATE_RELEASE_BUILD` are read by
   `crash_report.rs`, `profiling.rs` and `updater.rs`. Copy the provenance part of
-  `skate-game/build.rs` into the crate that holds them (engine-skate3 or skate3-desktop), and fix its
+  `buildar/build.rs` into the crate that holds them (engine-skate3 or skate3-desktop), and fix its
   `rerun-if-changed` relative paths.
-- **Bevy hazards:** `TypePath` strings of moved assets/materials change (`skate_game::…` →
+- **Bevy hazards:** `TypePath` strings of moved assets/materials change (`buildar::…` →
   `engine_skate3::…`). Harmless unless persisted; nothing in the repo serialises reflected types today.
   Log targets change too (check any `RUST_LOG` filters people use, and
-  `tools/asset_pipeline/names.txt` mentions `skate_game::riding_trace`). Plugin uniqueness: if both
+  `tools/asset_pipeline/names.txt` mentions `buildar::riding_trace`). Plugin uniqueness: if both
   the app and the engine add the same Bevy plugin (e.g. `Material2dPlugin` of a shared type), Bevy
   panics. `prepare` is where shared plugins are added, guarded by `is_plugin_added`.
 - **Desktop multiplayer:** stays inside engine-skate3/skate3-desktop. Headset multiplayer would go
   through `NetSnapshot` later.
-- **Verify:** the full skate-game test suite (now split across both crates; test counts should add
+- **Verify:** the full buildar test suite (now split across both crates; test counts should add
   up to the step-0 baseline), `retail_shader_tests` (naga validation of the moved shaders),
   `--check-assets` on desktop with imported data, the Windows `Build-Release.ps1` in CI, headset
   Skate 3 with the APT HUD panel.
@@ -579,7 +579,7 @@ Sizes are rough, for one focused developer: S ≤ 1 day, M 2-3 days, L 4-6 days.
 
 - `skate3-desktop` holds the `skate3rust` binary, `audio-check`, `multiplayer`, `custom-models`
   bins, `crash_report_ui.ps1`, the Windows `.rc`/icon part of `build.rs`, the `--clean` desktop SK8
-  path (or that stays in skate-game's `main.rs`).
+  path (or that stays in buildar's `main.rs`).
 - Update `release.yml`/`scripts/Build-Release.ps1` and `BUILD.bat`/`PLAY*.bat` to `-p skate3-desktop`.
 - **Verify:** the Windows CI artefact name (`skate3rust-windows-x64.zip`) and updater protocol tests
   (`tools/test_update*.py`) unchanged.
@@ -587,7 +587,7 @@ Sizes are rough, for one focused developer: S ≤ 1 day, M 2-3 days, L 4-6 days.
 ### Step 8 (optional): `engine-sk8` (S-M)
 
 - Only after steps 2-3 leave `clean/` API-only. Moves `clean/` + `assets/skater.glb` (its hard-coded
-  `embedded://skate_game/clean/assets/skater.glb` and `HUD_FONT` strings must change). Keep
+  `embedded://buildar/clean/assets/skater.glb` and `HUD_FONT` strings must change). Keep
   `skate-lite-sys` as the core.
 - Worth doing if you want all three engines to prove the API, or a second host wants SK8.
 
@@ -663,7 +663,7 @@ vanishing-menu issue. Step 5 is a cheap rehearsal for step 6.
 6. **SK8 adapter:** leave `clean/` in the app (recommended) or extract `engine-sk8` for symmetry?
 7. **Headset multiplayer:** should the API's `NetSnapshot` be designed now (engine-neutral pose
    snapshots, per `colocated-multiplayer-plan.md`), or left for when multiplayer comes to the headset?
-8. **Naming:** `engine-skate3` / `engine-thug2` / `skate-engine-api`, and whether `skate-game` is
-   renamed (e.g. `skate-app`). Renaming changes `embedded://skate_game/...` paths and log targets.
+8. **Naming:** `engine-skate3` / `engine-thug2` / `skate-engine-api`, and whether `buildar` is
+   renamed (e.g. `skate-app`). Renaming changes `embedded://buildar/...` paths and log targets.
 9. **Generic trick readout:** keep it as a fallback under engines that have their own HUD, or make
    each engine choose (`EngineInfo.has_own_hud`)?

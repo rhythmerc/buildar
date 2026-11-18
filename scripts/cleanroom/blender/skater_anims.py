@@ -5,7 +5,7 @@ Everything is in the rider frame (Blender units, metres): origin on the deck top
 +Z up. Each pose places the hips, bends the spine, turns the head and puts the feet and hands
 (IK targets) somewhere; clips are poses at frames, eased between, then baked to plain bone keys.
 
-Runtime (crates/skate-game/src/clean/skater.rs) blends these clips from the engine's state.
+Runtime (crates/buildar/src/clean/skater.rs) blends these clips from the engine's state.
 """
 import math
 import os

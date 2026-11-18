@@ -4,7 +4,7 @@
 
 Downloads the start of the published core.pack (SKPK1: u32 count, then per file
 u32 path length, path, u64 size, bytes) and writes every assets/clean-audio/
-entry to out_dir (default crates/skate-game/clean-audio). Those sounds are CC0
+entry to out_dir (default crates/buildar/clean-audio). Those sounds are CC0
 recordings or resynthesised from coarse descriptors (see the repo's README and
 CREDITS.json); no retail audio.
 """
@@ -18,7 +18,7 @@ PREFIX = "assets/clean-audio/"
 
 
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else "crates/skate-game/clean-audio"
+    out = sys.argv[1] if len(sys.argv) > 1 else "crates/buildar/clean-audio"
     req = urllib.request.Request(URL, headers={"Range": "bytes=0-6000000"})
     data = urllib.request.urlopen(req).read()
     if data[:5] != b"SKPK1":

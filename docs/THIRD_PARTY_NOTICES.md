@@ -9,7 +9,7 @@ alongside the source. See `docs/room-lighting.md`.
 The Quest apps can carry Steam Audio's `libphonon.so` (Valve Corporation, Apache-2.0,
 https://github.com/ValveSoftware/steam-audio), fetched unmodified by
 `scripts/quest/fetch-steam-audio.sh` and loaded at run time for the skate sounds' HRTF
-(`crates/skate-game/src/binaural.rs`). It is not in this repository; its own third-party notices
+(`crates/buildar/src/binaural.rs`). It is not in this repository; its own third-party notices
 are the release's `THIRDPARTY.md`.
 
 

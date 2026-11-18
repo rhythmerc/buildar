@@ -11,7 +11,7 @@ Checks that the clean tier shares nothing with the retail game:
 
 Usage:
   scripts/cleanroom/audit.py --retail <assets dir of an imported/unpacked pack>
-      [--apk target/release/apk/skate3ar.apk] [--opens <log with SKATE_OPEN lines>]
+      [--apk target/release/apk/buildar.apk] [--opens <log with SKATE_OPEN lines>]
       [--blobs <dir from --dump-clean-assets>]
 
 The retail tree is only read locally to compare against; nothing from it is written anywhere.
@@ -35,11 +35,11 @@ CLEAN_SOURCES = [
     REPO / "crates/skate-lite-sys/src",
     REPO / "crates/skate-lite-sys/build.rs",
     REPO / "crates/skate-lite-sys/vendor",
-    REPO / "crates/skate-game/src/clean",
-    REPO / "crates/skate-game/src/xr/panel.rs",
+    REPO / "crates/buildar/src/clean",
+    REPO / "crates/buildar/src/xr/panel.rs",
     REPO / "scripts/cleanroom/blender",
 ]
-CLEAN_BLOBS = [REPO / "crates/skate-game/clean-audio", REPO / "crates/skate-game/src/clean/assets"]
+CLEAN_BLOBS = [REPO / "crates/buildar/clean-audio", REPO / "crates/buildar/src/clean/assets"]
 SOURCE_EXT = {".c", ".cc", ".cpp", ".h", ".hpp", ".rs", ".py", ".wgsl", ".toml", ".json"}
 RETAIL_EXT = {".abin", ".stategraph", ".pat", ".shk", ".vlt", ".bin", ".big"}
 RETAIL_NAMES = {"skater-collections.json", "physics-skeletons.json", "input.cfg", "game.json"}
@@ -280,7 +280,7 @@ def check_provenance():
 
 
 def check_credits():
-    audio = REPO / "crates/skate-game/clean-audio"
+    audio = REPO / "crates/buildar/clean-audio"
     credits = {c["sound"]: c for c in json.loads((audio / "CREDITS.json").read_text())}
     wavs = sorted(f.stem for f in audio.glob("*.wav"))
     for w in wavs:

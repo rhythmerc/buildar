@@ -9,7 +9,7 @@
 set -euo pipefail
 ASSETS="${1:?usage: push-assets.sh <assets-dir> [<pcm-cache-dir>]}"
 CACHE="${2:-}"
-PKG=com.andrewnakas.skate3ar
+PKG=io.github.rhythmerc.buildar
 DEST=/sdcard/Android/data/$PKG/files
 adb shell mkdir -p "$DEST/assets" "$DEST/Skate3RustEngine/audio-pcm-cache"
 # (Android won't let adb push create folders inside another app's files: make them first)

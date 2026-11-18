@@ -25,7 +25,7 @@ its exposure and the head's pose. It runs on its own thread, five frames a secon
 - For light that depends on where things are: a room scan (Space Setup), which the app
   already loads. Free roam gets the room's light without placement.
 
-## How it works (`crates/skate-game/src/xr/room_light/`)
+## How it works (`crates/buildar/src/xr/room_light/`)
 
 | File | |
 |---|---|
@@ -55,13 +55,13 @@ While it is on and a light has been made, the tier's own `DirectionalLight`s and
 ## Trying it without a headset
 
 ```sh
-SK8_ROOM_LIGHT=lamp      cargo run -p skate-game --no-default-features --features xr -- --clean
+SK8_ROOM_LIGHT=lamp      cargo run -p buildar --no-default-features --features xr -- --clean
 SK8_ROOM_LIGHT=lamp-room ...   # the same bulb in a room with known walls: placed by depth, a grid of probes
 SK8_ROOM_LIGHT=window    ...   # daylight from the left, no placement
 SK8_ROOM_LIGHT=<file>    ...   # a session recorded with Roomtone's Recorder
 ```
 
-`cargo test -p roomtone-sys` and `cargo test -p skate-game --no-default-features --features xr room_light`
+`cargo test -p roomtone-sys` and `cargo test -p buildar --no-default-features --features xr room_light`
 cover the bindings, the unit conversion, the volume texture's layout, the depth ray caster and
 the frame reduction.
 

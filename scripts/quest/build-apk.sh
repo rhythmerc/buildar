@@ -11,18 +11,18 @@ cd "$ROOT"
 : "${ANDROID_NDK_ROOT:=${ANDROID_NDK_HOME:-}}"
 : "${ANDROID_NDK_ROOT:?set ANDROID_NDK_ROOT to the Android NDK}"
 export ANDROID_NDK_ROOT
-if [ ! -f crates/skate-quest/runtime_libs/arm64-v8a/libopenxr_loader.so ]; then
+if [ ! -f crates/buildar-quest/runtime_libs/arm64-v8a/libopenxr_loader.so ]; then
   scripts/quest/fetch-openxr-loader.sh
 fi
 # Steam Audio, for the skate sounds' HRTF (without it they are panned).
-if [ ! -f crates/skate-quest/runtime_libs/arm64-v8a/libphonon.so ]; then
+if [ ! -f crates/buildar-quest/runtime_libs/arm64-v8a/libphonon.so ]; then
   scripts/quest/fetch-steam-audio.sh
 fi
 # The APK's asset folder must exist; public builds leave it empty (players
 # import their own data). A core.pack in it is bundled: development only,
 # see scripts/quest/fetch-clean-pack.sh.
-mkdir -p crates/skate-quest/apk-assets
-if [ -f crates/skate-quest/apk-assets/core.pack ]; then
+mkdir -p crates/buildar-quest/apk-assets
+if [ -f crates/buildar-quest/apk-assets/core.pack ]; then
   echo "WARNING: bundling apk-assets/core.pack (development build, not for public release)"
 fi
 # The workspace compiles at opt-level 3 and rustc needs a large stack for
@@ -33,8 +33,8 @@ if [ -z "${SK8_COMMIT:-}" ] && SK8_COMMIT="$(git rev-parse --short HEAD 2>/dev/n
   git diff --quiet HEAD 2>/dev/null || SK8_COMMIT="$SK8_COMMIT-dirty"
 fi
 export SK8_COMMIT="${SK8_COMMIT:-}"
-cargo apk build -p skate-quest --release --lib
-APK="$(ls -t "${CARGO_TARGET_DIR:-target}"/release/apk/skate3ar*.apk | grep -v unaligned | head -1)"
+cargo apk build -p buildar-quest --release --lib
+APK="$(ls -t "${CARGO_TARGET_DIR:-target}"/release/apk/buildar*.apk | grep -v unaligned | head -1)"
 echo "APK: $APK"
 if [ "${1:-}" = "--install" ]; then
   adb install -r "$APK"

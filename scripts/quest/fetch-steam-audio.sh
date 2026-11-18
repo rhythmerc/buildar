@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fetch Steam Audio (Valve, Apache-2.0) for the skate sounds' HRTF (crates/skate-game/src/binaural.rs):
+# Fetch Steam Audio (Valve, Apache-2.0) for the skate sounds' HRTF (crates/buildar/src/binaural.rs):
 # libphonon.so for the headset into the APK's runtime_libs, and for this machine (Linux x64, for the
 # tests and desktop runs) with its header into vendor/steam-audio. Neither is committed; run this
 # once per checkout. The app runs without it: sounds are then panned, not put through the HRTF.
@@ -7,7 +7,7 @@ set -euo pipefail
 VERSION="${STEAM_AUDIO_VERSION:-4.8.1}"
 SHA256="${STEAM_AUDIO_SHA256:-4a0aa5ec1176f38f0b0993a37c2259d9e86f27e22d5e24f83ec4c3cb9a1d5449}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-APK="$ROOT/crates/skate-quest/runtime_libs/arm64-v8a"
+APK="$ROOT/crates/buildar-quest/runtime_libs/arm64-v8a"
 DEV="$ROOT/vendor/steam-audio"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

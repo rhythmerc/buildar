@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Puts the clean tier's recorded sounds back in crates/skate-game/clean-audio/.
+"""Puts the clean tier's recorded sounds back in crates/buildar/clean-audio/.
 
 The clean tier has two sets of its 31 sounds: the CC0 recordings it began
 with (this script), and a set synthesised from scratch
@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
-DIR = "crates/skate-game/clean-audio"
+DIR = "crates/buildar/clean-audio"
 REV = "0e25ffb^"
 RATE = 48_000
 

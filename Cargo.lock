@@ -1799,6 +1799,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "buildar"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "bevy",
+ "bevy_mod_openxr",
+ "bevy_mod_xr",
+ "engine-api",
+ "engine-core",
+ "gltf",
+ "libloading 0.8.9",
+ "ndk-sys 0.6.0+11769913",
+ "openxr",
+ "roomtone-sys",
+ "serde",
+ "serde_json",
+ "skate-core",
+ "skate-data",
+ "skate-lite-sys",
+ "skate3-engine",
+ "skate3-sim",
+ "thug2-engine",
+ "thug2-sys",
+ "tracing-log",
+ "wgpu",
+ "wgpu-hal",
+ "winit",
+ "zip",
+]
+
+[[package]]
+name = "buildar-quest"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "buildar",
+ "jni 0.22.4",
+ "libc",
+ "ndk-context",
+ "winit",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4561,53 +4604,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "skate-game"
-version = "0.1.0"
-dependencies = [
- "ash",
- "bevy",
- "bevy_mod_openxr",
- "bevy_mod_xr",
- "engine-api",
- "engine-core",
- "gltf",
- "libloading 0.8.9",
- "ndk-sys 0.6.0+11769913",
- "openxr",
- "roomtone-sys",
- "serde",
- "serde_json",
- "skate-core",
- "skate-data",
- "skate-lite-sys",
- "skate3-engine",
- "skate3-sim",
- "thug2-engine",
- "thug2-sys",
- "tracing-log",
- "wgpu",
- "wgpu-hal",
- "winit",
- "zip",
-]
-
-[[package]]
 name = "skate-lite-sys"
 version = "0.1.0"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "skate-quest"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "jni 0.22.4",
- "libc",
- "ndk-context",
- "skate-game",
- "winit",
 ]
 
 [[package]]

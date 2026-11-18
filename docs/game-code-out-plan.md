@@ -314,7 +314,7 @@ them: `ArWorld`, `SkaterLink`, `TeleportSkater` and `TrickHud` (step 5, as the s
 `PadHeld` (step 4, with input); the `EngineCore` trait itself (added piece by piece as its callers arrive,
 complete by step 8).
 
-**Step 2, as done (2026-11-16):** one HUD renderer in the app, `skate-game`'s `engine_hud.rs` and
+**Step 2, as done (2026-11-16):** one HUD renderer in the app, `buildar`'s `engine_hud.rs` and
 `engine_hud.wgsl`. It takes a `HudFrame` and a texture fetcher. Each part gets its own camera and image, on a layer
 from a pool (22-30), at the part's `resolution` (image pixels per canvas pixel). A `Hand` part becomes a `HandHud`
 panel; an `AtPlayer` part is a billboard at the player's `Focus`. `Focus` and `HudPart::resolution` are new in
@@ -404,7 +404,7 @@ draws both through one generic layer that doesn't know which engine it is.
   root, joints }`. The skeleton's shape is the model's (`parents`), not each pose's: the one refinement of the sketch
   above. Body groups (`BodyGroup`, `Cast`, `Point`, `Ellipse`) are in core with neutral `u32` ids;
   `engine_core::skate::body` names them (`RIDER`, `BOARD`) and holds `BOARD_FOOTPRINT`.
-- **The app** (`skate-game`'s `model.rs`): `PoseHistory` (the last two poses, taken once; a cut, a new step period or
+- **The app** (`buildar`'s `model.rs`): `PoseHistory` (the last two poses, taken once; a cut, a new step period or
   joint count restarts the pair) with `blend`; for a glTF source `bind_skins` (skin joints by name, the nearest named
   ancestor as parent), `joint_locals` (bone-local blending) and `joint_transforms` (unblended); for meshes as data
   `spawn_meshes`, `mesh`, `material` (the lit or unlit standard material, roughness 0.85) and `flat_joints` (root x
@@ -633,13 +633,13 @@ root; 1a59863), and the app depends on both by revision. The decomp is thug2-hea
 the engine's code too. `THUG2_DECOMP_DIR`, or a `thug2-decomp` checkout beside thug2-headless, overrides it for working on
 the two together, with the app's `[patch]` block. `THUG2_HEADLESS_DIR` is gone. thug2-headless pins `engine-core` too:
 the two pins move together. The crates' tests run in thug2-headless (all passed there, and the app's THUG2 tests and
-the APK passed against the pin, built from the submodule). Left in the app: `skate-game`'s `thug2.rs` (where its files
+the APK passed against the pin, built from the submodule). Left in the app: `buildar`'s `thug2.rs` (where its files
 are, its settings and page). The code is now under thug2-headless's MIT licence.
 
 **`skate3-engine` into skate3-headless (2026-11-17):** the crate moved as it was (`engine/`, 9214887) and the app
 depends on it by revision with the sim's other crates (all four pinned together, and skate3-headless pins
 `engine-core` too). Its tests run there (all passed), and the app's Skate 3 tests and the APK passed against the pin.
-Left in the app: `skate-game`'s `skate3.rs` (where its data is, its asset source, its light, its settings and page).
+Left in the app: `buildar`'s `skate3.rs` (where its data is, its asset source, its light, its settings and page).
 With steps 1-10 and this, no game's code is in the app's workspace but SK8's.
 
 **Skate 3's floor, its own (2026-11-17):** the app put the room's floor at Skate 3's test course floor

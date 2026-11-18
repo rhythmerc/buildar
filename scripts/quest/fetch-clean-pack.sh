@@ -9,7 +9,7 @@
 set -euo pipefail
 BASE="${CLEAN_PACK_BASE:-https://andrewnakas.github.io/skate3-cleanroom}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-DEST="$ROOT/crates/skate-quest/apk-assets"
+DEST="$ROOT/crates/buildar-quest/apk-assets"
 mkdir -p "$DEST"
 echo "Downloading $BASE/core.pack"
 curl -fL "$BASE/core.pack" -o "$DEST/core.pack.part"

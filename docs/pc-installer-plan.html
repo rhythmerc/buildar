@@ -263,7 +263,7 @@ footer{padding:30px 0 50px;color:var(--faint);font-size:13px}
   </ul>
 
   <h3>Which APK, and where data lands</h3>
-  <p>There are two Quest builds: <code>com.andrewnakas.skate3ar</code> (<code>crates/skate-quest</code>, clean tier + <code>retail</code>) and <code>com.andrewnakas.sk8ar</code> (<code>crates/sk8-quest</code>, store build, no importer). Only <b>skate3ar</b> can run Skate 3 data, so the installer installs that one. If it finds only sk8ar, it explains that sk8 works but Skate 3 needs the other app (both can be installed side by side; different package names).</p>
+  <p>There are two Quest builds: <code>com.andrewnakas.skate3ar</code> (<code>crates/buildar-quest</code>, clean tier + <code>retail</code>) and <code>com.andrewnakas.sk8ar</code> (<code>crates/sk8-quest</code>, store build, no importer). Only <b>skate3ar</b> can run Skate 3 data, so the installer installs that one. If it finds only sk8ar, it explains that sk8 works but Skate 3 needs the other app (both can be installed side by side; different package names).</p>
   <div class="tablewrap"><table>
     <tr><th>Phase</th><th>Layout under <code>/sdcard/Android/data/com.andrewnakas.skate3ar/files/</code></th><th>App change</th></tr>
     <tr><td>v1 (Skate 3)</td><td><code>assets/</code> (with <code>private/game.json</code>), <code>Skate3RustEngine/audio-pcm-cache/</code>, <code>use-retail-data</code>, plus a new <code>assets/bundle.json</code></td><td>None. This is exactly what <code>push-assets.sh</code> and the in-app importer already produce.</td></tr>
@@ -300,7 +300,7 @@ footer{padding:30px 0 50px;color:var(--faint);font-size:13px}
   <h3>One build with every engine</h3>
   <p>Scope: the user is not targeting the Meta store, so the THUG2 and Skate 3 engine code ship in the normal installer and APK. The only gate is data: an engine turns on when the user's own game files are imported. Concretely:</p>
   <ul>
-    <li>The APK the installer pushes is <code>skate-quest</code> built with <code>retail</code> plus a new <code>thug2</code> feature (the THUG2 core from the decomp, cross-compiled for <code>aarch64-linux-android</code> and linked in). Keeping <code>thug2</code> a cargo feature costs nothing and keeps the build tidy, but releases always turn it on.</li>
+    <li>The APK the installer pushes is <code>buildar-quest</code> built with <code>retail</code> plus a new <code>thug2</code> feature (the THUG2 core from the decomp, cross-compiled for <code>aarch64-linux-android</code> and linked in). Keeping <code>thug2</code> a cargo feature costs nothing and keeps the build tidy, but releases always turn it on.</li>
     <li>No engine downloads, no feeds, no plugin ABI. The engine code is small next to the data (a few to a few tens of MB vs 1.4–5 GB of imported data), so splitting it out for size doesn't pay off. The only case for it would be a store build again, which is out of scope.</li>
     <li>The store build (<code>crates/sk8-quest</code>, <code>com.andrewnakas.sk8ar</code>) stays as it is in the repo but the installer doesn't use it.</li>
   </ul>
@@ -601,10 +601,10 @@ footer{padding:30px 0 50px;color:var(--faint);font-size:13px}
   <h2>Files read</h2>
   <ul class="src" style="font-size:13px;color:var(--dim)">
     <li><code>skate3-quest-ar/README.md</code>, <code>docs/IMPORT-SKATE3.md</code></li>
-    <li><code>crates/skate-game/src/xr/ui/import.rs</code> (scan of <code>Download/Skate3</code>, move/unzip, marker), <code>crates/skate-game/src/clean/mod.rs</code> (<code>wanted()</code>: marker + <code>assets/private/game.json</code>)</li>
-    <li><code>crates/skate-quest/Cargo.toml</code> (pkg <code>com.andrewnakas.skate3ar</code>, <code>retail</code>), <code>crates/sk8-quest/Cargo.toml</code> (pkg <code>com.andrewnakas.sk8ar</code>, no retail), <code>crates/skate-game/Cargo.toml</code> features</li>
+    <li><code>crates/buildar/src/xr/ui/import.rs</code> (scan of <code>Download/Skate3</code>, move/unzip, marker), <code>crates/buildar/src/clean/mod.rs</code> (<code>wanted()</code>: marker + <code>assets/private/game.json</code>)</li>
+    <li><code>crates/buildar-quest/Cargo.toml</code> (pkg <code>com.andrewnakas.skate3ar</code>, <code>retail</code>), <code>crates/sk8-quest/Cargo.toml</code> (pkg <code>com.andrewnakas.sk8ar</code>, no retail), <code>crates/buildar/Cargo.toml</code> features</li>
     <li><code>scripts/quest/make-bundle.ps1</code>, <code>scripts/quest/push-assets.sh</code></li>
-    <li><code>crates/skate-game/src/player_audio.rs</code> (<code>cache_directory</code>), <code>crates/skate-data/src/audio/catalog.rs</code> (lazy PCM cache), <code>crates/skate-data/src/audio/ffmpeg.rs</code> (XMA2 via ffmpeg)</li>
+    <li><code>crates/buildar/src/player_audio.rs</code> (<code>cache_directory</code>), <code>crates/skate-data/src/audio/catalog.rs</code> (lazy PCM cache), <code>crates/skate-data/src/audio/ffmpeg.rs</code> (XMA2 via ffmpeg)</li>
     <li><code>tools/setup.py</code>, <code>tools/asset_pipeline/install.py</code> (platform branches)</li>
     <li><code>thug2-headless/README.md</code>, <code>thug2-headless/app/headless_main.cpp</code>; layout of <code>~/Games/THUG2-extract/Game/Data</code> and <code>msiextract.log</code></li>
   </ul>

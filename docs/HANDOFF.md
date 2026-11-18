@@ -52,13 +52,13 @@ should be built the same way.
   events (pop, trick, land, bail, grind, bank, push). Tests: `make sk8-test`.
 - **Skater:** built in code: a figure of simple segments with its own
   proportions, posed from the state with two-bone IK feet on the deck, plus
-  a procedural tumble for bails (`crates/skate-game/src/clean/skater.rs`; port
+  a procedural tumble for bails (`crates/buildar/src/clean/skater.rs`; port
   the maths, it is about 300 lines).
-- **Sounds:** `crates/skate-game/clean-audio/`. These are 22 CC0 recordings and
+- **Sounds:** `crates/buildar/clean-audio/`. These are 22 CC0 recordings and
   9 sounds synthesised by `scripts/cleanroom/synth_sounds.py`, with credits in
   `CREDITS.json`.
 - **Rust host for reference:** `crates/skate-lite-sys` (bindings, built with
-  `cc`) and `crates/skate-game/src/clean/` (collision grid, stepping with time
+  `cc`) and `crates/buildar/src/clean/` (collision grid, stepping with time
   scale, menus).
 - **Proof:** `scripts/cleanroom/audit.py --retail <your converted assets>` checks
   the clean sources, sounds and APK for retail files, shared 32-byte runs,
@@ -66,7 +66,7 @@ should be built the same way.
   markers and uncredited sounds.
 
 The old `core.pack` (skate3-cleanroom, `SKPK1` format, readers
-`crates/skate-game/src/clean_pack.rs` and skatecore-cpp `src/s3/data/vfs.*`)
+`crates/buildar/src/clean_pack.rs` and skatecore-cpp `src/s3/data/vfs.*`)
 is **not** clean. Its model, textures and some sounds are derived from
 retail sources, and its animations, state graphs, VLT tuning, gesture
 patterns, camera configs and skeleton are kept as retail facts. It drives the
@@ -114,8 +114,8 @@ references are in this repo:
 
 | Piece | Rust source | Notes |
 |---|---|---|
-| Engine-neutral AR world | `crates/skate-game/src/xr/link.rs` | `ArWorld` (room quads, mesh triangles, ledge edges, piece surfaces, rails, game metres) plus `TeleportSkater` and `SkaterLink`. Both tiers' adapters consume it. |
-| Collision for `sk8` | `crates/skate-game/src/clean/collide.rs` (~150 lines, tested) | Uniform XZ grid over triangles answering segment casts; surface ids for sounds. |
+| Engine-neutral AR world | `crates/buildar/src/xr/link.rs` | `ArWorld` (room quads, mesh triangles, ledge edges, piece surfaces, rails, game metres) plus `TeleportSkater` and `SkaterLink`. Both tiers' adapters consume it. |
+| Collision for `sk8` | `crates/buildar/src/clean/collide.rs` (~150 lines, tested) | Uniform XZ grid over triangles answering segment casts; surface ids for sounds. |
 | Stepping, time scale, markers | `clean/sim.rs`, `clean/menu.rs` | Fixed 1/60 s steps from frame time × game speed, pause and frame step, teleports. |
 | Room → collision | `xr/real_world.rs` | Planes/boxes → one-sided quads (walls double-sided), furniture tops become grindable ledges, scanned mesh only where no plane covers it, and the placed pieces. Rebuilds only when the room or layout changes. |
 | Planes from the room mesh | `xr/mesh_planes.rs` (pure, 5 tests) | Spectacles has its own world mesh and plane APIs; this is the fallback/reference for fitting rideable flat patches. |
@@ -161,8 +161,8 @@ references are in this repo:
 ## 4. The Quest app in brief (this repo)
 
 ```
-crates/skate-quest/       Android entry (NativeActivity), permissions, APK metadata
-crates/skate-game/src/xr/ OpenXR passthrough layer:
+crates/buildar-quest/       Android entry (NativeActivity), permissions, APK metadata
+crates/buildar/src/xr/ OpenXR passthrough layer:
   mod.rs          plugin wiring, Adreno workarounds (no indirect draws, no eye occlusion culling)
   actions.rs      Touch controller actions;   touch.rs  Touch → virtual Xbox pad
   rig.rs          tracking root ↔ game world (scale k, STAGE-anchored)
@@ -172,8 +172,8 @@ crates/skate-game/src/xr/ OpenXR passthrough layer:
   build/          park builder (pieces, placement, snap, layout save)
   spawn.rs        point-to-spawn the skater
   spatial_audio.rs  headset listener, real-metre falloff
-crates/skate-game/src/clean_pack.rs   SKPK1 unpacker (first launch)
-crates/skate-game/src/player_audio_clean.rs  clean sound driver (spatial in AR)
+crates/buildar/src/clean_pack.rs   SKPK1 unpacker (first launch)
+crates/buildar/src/player_audio_clean.rs  clean sound driver (spatial in AR)
 ```
 
 Build (macOS): `scripts/quest/build-apk.sh --install`. It fetches the OpenXR

@@ -113,7 +113,7 @@ Ranked:
   carries GLBs up to 64 MiB).
 - **Control messages:** `Align {method, points in S}`, `AlignResult {theta, t, residual}`,
   `Room {rev, hash}`, `Park {rev}`, `PieceEdit`.
-- **Manifest gap:** `crates/skate-quest/Cargo.toml` requests no `android.permission.INTERNET`.
+- **Manifest gap:** `crates/buildar-quest/Cargo.toml` requests no `android.permission.INTERNET`.
   Receiving broadcast or mDNS on Android also needs `CHANGE_WIFI_MULTICAST_STATE` and a MulticastLock
   through JNI.
 

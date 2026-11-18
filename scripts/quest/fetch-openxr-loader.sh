@@ -4,7 +4,7 @@
 set -euo pipefail
 VERSION="${OPENXR_LOADER_VERSION:-1.1.63}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-DEST="$ROOT/crates/skate-quest/runtime_libs/arm64-v8a"
+DEST="$ROOT/crates/buildar-quest/runtime_libs/arm64-v8a"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 URL="https://repo1.maven.org/maven2/org/khronos/openxr/openxr_loader_for_android/$VERSION/openxr_loader_for_android-$VERSION.aar"

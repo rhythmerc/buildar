@@ -7,7 +7,7 @@
 set -euo pipefail
 GAME="${1:?usage: push-thug2.sh <game-folder> [--all]}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PKG=${PKG:-com.andrewnakas.skate3ar}
+PKG=${PKG:-io.github.rhythmerc.buildar}
 DEST=/sdcard/Android/data/$PKG/files/thug2
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

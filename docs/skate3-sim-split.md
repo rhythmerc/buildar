@@ -59,7 +59,7 @@ Update: animation::present, physics::present, camera::present, scoring_hud::rend
 
 "Bevy touch" says what the Bevy dependency actually is. Counts include in-file tests.
 
-| Module(s) (`crates/skate-game/src/`) | Lines | Bevy touch | Side |
+| Module(s) (`crates/buildar/src/`) | Lines | Bevy touch | Side |
 |---|---:|---|---|
 | `physics/` + `physics.rs` | 37,384 | 20 of 271 files: mostly `bevy::log` macros; `Resource` derives; glam via `use bevy::prelude::*` re-exported through `super::*` (`network.rs`, `climbing/` 1,463 lines incl. `Transform` in `clip.rs`); ECS glue in `physics.rs` (`PhysicsPlugin`, `advance`, `present`, ~250 lines), `controls.rs::sample`, `audio_observation.rs::publish` | **sim** (glue → adapter) |
 | `graph_host/` | 14,941 | 1 file, `bevy::log::info!` (`action.rs:316`) | **sim** |
@@ -290,11 +290,11 @@ Documented in `vendor/README.md`:
 
 | Patch | What changes | Who relies on it |
 |---|---|---|
-| `winit` 0.30.13 | Android: emit `Focused` after `InitWindow`; add `winit::platform::android::pump_lifecycle` to service the looper while loading | `crates/skate-quest/src/lib.rs:46`, `crates/sk8-quest/src/lib.rs:40` (they pump while `lib.rs::run_with` loads Skate 3 on a worker). App-only. The sim's `load` just has to stay `Send`, so it can run on that worker. |
+| `winit` 0.30.13 | Android: emit `Focused` after `InitWindow`; add `winit::platform::android::pump_lifecycle` to service the looper while loading | `crates/buildar-quest/src/lib.rs:46`, `crates/sk8-quest/src/lib.rs:40` (they pump while `lib.rs::run_with` loads Skate 3 on a worker). App-only. The sim's `load` just has to stay `Send`, so it can run on that worker. |
 | `bevy_pbr` 0.18.1 | bindless slab reuse (`material_bind_groups.rs`); cached lightmap bind groups (`lightmap/mod.rs`, `render/mesh_bindings.rs`, `render/mesh.rs`); late-preprocess read-only indirect buffer (`gpu_preprocess.rs`, `mesh_preprocess.wgsl`); meshlet cull fix | `retail_render.rs:149` `#[bindless(limit(64))]` `RetailWorldMaterial`; `skate_world.rs:906` `bevy::pbr::Lightmap` (San Vanelona); `graphics_menu.rs:594` `OcclusionCulling` + `DepthPrepass`; `xr/mod.rs:156` occlusion observer; `retail_shader_tests.rs:76,80` `include_str!("../../../vendor/bevy_pbr/...")`; `profiling.rs:457` |
 | `bevy_core_pipeline` 0.18.1 | backport of Bevy #22603 conservative depth pyramid (`experimental/mip_generation`) | GPU occlusion culling (graphics menu, XR eyes) |
 
-- `crates/skate-game/build.rs:29-30` lists `vendor/bevy_pbr` and `vendor/bevy_core_pipeline` in
+- `crates/buildar/build.rs:29-30` lists `vendor/bevy_pbr` and `vendor/bevy_core_pipeline` in
   `rerun-if-changed`. Whichever crate keeps the provenance `build.rs` keeps this. It is app-side.
 - **Consequence:** the sim repo has no `[patch]`, no Bevy, no wgpu. The original objection to a separate
   repo ("every consumer must copy the patch") disappears. The patches stay at the app's workspace root.
@@ -366,7 +366,7 @@ under `cfg(feature = "retail")`.
 
 ### 5.1 Move with the sim
 
-**skate-game: about 464.**
+**buildar: about 464.**
 - `physics/` 115 + `physics.rs` 1
 - `graph_host/` 71
 - `player_audio/` 137 + `player_audio.rs` 15
@@ -385,7 +385,7 @@ under `cfg(feature = "retail")`.
 - `skate-audio-formats` 66
 - `skate-data` 59
 
-**About 120 of the skate-game sim tests are `#[ignore]` and need the user's converted data:**
+**About 120 of the buildar sim tests are `#[ignore]` and need the user's converted data:**
 - `SKATE3_ASSET_ROOT` (64 sites, mostly `src/tests/*playback*`, `graph_host/tests/`);
 - `SKATE_ASSETS` (9);
 - `SKATE_MAP_TEST_PATH`, `SKATE_TRANSITION_TEST_ASSETS`.
@@ -461,7 +461,7 @@ Steps 4a/4b stay. Step 6 becomes S5. Step 9 becomes S1-S6.
   - workspace members and `[workspace.dependencies]`;
   - `skate_world.rs`'s `../../skate-data/tests/fixtures/...` include;
   - `build.rs` `rerun-if-changed` (`../skate-core/src` etc.).
-- skate-game: `retail` adds `dep:skate3-sim`.
+- buildar: `retail` adds `dep:skate3-sim`.
 - Verify: builds; test counts unchanged.
 
 ### S2: Move the leaf modules (M)
@@ -477,9 +477,9 @@ Steps 4a/4b stay. Step 6 becomes S5. Step 9 becomes S1-S6.
   - the `skate_world.rs` collision half;
   - the audio observation types from `skate_audio.rs`;
   - `native_matrix`.
-- De-Bevy each one on the way in (§1.3). skate-game re-exports at the old paths
+- De-Bevy each one on the way in (§1.3). buildar re-exports at the old paths
   (`pub(crate) use skate3_sim::scoring_runtime;`), so call sites don't change. Plugins (`GrindGeometryPlugin`,
-  `InputPlugin`) stay in skate-game and wrap the moved structs in `Resource` newtypes.
+  `InputPlugin`) stay in buildar and wrap the moved structs in `Resource` newtypes.
 - **Watch:** `pub(crate)`/`pub(super)` must become `pub` on everything that crosses. Orphan rules: Bevy
   trait impls on moved types (`Resource`, `Message`) must become newtypes.
 - Verify: test counts per crate sum to the baseline. Desktop `--check-assets` passes.
@@ -491,7 +491,7 @@ Steps 4a/4b stay. Step 6 becomes S5. Step 9 becomes S1-S6.
   `skate_audio` types; graph_host uses `graph_runtime`.
 - Split `physics.rs`:
   - `GamePhysics`, `SimulationExchange`, the loaders, `finish_skater` go to the sim;
-  - `PhysicsPlugin`/`advance`/`present` go to the adapter (`skate-game/src/physics_host.rs` for now).
+  - `PhysicsPlugin`/`advance`/`present` go to the adapter (`buildar/src/physics_host.rs` for now).
 - Same for `controls.rs::sample` and `audio_observation.rs::publish`: the system shells stay, the bodies
   move.
 - Replace the `TrainerTuning` dep, the `crash_context` hook, the vehicle `CollisionShape` and climbing's
@@ -611,8 +611,8 @@ Steps 4a/4b stay. Step 6 becomes S5. Step 9 becomes S1-S6.
 
 - **Layout:** `crates/skate3/{skate-core,skate-data,skate-audio-core,skate-audio-formats,sim}`. `skate3-sim`
   is ~90k lines and has no Bevy (`cargo tree -p skate3-sim | grep -i bevy` is empty). Its module paths
-  mirror `skate-game/src`, so `crate::physics::...` resolves the same on both sides.
-- **Shims left in skate-game (S7 removes them):** `lib.rs` `use skate3_sim::{difficulty, hud_runtime,
+  mirror `buildar/src`, so `crate::physics::...` resolves the same on both sides.
+- **Shims left in buildar (S7 removes them):** `lib.rs` `use skate3_sim::{difficulty, hud_runtime,
   map_library, apt_scene}`; glob re-exports in `physics.rs`, `camera.rs`, `graph_runtime.rs`,
   `grind_world.rs`, `input.rs`, `skate_world.rs`, `skate_audio.rs`; same-named `Deref` newtypes for the
   resources (`GamePhysics`, `SkaterRuntime`, `PlayerControls`, `StockGraphs`, `CameraRuntime`,
@@ -645,7 +645,7 @@ Steps 4a/4b stay. Step 6 becomes S5. Step 9 becomes S1-S6.
 - **S6 done (2026-11-16):** the sim is [rhythmerc/skate3-headless](https://github.com/rhythmerc/skate3-headless)
   (public, GPL-3.0; `git subtree split --prefix=crates/skate3`, 8 commits of history, plus a commit with the
   standalone workspace, README, licence and lockfile). Before the split it lost its `skate-net` dependency (its
-  `physics::network` keeps plain snapshot types and an identical FNV-1a fingerprint; `skate-game/src/net_snapshot.rs`
+  `physics::network` keeps plain snapshot types and an identical FNV-1a fingerprint; `buildar/src/net_snapshot.rs`
   converts) and got its own copy of `format-demo.skate`. The app pins all five crates by `rev` in the root
   `[workspace.dependencies]`; a commented `[patch."https://github.com/rhythmerc/skate3-headless"]` block points them
   at a sibling checkout for local work. `crates/skate3/` is gone from this repo. To change the sim: commit and push

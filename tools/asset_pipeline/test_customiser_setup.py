@@ -11,7 +11,7 @@ class CharacterSetup(unittest.TestCase):
     def test_gesture_menu_matches_runtime_table_without_reading_source(self):
         import re
         from tools.asset_pipeline.customisation_profiles import generate
-        source = Path(__file__).resolve().parents[2]/'crates/skate-game/src/graph_host/motion_character_gesture.rs'
+        source = Path(__file__).resolve().parents[2]/'crates/buildar/src/graph_host/motion_character_gesture.rs'
         count = len(re.findall(r'"B_GSTR_([A-Z_]+)"', source.read_text()))
         with patch.object(Path, 'read_text', side_effect=AssertionError('setup must not read Rust source')):
             menu = generate({'morphs': [], 'collections': []})

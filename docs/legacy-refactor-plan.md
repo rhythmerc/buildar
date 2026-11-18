@@ -32,7 +32,7 @@ the teleport menu, XInput and desktop setup. Line numbers are as of `198b719`.
 
 ## Passes
 
-Run `cargo test -p skate-game` and both APK builds after each pass. Before building, grep for removed
+Run `cargo test -p buildar` and both APK builds after each pass. Before building, grep for removed
 resource names: a `Res<X>` left in one of Skate 3's systems panics at runtime on its first turn, not at
 compile time.
 
