@@ -185,7 +185,7 @@ fn read_all(dir: &Path) -> Vec<(String, ParkFile)> {
         }
         let Some(id) = path.file_stem().and_then(|s| s.to_str()).map(str::to_string) else { continue };
         match std::fs::read(&path).map_err(|e| e.to_string()).and_then(|b| serde_json::from_slice::<ParkFile>(&b).map_err(|e| e.to_string())) {
-            Ok(file) if file.version == VERSION && file.mode() == Some(Mode::Skate) => out.push((id, file)),
+            Ok(file) if file.version == VERSION && file.mode().is_some() => out.push((id, file)),
             Ok(file) if file.version == VERSION => warn!("PARKS ignoring {} (a {:?} course)", path.display(), file.mode),
             Ok(file) => warn!("PARKS ignoring {} (version {})", path.display(), file.version),
             Err(e) => warn!("PARKS ignoring {}: {e}", path.display()),
@@ -586,10 +586,11 @@ pub(crate) fn engine_fit(world: &World, id: &str) -> EngineFit {
     }
 }
 
-/// Park `id`'s engine switched to (when it's installed) and its settings put back, before it's opened.
+/// Park `id`'s engine switched to (when it's installed) and its settings put back, before it's opened. A course
+/// built for none, of another mode than the running engine's: the first engine of its mode that can run.
 pub(crate) fn use_its_engine(world: &mut World, id: &str) {
     let Some(file) = world.resource::<Parks>().get(id).map(|p| p.file.clone()) else { return };
-    let Some(engine) = file.engine() else { return };
+    let Some(engine) = file.engine().or_else(|| engine_of_mode(world, file.mode()?)) else { return };
     if world.get_resource::<Engines>().is_none_or(|e| !e.listed(engine, world) || e.available(engine, world).is_err()) {
         return;
     }
@@ -600,6 +601,16 @@ pub(crate) fn use_its_engine(world: &mut World, id: &str) {
     if let Some(settings) = &file.engine_settings {
         CourseSettings::apply(world, engine, settings);
     }
+}
+
+/// For a course of `mode`: the running engine if it is of that mode, else the first of that mode the menus offer
+/// that can run.
+fn engine_of_mode(world: &World, mode: Mode) -> Option<Engine> {
+    let engines = world.get_resource::<Engines>()?;
+    if engines.current().is_some_and(|e| e.mode() == mode) {
+        return engines.current();
+    }
+    Engine::ALL.into_iter().find(|&e| e.mode() == mode && engines.listed(e, world) && engines.available(e, world).is_ok())
 }
 
 // ---------------------------------------------------------------- actions (the parks screen's)
@@ -687,14 +698,31 @@ pub(crate) fn cancel_placing(world: &mut World) {
 }
 
 /// A new, empty park, open here (its anchor is made with its first piece).
-pub(crate) fn new_park(world: &mut World) -> String {
+/// What a course of `mode` is called (its new card's, its default name): a skate park, a race track.
+pub(crate) fn course_name(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Skate => "Park",
+        Mode::Race => "Track",
+    }
+}
+
+/// Courses of `mode`, as a tab says it.
+pub(crate) fn courses_name(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Skate => "Parks",
+        Mode::Race => "Tracks",
+    }
+}
+
+/// A new course of `mode`, empty, opened here to build.
+pub(crate) fn new_park(world: &mut World, mode: Mode) -> String {
     let scale = world.resource::<Rig>().scale;
     let id = {
         let mut parks = world.resource_mut::<Parks>();
         let id = new_id(&parks.list);
-        let name = next_name(&parks.list, "Park");
+        let name = next_name(&parks.list, course_name(mode));
         let at = now();
-        parks.list.push(ParkEntry { id: id.clone(), file: ParkFile { version: VERSION, name, created: at, opened: at, pieces: Vec::new(), scale, park_scale: 1.0, anchors: Vec::new(), engine: None, engine_settings: None, mode: skate_mode() }, edits: 0 });
+        parks.list.push(ParkEntry { id: id.clone(), file: ParkFile { version: VERSION, name, created: at, opened: at, pieces: Vec::new(), scale, park_scale: 1.0, anchors: Vec::new(), engine: None, engine_settings: None, mode: mode.key().to_string() }, edits: 0 });
         id
     };
     let file = world.resource::<Parks>().get(&id).expect("just made").file.clone();
@@ -866,20 +894,25 @@ mod tests {
         let mut track = serde_json::to_value(&file).unwrap();
         track["mode"] = "race".into();
         std::fs::write(dir.join("t1.json"), serde_json::to_vec(&track).unwrap()).unwrap();
+        let mut unknown = serde_json::to_value(&file).unwrap();
+        unknown["mode"] = "fly".into();
+        std::fs::write(dir.join("u1.json"), serde_json::to_vec(&unknown).unwrap()).unwrap();
         let mut old = serde_json::to_value(&file).unwrap();
         old.as_object_mut().unwrap().remove("mode");
         std::fs::write(dir.join("o1.json"), serde_json::to_vec(&old).unwrap()).unwrap();
         let mut read = read_all(&dir);
         read.sort_by(|a, b| a.0.cmp(&b.0));
-        assert_eq!(read.len(), 2, "the unreadable one and the course of another mode are left out");
+        assert_eq!(read.len(), 3, "the unreadable one and the course of a mode this app doesn't know are left out");
         assert_eq!(read[0], ("a1".to_string(), file.clone()));
         assert_eq!(read[1], ("o1".to_string(), file.clone()), "a park from before modes is a skate park");
+        assert_eq!((read[2].0.as_str(), read[2].1.mode()), ("t1", Some(Mode::Race)), "a race track");
         assert!(serde_json::to_string(&file).unwrap().contains(r#""mode":"skate""#));
         let _ = std::fs::remove_dir_all(&dir);
         let entry = |name: &str| ParkEntry { id: name.into(), file: ParkFile { name: name.into(), ..file.clone() }, edits: 0 };
         assert_eq!(next_name(&[entry("Park 1")], "Park"), "Park 2");
         assert_eq!(next_name(&[], "Park"), "Park 1");
         assert_eq!(next_name(&[entry("Desk copy")], "Desk copy"), "Desk copy 2");
+        assert_eq!((course_name(Mode::Race), courses_name(Mode::Race), course_name(Mode::Skate)), ("Track", "Tracks", "Park"));
     }
 
     /// The open park keeps the engine it is played with and that engine's park settings, written to its file; a park

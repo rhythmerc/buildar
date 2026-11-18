@@ -46,8 +46,8 @@ strip = false
 opt-level = 3
 
 # Local buildar-engine-core checkout (a sibling of this repo):
-# [patch."https://github.com/rhythmerc/buildar-engine-core"]
-# engine-core = { path = "../buildar-engine-core" }
+[patch."https://github.com/rhythmerc/buildar-engine-core"]
+engine-core = { path = "../buildar-engine-core" }
 
 # Local thug2-headless checkout (a sibling of this repo; its decomp: a thug2-decomp checkout beside it, or its submodule):
 # [patch."https://github.com/rhythmerc/thug2-headless"]
