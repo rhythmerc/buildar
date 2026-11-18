@@ -75,10 +75,13 @@ struct Wanted {
     image: Handle<Image>,
     /// The runtime takes the supersampling setting.
     settings: bool,
+    /// The picture was drawn this frame (else the layer shows the last one copied: `panel::PanelRedraw`).
+    fresh: bool,
 }
 
-fn want(panel: Res<XrPanel>, instance: Option<Res<OxrInstance>>, mut wanted: ResMut<Wanted>) {
+fn want(panel: Res<XrPanel>, redraw: Res<super::panel::PanelRedraw>, instance: Option<Res<OxrInstance>>, mut wanted: ResMut<Wanted>) {
     wanted.visible = panel.visible;
+    wanted.fresh = redraw.drawn;
     wanted.pose = panel.pose();
     wanted.image = panel.image.clone();
     wanted.settings = instance.is_some_and(|i| i.exts().fb_composition_layer_settings.is_some());
@@ -144,6 +147,8 @@ impl Material for PanelHole {
 #[derive(Resource, Default)]
 struct Chain {
     chain: Option<(OxrSwapchain, OxrSwapchainImages)>,
+    /// A picture has gone in since the layer was last hidden: frames with no new picture show it.
+    holds_picture: bool,
     /// Each image's first layer as a view, made once (a new view each frame was a new framebuffer each frame).
     views: Vec<bevy::render::render_resource::TextureView>,
     failed: bool,
@@ -162,6 +167,7 @@ fn add_layer(layers: Option<ResMut<OxrRenderLayers>>) {
 
 fn drop_chain(mut chain: ResMut<Chain>, live: Res<Live>) {
     chain.views.clear();
+    chain.holds_picture = false;
     chain.chain = None;
     chain.filled = false;
     live.0.store(false, Ordering::Release);
@@ -181,6 +187,14 @@ fn fill(
 ) {
     chain.filled = false;
     if !frame.is_some_and(|f| f.should_render) || chain.failed {
+        return;
+    }
+    if !wanted.visible {
+        chain.holds_picture = false;
+    }
+    // (nothing new drawn: the layer shows the last picture released)
+    if wanted.visible && !wanted.fresh && chain.holds_picture && chain.chain.is_some() {
+        chain.filled = true;
         return;
     }
     if chain.chain.is_none() {
@@ -227,7 +241,7 @@ fn fill(
         return;
     }
     let Some(picture) = images.get(&wanted.image) else { return };
-    let Chain { chain: Some((swapchain, targets)), filled, views, .. } = &mut *chain else { return };
+    let Chain { chain: Some((swapchain, targets)), filled, views, holds_picture, .. } = &mut *chain else { return };
     let mut went_in = false;
     crate::attached(&mut || {
         let Ok(index) = swapchain.acquire_image() else { return };
@@ -261,6 +275,7 @@ fn fill(
         went_in = swapchain.release_image().is_ok();
     });
     *filled = went_in;
+    *holds_picture |= went_in;
     if went_in && !live.0.swap(true, Ordering::AcqRel) {
         info!("PANEL: the compositor layer's first picture is in");
     }

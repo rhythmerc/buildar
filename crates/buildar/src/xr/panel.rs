@@ -31,6 +31,22 @@ pub(crate) struct XrPanelCamera;
 #[derive(Component)]
 pub(crate) struct PanelQuad;
 
+/// The panel's picture is drawn again this many frames more (the UI changed, or it was just shown): a menu that
+/// isn't changing isn't drawn each frame - its UI camera and the copy into the compositor layer cost every frame
+/// they ran. (A few frames, as what changed reaches the picture over more than one: layout, then text, then images.)
+#[derive(Resource, Default)]
+pub(crate) struct PanelRedraw {
+    pub frames: u32,
+    /// The picture was drawn this frame (the camera ran): the layer copies it.
+    pub drawn: bool,
+    since: f32,
+}
+
+/// Frames drawn after a change, and the most seconds between draws however still the menu is (in case a change
+/// isn't seen).
+const REDRAW_FRAMES: u32 = 4;
+const REDRAW_EVERY_S: f32 = 1.0;
+
 /// Where the panel is put each frame (`panel_layer` reads it after).
 #[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct PanelSystems;
@@ -66,8 +82,15 @@ pub(crate) struct PanelPlugin;
 
 impl Plugin for PanelPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreStartup, setup)
-            .add_systems(PostUpdate, place.in_set(PanelSystems).before(bevy::transform::TransformSystems::Propagate))
+        app.init_resource::<PanelRedraw>()
+            .add_systems(PreStartup, setup)
+            .add_systems(
+                PostUpdate,
+                (watch_ui.after(bevy::ui::UiSystems::Layout), place)
+                    .chain()
+                    .in_set(PanelSystems)
+                    .before(bevy::transform::TransformSystems::Propagate),
+            )
             .add_systems(Last, report_on_open);
     }
 }
@@ -135,16 +158,61 @@ fn tracked_head<'a>(eyes: impl Iterator<Item = &'a Transform>) -> Option<(Vec3, 
     Some((sum / n, rotation?))
 }
 
+/// Whether the menu's UI changed this frame (after layout): any node added, removed or changed, its layout, text,
+/// colours, image or visibility, or an image loaded or changed.
+#[allow(clippy::type_complexity)]
+fn watch_ui(
+    changed: Query<
+        (),
+        (
+            With<Node>,
+            Or<(
+                Changed<Node>,
+                Changed<ComputedNode>,
+                Changed<UiGlobalTransform>,
+                Changed<Text>,
+                Changed<TextColor>,
+                Changed<TextFont>,
+                Changed<BackgroundColor>,
+                Changed<BorderColor>,
+                Changed<ImageNode>,
+                Changed<InheritedVisibility>,
+            )>,
+        ),
+    >,
+    mut removed: RemovedComponents<Node>,
+    mut images: MessageReader<AssetEvent<Image>>,
+    panel: Res<XrPanel>,
+    time: Res<Time<Real>>,
+    mut redraw: ResMut<PanelRedraw>,
+    mut was_visible: Local<bool>,
+) {
+    let images_changed = images.read().any(|e| !matches!(e, AssetEvent::Unused { .. }));
+    let shown = panel.visible && !std::mem::replace(&mut *was_visible, panel.visible);
+    redraw.since += time.delta_secs();
+    if shown || !changed.is_empty() || removed.read().count() > 0 || images_changed || redraw.since >= REDRAW_EVERY_S {
+        redraw.frames = REDRAW_FRAMES;
+    }
+    redraw.drawn = panel.visible && redraw.frames > 0;
+    if redraw.drawn {
+        redraw.frames -= 1;
+        redraw.since = 0.0;
+    }
+}
+
 fn place(
     rig: Res<Rig>,
+    redraw: Res<PanelRedraw>,
     mut panel: ResMut<XrPanel>,
     eyes: Query<&Transform, (With<XrCamera>, Without<PanelQuad>)>,
     mut quad: Query<(&mut Transform, &mut Visibility), With<PanelQuad>>,
     mut cameras: Query<&mut Camera, With<XrPanelCamera>>,
 ) {
     if let Ok(mut camera) = cameras.get_mut(panel.camera) {
-        if camera.is_active != panel.visible {
-            camera.is_active = panel.visible;
+        // (drawn only while the menu is changing: `PanelRedraw`)
+        let active = panel.visible && redraw.drawn;
+        if camera.is_active != active {
+            camera.is_active = active;
         }
     }
     let Ok((mut tf, mut vis)) = quad.single_mut() else { return };

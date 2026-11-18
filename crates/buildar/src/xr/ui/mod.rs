@@ -521,13 +521,15 @@ fn frame(world: &mut World) {
     let onboarded = world.resource::<super::ar_settings::ArSettings>().onboarding_done;
     // (the menu's home: the parks, or with no engine to play them the game data, to bring one's files)
     let home = if cfg!(any(feature = "retail", feature = "thug2")) && pages::no_engine(world) { pages::DATA } else { pages::PARKS };
+    // (the headset's dev flag `menu_closed`: not at launch, for measuring an engine as it plays)
+    let closed_at_launch = world.get_resource::<crate::xr::dev_flags::DevFlags>().is_some_and(|f| f.has("menu_closed"));
     {
         // Open at launch: the intro the first time, else the home page
         // (the scripted demo, SK8_DEMO, starts skating).
         let mut ui = world.resource_mut::<XrUi>();
         if !ui.started {
             ui.started = true;
-            if std::env::var_os("SK8_DEMO").is_none() {
+            if std::env::var_os("SK8_DEMO").is_none() && !closed_at_launch {
                 ui.request = Some(if onboarded { home } else { pages::INTRO });
             }
         }

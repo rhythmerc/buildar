@@ -126,6 +126,24 @@ fn build(options: Options) -> App {
             ..default()
         })
         .build();
+    // The compute pool's threads: Bevy sizes it from the cores the app may use (on the Quest, 3: one compute
+    // thread), unless the headset's dev flags say `compute=N` (`xr::dev_flags`).
+    #[cfg(feature = "xr")]
+    let plugins = match options.xr.as_ref().and_then(|_| crate::xr::dev_flags::DevFlags::read(&options.files).number("compute")) {
+        Some(threads) => plugins.set(bevy::app::TaskPoolPlugin {
+            task_pool_options: bevy::app::TaskPoolOptions {
+                compute: bevy::app::TaskPoolThreadAssignmentPolicy {
+                    min_threads: threads,
+                    max_threads: usize::MAX,
+                    percent: 1.0,
+                    on_thread_spawn: None,
+                    on_thread_destroy: None,
+                },
+                ..default()
+            },
+        }),
+        None => plugins,
+    };
     #[cfg(target_os = "android")]
     let plugins = plugins.disable::<bevy::gilrs::GilrsPlugin>();
     #[cfg(feature = "xr")]

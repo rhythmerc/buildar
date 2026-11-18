@@ -5,6 +5,8 @@
 //! - `single_main`: the update world's schedules run on one thread (no task hand-offs to the compute worker).
 //! - `single_render`: the render world's likewise.
 //! - `cluster_single`: one light cluster for the eyes, not Bevy's grid of them (a handful of lights).
+//! - `menu_closed`: the menu doesn't open itself at launch (an engine measured as it plays).
+//! - `compute=N`: at least N threads in Bevy's compute pool (read where the plugins are made: `clean::run`).
 use bevy::ecs::schedule::{ExecutorKind, Schedules};
 use bevy::prelude::*;
 use bevy::render::RenderApp;
@@ -22,6 +24,11 @@ impl DevFlags {
 
     pub(crate) fn has(&self, flag: &str) -> bool {
         self.0.contains(flag)
+    }
+
+    /// A `name=N` flag's number.
+    pub(crate) fn number(&self, name: &str) -> Option<usize> {
+        self.0.iter().find_map(|f| f.strip_prefix(name)?.strip_prefix('=')?.trim().parse().ok())
     }
 }
 
