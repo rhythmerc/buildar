@@ -53,11 +53,8 @@ pub(crate) enum Key {
     Save,
 }
 
-/// The keyboard: its rows (each key with its width in units). With Meta's keyboard up (`meta`), only Cancel and Save.
-fn keyboard(meta: bool) -> Vec<Vec<(Key, f32)>> {
-    if meta {
-        return vec![vec![(Key::Cancel, 2.5), (Key::Save, 2.5)]];
-    }
+/// The keyboard: its rows (each key with its width in units).
+fn keyboard() -> Vec<Vec<(Key, f32)>> {
     let chars = |s: &str| s.chars().map(|c| (Key::Char(c), 1.0)).collect::<Vec<_>>();
     let mut third = vec![(Key::Shift, 1.5)];
     third.extend(chars("zxcvbnm-"));
@@ -193,8 +190,8 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 crate::xr::virtual_keyboard::Typed::Enter => saved_by_meta = true,
             }
         }
-        // The panel's keys: all of them, or (Meta's keyboard up) only Cancel and Save.
-        let keys = keyboard(meta);
+        // The panel's keys (none shown with Meta's keyboard up).
+        let keys = keyboard();
         if rename.key.0 >= keys.len() {
             rename.key = (keys.len() - 1, keys[keys.len() - 1].len() - 1);
         }
@@ -219,13 +216,23 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
             (r, c) = (kr, kc);
         }
         rename.key = (r, c.min(keys[r].len() - 1));
-        let press = match pressed {
-            Some(CHit::Key(kr, kc)) => keys.get(kr).and_then(|row| row.get(kc)).map(|k| k.0),
-            Some(_) => None,
-            None if saved_by_meta => Some(Key::Save),
-            None if nav.select => Some(keys[rename.key.0][rename.key.1].0),
-            None if nav.back => Some(Key::Cancel),
-            None => None,
+        let press = if meta {
+            // (Meta's keyboard types, and its Enter saves; the panel keeps its picture: A saves, B cancels)
+            if saved_by_meta || nav.select {
+                Some(Key::Save)
+            } else if nav.back {
+                Some(Key::Cancel)
+            } else {
+                None
+            }
+        } else {
+            match pressed {
+                Some(CHit::Key(kr, kc)) => keys.get(kr).and_then(|row| row.get(kc)).map(|k| k.0),
+                Some(_) => None,
+                None if nav.select => Some(keys[rename.key.0][rename.key.1].0),
+                None if nav.back => Some(Key::Cancel),
+                None => None,
+            }
         };
         let mut done = false;
         match press {
@@ -565,8 +572,9 @@ pub(super) fn panel(root: &mut Spawner, view: &View, fonts: &Fonts, icons: &Icon
                 BorderColor::all(LINE),
             ))
             .with_children(|picture| match &view.rename {
-                Some(rename) => keys(picture, rename, view.meta_keys, fonts),
-                None => {
+                // (with Meta's keyboard up, its picture still: that keyboard is in the room)
+                Some(rename) if !view.meta_keys => keys(picture, rename, fonts),
+                _ => {
                     match &view.thumb {
                         Some(thumb) if !view.empty => {
                             // (its own shape, as tall as the box: the card's picture is THUMB)
@@ -600,7 +608,9 @@ pub(super) fn panel(root: &mut Spawner, view: &View, fonts: &Fonts, icons: &Icon
             ))
             .with_children(|legend| {
                 let back = format!("back to {}", view.tab);
-                let pairs: [(&str, &str); 4] = if view.rename.is_some() {
+                let pairs: [(&str, &str); 4] = if view.rename.is_some() && view.meta_keys {
+                    [("Enter / A", "save"), ("B", "cancel"), ("", ""), ("", "")]
+                } else if view.rename.is_some() {
                     [("Trigger / A", "type"), ("B", "cancel"), ("Stick", "move"), ("", "")]
                 } else {
                     [("Trigger / A", "choose"), ("B", back.as_str()), ("Menu", "back to playing"), ("Stick", "move")]
@@ -657,13 +667,10 @@ pub(super) fn panel(root: &mut Spawner, view: &View, fonts: &Fonts, icons: &Icon
 }
 
 /// The keyboard, in the picture's place.
-fn keys(parent: &mut Spawner, rename: &Rename, meta: bool, fonts: &Fonts) {
+fn keys(parent: &mut Spawner, rename: &Rename, fonts: &Fonts) {
     let unit = 74.0;
-    parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(if meta { 24 } else { 10 }), align_items: AlignItems::Center, ..default() }).with_children(|board| {
-        if meta {
-            board.spawn((Text::new("Type on the keyboard below the panel"), fonts.body(24.0, 500), TextColor(DIM)));
-        }
-        for (r, row) in keyboard(meta).iter().enumerate() {
+    parent.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(10), align_items: AlignItems::Center, ..default() }).with_children(|board| {
+        for (r, row) in keyboard().iter().enumerate() {
             board.spawn(Node { column_gap: px(8), ..default() }).with_children(|line| {
                 for (c, &(key, width)) in row.iter().enumerate() {
                     let on = rename.key == (r, c);
@@ -708,7 +715,7 @@ mod tests {
 
     #[test]
     fn the_stick_walks_the_keys_to_the_key_under_it() {
-        let keys = keyboard(false);
+        let keys = keyboard();
         // (from Space, the bottom row's middle, up: a key in the middle of the row above, 'v' or 'b'; from 'q' down: 'a')
         assert!(matches!(keys[3][column_near(&keys, (4, 1), 3)].0, Key::Char('v' | 'b')));
         assert_eq!(column_near(&keys, (1, 0), 2), 0);

@@ -16,7 +16,7 @@
 //! events ([`Typed`]: text, erase, enter), taken by the menus.
 use super::actions::Hand;
 use super::actions::LatestTouch;
-use super::panel::{XrPanel, HEIGHT_M};
+use bevy_mod_xr::camera::XrCamera;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
 use bevy::mesh::morph::{MeshMorphWeights, MorphAttributes, MorphTargetImage};
@@ -134,12 +134,12 @@ struct State {
     pixels: Vec<u8>,
 }
 
-/// Below the panel, toward the player, tilted up to face them (m, degrees), and its size: the model is a metre wide
-/// at 1, too big under the panel (0.88 m wide) - 0.7 m.
-const BELOW_PANEL_M: f32 = 0.12;
-const TOWARD_PLAYER_M: f32 = 0.15;
-const TILT_DEG: f32 = 35.0;
-const SCALE: f32 = 0.7;
+/// Where it comes up: ahead of the head (level), this far, and this far below the eyes - near the middle of the view,
+/// in front of the panel (which is a metre out) - turned to face the eyes; and its size: the model is a metre wide at
+/// 1, so 0.3 m (about 32 degrees across, from here). (Under the panel it was at the bottom of the view.)
+const AHEAD_M: f32 = 0.5;
+const BELOW_EYES_M: f32 = 0.13;
+const SCALE: f32 = 0.3;
 
 /// (On the main thread: see the module's notes.)
 #[allow(clippy::too_many_arguments)]
@@ -150,7 +150,7 @@ fn run(
     system: Option<Res<OxrSystemId>>,
     reference: Option<Res<XrPrimaryReferenceSpace>>,
     frame: Option<Res<OxrFrameState>>,
-    (panel, touch): (Res<XrPanel>, Res<LatestTouch>),
+    (eyes, touch): (Query<&Transform, (With<XrCamera>, Without<KeyboardNode>)>, Res<LatestTouch>),
     hands: Query<(&Hand, &Transform), Without<KeyboardNode>>,
     tracking_root: Query<Entity, With<XrTrackingRoot>>,
     mut nodes: Query<&mut Transform, With<KeyboardNode>>,
@@ -217,12 +217,12 @@ fn run(
         let _ = unsafe { (fns.set_virtual_keyboard_model_visibility)(keyboard, &info) };
         commands.entity(root).insert(if state.up { Visibility::Inherited } else { Visibility::Hidden });
         if let Some(text) = &wanted {
-            // (under the panel, facing the player; the name so far, for its suggestions)
-            let panel = panel.pose();
-            let up = panel.rotation * Vec3::Y;
-            let toward = panel.rotation * Vec3::Z;
-            let at = panel.translation - up * (HEIGHT_M * 0.5 + BELOW_PANEL_M) + toward * TOWARD_PLAYER_M;
-            let rotation = panel.rotation * Quat::from_rotation_x(-TILT_DEG.to_radians());
+            // (ahead of the head, facing the eyes; the name so far, for its suggestions)
+            let (head, turn) = head(eyes.iter()).unwrap_or((Vec3::new(0.0, 1.5, 0.0), Quat::IDENTITY));
+            let forward = (turn * Vec3::NEG_Z).with_y(0.0).normalize_or(Vec3::NEG_Z);
+            let at = head + forward * AHEAD_M - Vec3::Y * BELOW_EYES_M;
+            // (-Z away from the eyes: the model's front, +Z, faces them)
+            let rotation = Transform::IDENTITY.looking_to(at - head, Vec3::Y).rotation;
             let location = sys::VirtualKeyboardLocationInfoMETA {
                 ty: sys::VirtualKeyboardLocationInfoMETA::TYPE,
                 next: std::ptr::null(),
@@ -393,6 +393,17 @@ fn run(
             }
         }
     }
+}
+
+/// Where the head is (between the eyes, tracking space) and how it's turned.
+fn head<'a>(eyes: impl Iterator<Item = &'a Transform>) -> Option<(Vec3, Quat)> {
+    let (mut sum, mut n, mut turn) = (Vec3::ZERO, 0.0, None);
+    for eye in eyes {
+        sum += eye.translation;
+        n += 1.0;
+        turn.get_or_insert(eye.rotation);
+    }
+    Some((sum / n, turn?))
 }
 
 /// The keyboard made, and its space (in `base`).
