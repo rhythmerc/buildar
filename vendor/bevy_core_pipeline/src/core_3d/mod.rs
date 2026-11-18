@@ -147,7 +147,11 @@ impl Plugin for Core3dPlugin {
                 CameraRenderGraph::new(Core3d)
             })
             .register_required_components::<Camera3d, Tonemapping>()
-            .add_plugins((SkyboxPlugin, ExtractComponentPlugin::<Camera3d>::default()))
+            .add_plugins((
+                SkyboxPlugin,
+                ExtractComponentPlugin::<Camera3d>::default(),
+                ExtractComponentPlugin::<DiscardMsaaAfterMainPass>::default(),
+            ))
             .add_systems(PostUpdate, check_msaa);
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {

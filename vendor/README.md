@@ -124,3 +124,28 @@ Upstream references reviewed September 6, 2026:
 When upgrading Bevy, reassess this patch and rerun the GPU test, stationary and
 moving-camera benchmarks, and visual comparison. Do not assume an unchanged
 private renderer implementation across engine versions.
+
+## One main pass, MSAA samples dropped after resolve
+
+`bevy_core_pipeline/src/core_3d/main_opaque_pass_3d_node.rs` also draws the
+`Transparent3d` phase, inside the same render pass after the opaque, alpha-mask
+and skybox draws, whenever the view has no `Transmissive3d` items: nothing else
+draws between the two. `main_transparent_pass_3d_node.rs` then skips that view.
+On the Quest's tiling GPU every extra pass over the eye's multisampled colour
+and depth stores them out of tile memory and loads them back (traced with
+`ovrgpuprofiler`: ~1 ms an eye at 4x MSAA, for a nearly empty room).
+
+A camera carrying the new `DiscardMsaaAfterMainPass` component (extracted to
+the render world) also gets `StoreOp::Discard` on the multisampled colour in
+that merged pass: the resolve target is still written, the samples aren't. Only
+for cameras nothing loads the multisampled colour on after the main pass (no
+UI drawn on the camera, no MSAA writeback). buildAR's eye cameras use it.
+
+## bevy_mod_openxr: swapchain views made once
+
+`bevy_mod_openxr` is vendored from crates.io 0.5.0 (MIT/Apache-2.0).
+`src/openxr/render.rs`'s `insert_texture_views` keeps each swapchain image's
+two eye views and hands the same ones back each time that image comes round,
+instead of making new views every frame. New views meant wgpu built a new
+Vulkan framebuffer each frame for every pass drawing to them (~5% of the main
+thread on the headset). The views are remade if the swapchain's images change.

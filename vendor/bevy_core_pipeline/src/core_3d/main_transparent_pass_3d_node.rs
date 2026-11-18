@@ -45,6 +45,10 @@ impl ViewNode for MainTransparentPass3dNode {
         let Some(transparent_phase) = transparent_phases.get(&view.retained_view_entity) else {
             return Ok(());
         };
+        // (local patch: drawn in the main opaque pass already)
+        if super::main_opaque_pass_3d_node::transparent_in_opaque_pass(world, &view.retained_view_entity) {
+            return Ok(());
+        }
 
         if !transparent_phase.items.is_empty() {
             // Run the transparent pass, sorted back-to-front

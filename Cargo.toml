@@ -68,4 +68,5 @@ engine-core = { path = "../buildar-engine-core" }
 brres-sys = { path = "../mkw-headless/third_party/brres-sys" }
 bevy_pbr = { path = "vendor/bevy_pbr" }
 bevy_core_pipeline = { path = "vendor/bevy_core_pipeline" }
+bevy_mod_openxr = { path = "vendor/bevy_mod_openxr" }
 winit = { path = "vendor/winit" }

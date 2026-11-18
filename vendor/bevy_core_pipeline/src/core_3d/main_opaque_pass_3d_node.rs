@@ -1,6 +1,12 @@
 use crate::{
-    core_3d::Opaque3d,
+    core_3d::{Opaque3d, Transmissive3d, Transparent3d},
     skybox::{SkyboxBindGroup, SkyboxPipelineId},
+};
+use bevy_ecs::component::Component;
+use bevy_render::{
+    extract_component::ExtractComponent,
+    render_phase::ViewSortedRenderPhases,
+    view::RetainedViewEntity,
 };
 use bevy_camera::{MainPassResolutionOverride, Viewport};
 use bevy_ecs::{prelude::World, query::QueryItem};
@@ -19,6 +25,33 @@ use tracing::info_span;
 
 use super::AlphaMask3d;
 
+/// On a 3D camera: once its main pass resolves the multisampled colour, the multisampled samples are dropped, not
+/// stored (`StoreOp::Discard`), saving their write-out from tile memory on a tiling GPU. Only for cameras where no
+/// pass after the main pass loads the multisampled colour again (UI drawn on the camera, an MSAA writeback, a
+/// transmissive pass): with this, those would read undefined samples. (Local patch: see vendor/README.md.)
+#[derive(Component, Clone, Copy, Default, Debug)]
+pub struct DiscardMsaaAfterMainPass;
+
+impl ExtractComponent for DiscardMsaaAfterMainPass {
+    type QueryData = &'static Self;
+    type QueryFilter = ();
+    type Out = Self;
+
+    fn extract_component(item: QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
+        Some(*item)
+    }
+}
+
+/// Whether the view's transparent phase is drawn in its main opaque pass (local patch): when it has no transmissive
+/// items, nothing is drawn between the two, and one render pass saves a tiling GPU storing the colour and depth and
+/// loading them again.
+pub(crate) fn transparent_in_opaque_pass(world: &World, view: &RetainedViewEntity) -> bool {
+    world
+        .get_resource::<ViewSortedRenderPhases<Transmissive3d>>()
+        .and_then(|phases| phases.get(view))
+        .is_none_or(|phase| phase.items.is_empty())
+}
+
 /// A [`bevy_render::render_graph::Node`] that runs the [`Opaque3d`] and [`AlphaMask3d`]
 /// [`ViewBinnedRenderPhases`]s.
 #[derive(Default)]
@@ -33,6 +66,7 @@ impl ViewNode for MainOpaquePass3dNode {
         Option<&'static SkyboxBindGroup>,
         &'static ViewUniformOffset,
         Option<&'static MainPassResolutionOverride>,
+        bevy_ecs::query::Has<DiscardMsaaAfterMainPass>,
     );
 
     fn run<'w>(
@@ -48,6 +82,7 @@ impl ViewNode for MainOpaquePass3dNode {
             skybox_bind_group,
             view_uniform_offset,
             resolution_override,
+            discard_msaa,
         ): QueryItem<'w, '_, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
@@ -67,7 +102,20 @@ impl ViewNode for MainOpaquePass3dNode {
 
         let diagnostics = render_context.diagnostic_recorder();
 
-        let color_attachments = [Some(target.get_color_attachment())];
+        // (local patch: the transparent phase in this same pass where it can be, and then the multisampled colour,
+        // resolved, dropped where the camera asks)
+        let transparent_phase = transparent_in_opaque_pass(world, &extracted_view.retained_view_entity)
+            .then(|| {
+                world
+                    .get_resource::<ViewSortedRenderPhases<Transparent3d>>()
+                    .and_then(|phases| phases.get(&extracted_view.retained_view_entity))
+            })
+            .flatten();
+        let mut color_attachment = target.get_color_attachment();
+        if transparent_phase.is_some() && discard_msaa && color_attachment.resolve_target.is_some() {
+            color_attachment.ops.store = StoreOp::Discard;
+        }
+        let color_attachments = [Some(color_attachment)];
         let depth_stencil_attachment = Some(depth.get_attachment(StoreOp::Store));
 
         let view_entity = graph.view_entity();
@@ -129,6 +177,18 @@ impl ViewNode for MainOpaquePass3dNode {
                         &[view_uniform_offset.offset, skybox_bind_group.1],
                     );
                     render_pass.draw(0..3, 0..1);
+                }
+            }
+
+            // Transparent draws, sorted back-to-front (local patch: here, not in a pass of their own, when there is
+            // nothing transmissive between them and the opaque ones)
+            if let Some(transparent_phase) = transparent_phase
+                && !transparent_phase.items.is_empty()
+            {
+                #[cfg(feature = "trace")]
+                let _transparent_main_pass_3d_span = info_span!("transparent_in_main_opaque_pass_3d").entered();
+                if let Err(err) = transparent_phase.render(&mut render_pass, world, view_entity) {
+                    error!("Error encountered while rendering the transparent phase {err:?}");
                 }
             }
 

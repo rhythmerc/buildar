@@ -144,6 +144,8 @@ impl Material for PanelHole {
 #[derive(Resource, Default)]
 struct Chain {
     chain: Option<(OxrSwapchain, OxrSwapchainImages)>,
+    /// Each image's first layer as a view, made once (a new view each frame was a new framebuffer each frame).
+    views: Vec<bevy::render::render_resource::TextureView>,
     failed: bool,
     filled: bool,
 }
@@ -159,6 +161,7 @@ fn add_layer(layers: Option<ResMut<OxrRenderLayers>>) {
 }
 
 fn drop_chain(mut chain: ResMut<Chain>, live: Res<Live>) {
+    chain.views.clear();
     chain.chain = None;
     chain.filled = false;
     live.0.store(false, Ordering::Release);
@@ -196,7 +199,23 @@ fn fill(
             .create_swapchain(info)
             .and_then(|swapchain| Ok((swapchain.enumerate_images(device.wgpu_device(), FORMAT, UVec2::new(WIDTH_PX, HEIGHT_PX))?, swapchain)));
         match made {
-            Ok((images, swapchain)) => chain.chain = Some((swapchain, images)),
+            Ok((images, swapchain)) => {
+                chain.views = images
+                    .0
+                    .iter()
+                    .map(|image| {
+                        image
+                            .create_view(&bevy::render::render_resource::TextureViewDescriptor {
+                                dimension: Some(bevy::render::render_resource::TextureViewDimension::D2),
+                                base_array_layer: 0,
+                                array_layer_count: Some(1),
+                                ..default()
+                            })
+                            .into()
+                    })
+                    .collect();
+                chain.chain = Some((swapchain, images));
+            }
             Err(why) => {
                 warn!("PANEL: no compositor layer ({why}): the panel is drawn in the scene");
                 chain.failed = true;
@@ -208,7 +227,7 @@ fn fill(
         return;
     }
     let Some(picture) = images.get(&wanted.image) else { return };
-    let Chain { chain: Some((swapchain, targets)), filled, .. } = &mut *chain else { return };
+    let Chain { chain: Some((swapchain, targets)), filled, views, .. } = &mut *chain else { return };
     let mut went_in = false;
     crate::attached(&mut || {
         let Ok(index) = swapchain.acquire_image() else { return };
@@ -224,16 +243,11 @@ fn fill(
             bevy::render::render_resource::Extent3d { width: WIDTH_PX, height: HEIGHT_PX, depth_or_array_layers: 1 },
         );
         // (left as a colour attachment, as the runtime takes it back: an empty pass that keeps what's there)
-        let view = target.create_view(&bevy::render::render_resource::TextureViewDescriptor {
-            dimension: Some(bevy::render::render_resource::TextureViewDimension::D2),
-            base_array_layer: 0,
-            array_layer_count: Some(1),
-            ..default()
-        });
+        let view = &views[index as usize];
         drop(encoder.begin_render_pass(&bevy::render::render_resource::RenderPassDescriptor {
             label: Some("panel layer"),
             color_attachments: &[Some(bevy::render::render_resource::RenderPassColorAttachment {
-                view: &view,
+                view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: bevy::render::render_resource::Operations {

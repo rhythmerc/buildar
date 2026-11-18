@@ -247,6 +247,10 @@ pub(crate) fn guide(poses: &HeadPoses, now_ns: i64) -> Option<Guide> {
 
 /// A camera frame's planes (as Camera2's YUV_420_888 gives them) at half
 /// size, RGBA: each pixel the mean of four of the frame's.
+///
+/// Row by row over slices, in fixed point (colour weights in 256ths): each
+/// sample read through a bounds-checked closure in floats, this was a third
+/// of a core on the headset. Rows or samples a plane is short of read as 0.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub(crate) fn half_rgba(
     y: (&[u8], usize, usize),
@@ -257,15 +261,33 @@ pub(crate) fn half_rgba(
 ) -> Vec<u8> {
     let (w, h) = (width / 2, height / 2);
     let mut out = vec![255u8; w * h * 4];
-    let at = |(data, row, pixel): (&[u8], usize, usize), x: usize, yy: usize| data.get(yy * row + x * pixel).copied().unwrap_or(0) as f32;
+    fn row<'a>((data, stride, _): (&'a [u8], usize, usize), at: usize, len: usize) -> &'a [u8] {
+        let from = (at * stride).min(data.len());
+        &data[from..(from + len).min(data.len())]
+    }
+    let get = |r: &[u8], i: usize| r.get(i).copied().unwrap_or(0) as i32;
     for py in 0..h {
-        for px in 0..w {
-            let luma = (at(y, px * 2, py * 2) + at(y, px * 2 + 1, py * 2) + at(y, px * 2, py * 2 + 1) + at(y, px * 2 + 1, py * 2 + 1)) * 0.25;
-            let (cb, cr) = (at(u, px, py) - 128.0, at(v, px, py) - 128.0);
-            let o = (py * w + px) * 4;
-            out[o] = (luma + 1.402 * cr).clamp(0.0, 255.0) as u8;
-            out[o + 1] = (luma - 0.344 * cb - 0.714 * cr).clamp(0.0, 255.0) as u8;
-            out[o + 2] = (luma + 1.772 * cb).clamp(0.0, 255.0) as u8;
+        let (y0, y1) = (row(y, py * 2, w * 2 * y.2.max(1)), row(y, py * 2 + 1, w * 2 * y.2.max(1)));
+        let (ur, vr) = (row(u, py, w * u.2.max(1)), row(v, py, w * v.2.max(1)));
+        let (ys, us, vs) = (y.2.max(1), u.2.max(1), v.2.max(1));
+        let line = &mut out[py * w * 4..(py + 1) * w * 4];
+        let full = y0.len() >= w * 2 * ys && y1.len() >= w * 2 * ys && ur.len() >= (w - 1) * us + 1 && vr.len() >= (w - 1) * vs + 1;
+        for (px, o) in line.chunks_exact_mut(4).enumerate() {
+            let (a, b) = (px * 2 * ys, (px * 2 + 1) * ys);
+            // (luma x 4 x 64 = luma in 256ths)
+            let (l, cb, cr) = if full {
+                (
+                    (y0[a] as i32 + y0[b] as i32 + y1[a] as i32 + y1[b] as i32) * 64,
+                    ur[px * us] as i32 - 128,
+                    vr[px * vs] as i32 - 128,
+                )
+            } else {
+                ((get(y0, a) + get(y0, b) + get(y1, a) + get(y1, b)) * 64, get(ur, px * us) - 128, get(vr, px * vs) - 128)
+            };
+            // (1.402, 0.344, 0.714 and 1.772 in 256ths, rounded)
+            o[0] = ((l + 359 * cr + 128) >> 8).clamp(0, 255) as u8;
+            o[1] = ((l - 88 * cb - 183 * cr + 128) >> 8).clamp(0, 255) as u8;
+            o[2] = ((l + 454 * cb + 128) >> 8).clamp(0, 255) as u8;
         }
     }
     out
@@ -364,6 +386,34 @@ mod tests {
         // Red-difference raises red and lowers green.
         let out = half_rgba((&y, 4, 1), (&u, 4, 2), (&[228, 0, 128, 0], 4, 2), 4, 2);
         assert!(out[0] > 200 && out[1] < 60 && out[2] == 100, "{out:?}");
+    }
+
+    /// The fixed-point conversion is the float one's to within 1, strides and
+    /// all (a pseudo-random frame, chroma interleaved as the headset gives it).
+    #[test]
+    fn a_frame_at_half_size_matches_the_float_conversion() {
+        let (width, height) = (64, 48);
+        let mut seed = 12345u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 24) as u8
+        };
+        let y: Vec<u8> = (0..72 * height).map(|_| next()).collect();
+        let uv: Vec<u8> = (0..72 * height / 2).map(|_| next()).collect();
+        let (u, v) = ((&uv[..], 72, 2), (&uv[1..], 72, 2));
+        let out = half_rgba((&y, 72, 1), u, v, width, height);
+        let at = |(data, row, pixel): (&[u8], usize, usize), x: usize, yy: usize| data.get(yy * row + x * pixel).copied().unwrap_or(0) as f32;
+        for py in 0..height / 2 {
+            for px in 0..width / 2 {
+                let luma = (at((&y, 72, 1), px * 2, py * 2) + at((&y, 72, 1), px * 2 + 1, py * 2) + at((&y, 72, 1), px * 2, py * 2 + 1) + at((&y, 72, 1), px * 2 + 1, py * 2 + 1)) * 0.25;
+                let (cb, cr) = (at(u, px, py) - 128.0, at(v, px, py) - 128.0);
+                let want = [luma + 1.402 * cr, luma - 0.344 * cb - 0.714 * cr, luma + 1.772 * cb].map(|c| c.clamp(0.0, 255.0));
+                let o = (py * width / 2 + px) * 4;
+                for c in 0..3 {
+                    assert!((out[o + c] as f32 - want[c]).abs() <= 1.5, "pixel {px},{py} channel {c}: {} vs {}", out[o + c], want[c]);
+                }
+            }
+        }
     }
 
     #[test]
