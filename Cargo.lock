@@ -4890,6 +4890,7 @@ dependencies = [
 [[package]]
 name = "thug2-engine"
 version = "0.1.0"
+source = "git+https://github.com/rhythmerc/thug2-headless?rev=1a59863c362c2b5fa2b9aefedaaf32c56651693c#1a59863c362c2b5fa2b9aefedaaf32c56651693c"
 dependencies = [
  "engine-core",
  "thug2-sys",
@@ -4898,6 +4899,7 @@ dependencies = [
 [[package]]
 name = "thug2-sys"
 version = "0.1.0"
+source = "git+https://github.com/rhythmerc/thug2-headless?rev=1a59863c362c2b5fa2b9aefedaaf32c56651693c#1a59863c362c2b5fa2b9aefedaaf32c56651693c"
 
 [[package]]
 name = "tiny-skia"

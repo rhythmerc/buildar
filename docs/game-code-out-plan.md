@@ -303,7 +303,7 @@ the same way skate's park annotations do. Nothing in core has to change.
 | 7 | Audio: voices, pull stream and events; the dead decode path removed | M |
 | 8 | One generic driver replaces `thug2.rs`, `link_retail.rs` and `add_retail`; one host builder; Skate 3 boots lazily; the Android asset-source hack goes (done 2026-11-17) | L |
 | 9 | A generic data installer and pages; SK8 offered only to developers (done 2026-11-17) | S |
-| 10 | `thug2-sys` moves into thug2-headless | S |
+| 10 | `thug2-sys` moves into thug2-headless (done 2026-11-17, with `thug2-engine`) | S |
 | 11 | Optional: SK8 onto the contract | M |
 
 **Step 1, as done (2026-11-16):** `engine-core` holds `Mode`, `TouchState`, `HudHand` and the HUD types
@@ -626,6 +626,15 @@ the engine failed (THUG2's way; Skate 3 exited the app); whether an engine steps
     could be the barred one).
 - **Not checked in the headset:** the import from `Download` (storage permission, a rename or a copy across storage),
   a THUG2 folder copied in and played without a restart, and opening on Game data with no files.
+
+**Step 10, as done (2026-11-17):** `thug2-sys` and `thug2-engine` are thug2-headless's (`rust/`, a Cargo workspace at its
+root; 1a59863), and the app depends on both by revision. The decomp is thug2-headless's `decomp` submodule
+(rhythmerc/thug2-decomp `linux-headless`, 8d85140), which Cargo fetches with the git dependency, so the app's pin fixes
+the engine's code too. `THUG2_DECOMP_DIR`, or a `thug2-decomp` checkout beside thug2-headless, overrides it for working on
+the two together, with the app's `[patch]` block. `THUG2_HEADLESS_DIR` is gone. thug2-headless pins `engine-core` too:
+the two pins move together. The crates' tests run in thug2-headless (all passed there, and the app's THUG2 tests and
+the APK passed against the pin, built from the submodule). Left in the app: `skate-game`'s `thug2.rs` (where its files
+are, its settings and page). The code is now under thug2-headless's MIT licence.
 
 **Skate 3's floor, its own (2026-11-17):** the app put the room's floor at Skate 3's test course floor
 (`FLOOR_HEIGHT`, -1.535 m) for every engine when Skate 3 was carried (`xr::rig::WorldOrigin`), a Skate 3 need in the

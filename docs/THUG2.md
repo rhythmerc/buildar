@@ -95,13 +95,15 @@ The menu button, build mode and placing the skater work as they do for the other
 
 ## Building
 
-The app's GitHub build (`crates/skate-quest`) has the `thug2` feature. It builds the engine with
-CMake from two checkouts beside this repository (`crates/thug2-sys/build.rs`):
+The app's GitHub build (`crates/skate-quest`) has the `thug2` feature. THUG2's code is
+[thug2-headless](https://github.com/rhythmerc/thug2-headless)'s, pinned by revision in the workspace's `Cargo.toml`:
+its `thug2-sys` (the C API, `app/thug2_engine.h`, and the CMake build of the engine) and `thug2-engine` (THUG2 as the
+engine contract). Its decomp (github.com/rhythmerc/thug2-decomp, branch `linux-headless`: CanuckAussieKev's with the
+Linux/Android patches) is a submodule Cargo fetches with it. The build needs CMake, Ninja and clang (the NDK's for
+Android).
 
-- `thug2-headless` (`THUG2_HEADLESS_DIR`, github.com/rhythmerc/thug2-headless): the harness that
-  runs the decomp without a window, and the C API the app calls (`app/thug2_engine.h`).
-- `thug2-decomp` (`THUG2_DECOMP_DIR`, github.com/rhythmerc/thug2-decomp, branch `linux-headless`):
-  github.com/CanuckAussieKev/thug2-decomp with the Linux/Android patches.
+To work on the engine and the app together, check both out beside this repository and uncomment the thug2-headless
+`[patch]` block in `Cargo.toml`:
 
 ```sh
 git clone https://github.com/rhythmerc/thug2-headless ../thug2-headless
@@ -109,8 +111,8 @@ git clone -b linux-headless https://github.com/rhythmerc/thug2-decomp ../thug2-d
 ```
 
 On the desktop: `cargo build -p skate-game --features xr,thug2`. Engine tests on your own files:
-`THUG2_GAME_DIR=<folder holding Data> cargo test -p thug2-sys` and
-`cargo test -p skate-game --features xr,retail,thug2 thug2::`.
+`THUG2_GAME_DIR=<folder holding Data> cargo test --release` in thug2-headless, and
+`cargo test -p skate-game --features xr,retail,thug2 thug2::` here.
 
 `SK8_ENGINE_SCRIPT="8:thug2,16:sk8,24:skate3"` switches engines at those seconds after launch, to
 test switching without the menu.

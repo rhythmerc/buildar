@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/skate-game", "crates/skate-quest", "crates/skate-lite-sys", "crates/roomtone-sys", "crates/thug2-sys", "crates/thug2-engine", "crates/skate3-engine", "crates/engine-api"]
+members = ["crates/skate-game", "crates/skate-quest", "crates/skate-lite-sys", "crates/roomtone-sys", "crates/skate3-engine", "crates/engine-api"]
 resolver = "3"
 
 [workspace.package]
@@ -26,6 +26,11 @@ engine-core = { git = "https://github.com/rhythmerc/buildar-engine-core", rev = 
 skate3-sim = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
 skate-core = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
 skate-data = { git = "https://github.com/rhythmerc/skate3-headless", rev = "ff026ef823fcafaa818e6313d8e54e61e2bdf652" }
+# The THUG2 engine: https://github.com/rhythmerc/thug2-headless (thug2-decomp run headless, its C API and THUG2 as the
+# engine contract; built with CMake, its decomp a pinned submodule). Bump both revs together; its engine-core rev must
+# be the one above.
+thug2-sys = { git = "https://github.com/rhythmerc/thug2-headless", rev = "1a59863c362c2b5fa2b9aefedaaf32c56651693c" }
+thug2-engine = { git = "https://github.com/rhythmerc/thug2-headless", rev = "1a59863c362c2b5fa2b9aefedaaf32c56651693c" }
 
 [profile.dev]
 opt-level = 3
@@ -40,6 +45,11 @@ opt-level = 3
 # Local buildar-engine-core checkout (a sibling of this repo):
 # [patch."https://github.com/rhythmerc/buildar-engine-core"]
 # engine-core = { path = "../buildar-engine-core" }
+
+# Local thug2-headless checkout (a sibling of this repo; its decomp: a thug2-decomp checkout beside it, or its submodule):
+# [patch."https://github.com/rhythmerc/thug2-headless"]
+# thug2-sys = { path = "../thug2-headless/rust/thug2-sys" }
+# thug2-engine = { path = "../thug2-headless/rust/thug2-engine" }
 
 # Local skate3-headless checkout (a sibling of this repo):
 # [patch."https://github.com/rhythmerc/skate3-headless"]
