@@ -698,6 +698,26 @@ space, so none moved. THUG2 and SK8 now run at y = 0 whether or not Skate 3 is t
   headset report came with the slab in, so it may be something else: the next suspects are what that test doesn't
   cover, room-mesh triangles and placed pieces' sides.
 
+## Later: Skate 3's sound banks decoded at import, in Rust (2026-11-17)
+
+The retail sounds need Skate 3's sound banks as PCM (`audio-pcm-cache`, 37 files, about 126 MB). Today they come from
+the desktop engine: `skate-data` (skate3-headless) decodes every player, splice and grain bank the first time player
+audio starts, by running the `ffmpeg` binary (`skate-data/src/audio/ffmpeg.rs`; XMA2 is a hardware codec and
+`libavcodec` the only free decoder). Hence the import guide's "skate a minute". The headset can't run ffmpeg.
+
+**The plan (the user's choice):** a pure-Rust XMA2 decoder in skate3-headless, a port of ffmpeg's (`wmaprodec.c`'s
+XMA path; LGPL-derived, fine in GPL-3). It replaces the ffmpeg call behind `skate-data`'s `Decoder`, so the desktop
+needs no ffmpeg either.
+- **Checked against ffmpeg:** every bank decoded by both, within ±1 per sample (all 126 MB).
+- **At import:** the installer decodes the banks after copying the data (with progress). Measure the time on the
+  Quest.
+- **Then the banks are required:** Skate 3's data counts as present only with them (or the import makes them), and
+  its fallback to the app's skating sounds goes: `skate3_engine::sound::Heard`, `Sound::Carried`, `SKATE_AUDIO`, and
+  the clean sounds' Skate 3 parity test. SK8 keeps the app's own sounds.
+- **The import guide** loses "skate a minute"; `MAKE-QUEST-ZIP` no longer needs the cache.
+- Rejected: `libavcodec` cross-built into the APK (a C build in the APK, and the desktop still needs ffmpeg); decoding
+  on the PC when the zip is made (not import time). The latter could be a stopgap.
+
 ## Later: several models from one engine (2026-11-17)
 
 An engine may hand over several models at once, such as the CPU racers in a headless Wipeout or MKWii. Today every
