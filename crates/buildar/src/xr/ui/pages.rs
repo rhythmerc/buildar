@@ -554,7 +554,7 @@ fn ar_act(widget: &str, world: &mut World) -> Outcome {
 pub(crate) fn size_widgets(world: &World) -> [Widget; 3] {
     let t = size::current_times(world);
     [
-        Widget::info(format!("Size {} (x1.0: the game's own size for a room)", size::label(t))),
+        Widget::info(format!("Player scale {} (x1.0 is the default, toy-sized)", size::label(t))),
         Widget::button("size_down", format!("Smaller: {}", size::label(size::stepped(t, -1)))),
         Widget::button("size_up", format!("Bigger: {}", size::label(size::stepped(t, 1)))),
     ]

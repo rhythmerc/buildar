@@ -1323,8 +1323,8 @@ fn settings_box(root: &mut Spawner, view: &SettingsView, fonts: &Fonts) {
         ))
         .with_children(|row| {
             row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), flex_shrink: 1.0, ..default() }).with_children(|words| {
-                words.spawn((Text::new("Size"), fonts.display(22.0, 700), TextColor(Color::WHITE)));
-                words.spawn((Text::new("x1.0 is the game's own size for a room"), fonts.body(17.0, 400), TextColor(if on { Color::WHITE } else { DIM })));
+                words.spawn((Text::new("Player scale"), fonts.display(22.0, 700), TextColor(Color::WHITE)));
+                words.spawn((Text::new("x1.0 is the default (toy-sized)"), fonts.body(17.0, 400), TextColor(if on { Color::WHITE } else { DIM })));
             });
             row.spawn(Node { column_gap: px(12), align_items: AlignItems::Center, flex_shrink: 0.0, ..default() }).with_children(|stepper| {
                 step_button(stepper, false, view.smaller, fonts);
