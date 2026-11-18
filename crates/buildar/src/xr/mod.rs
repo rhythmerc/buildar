@@ -25,6 +25,7 @@ pub(crate) mod occlusion_edges;
 mod mesh_planes;
 pub(crate) mod panel;
 pub(crate) mod panel_layer;
+mod frame_timing;
 mod plane_view;
 pub(crate) mod planes;
 mod real_world;
@@ -90,10 +91,10 @@ pub(crate) fn plugins(base: PluginGroupBuilder) -> PluginGroupBuilder {
             exts,
             ..default()
         })
-        // Every bevy_mod_openxr example runs without it. With it, the OpenXR
-        // frame loop is split across two threads; that is a suspect in the
-        // Adreno GPU hangs.
-        .disable::<bevy::render::pipelined_rendering::PipelinedRenderingPlugin>()
+    // Pipelined rendering on (2026-11-18): without it the frame was one serial chain - update, extract, render - that
+    // filled the whole 13.9 ms period at 72 Hz with half of it the main thread parked, and missed 3 to 5 refreshes a
+    // second in an empty room. (It was off as a suspect in Adreno GPU hangs, never confirmed: if they come back, this
+    // is the first thing to look at.)
 }
 
 /// The XR layer, whatever the engine. Each engine adds its own adapter
@@ -116,7 +117,7 @@ impl Plugin for XrPlugin {
             .add_plugins(bevy_mod_openxr::features::fb_passthrough::OxrFbPassthroughPlugin)
             .add_plugins(occlusion::OcclusionPlugin)
             .add_plugins(controller_shapes::ControllerShapesPlugin)
-            .add_plugins((virtual_keyboard::VirtualKeyboardPlugin, panel_layer::PanelLayerPlugin))
+            .add_plugins((virtual_keyboard::VirtualKeyboardPlugin, panel_layer::PanelLayerPlugin, frame_timing::FrameTimingPlugin))
             .insert_resource(OxrSessionConfig {
                 blend_mode_preference: vec![
                     openxr::EnvironmentBlendMode::ALPHA_BLEND,
