@@ -141,11 +141,3 @@ that merged pass: the resolve target is still written, the samples aren't. Only
 for cameras nothing loads the multisampled colour on after the main pass (no
 UI drawn on the camera, no MSAA writeback). buildAR's eye cameras use it.
 
-## bevy_mod_openxr: swapchain views made once
-
-`bevy_mod_openxr` is vendored from crates.io 0.5.0 (MIT/Apache-2.0).
-`src/openxr/render.rs`'s `insert_texture_views` keeps each swapchain image's
-two eye views and hands the same ones back each time that image comes round,
-instead of making new views every frame. New views meant wgpu built a new
-Vulkan framebuffer each frame for every pass drawing to them (~5% of the main
-thread on the headset). The views are remade if the swapchain's images change.

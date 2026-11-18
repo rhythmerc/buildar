@@ -26,6 +26,7 @@ mod mesh_planes;
 pub(crate) mod panel;
 pub(crate) mod panel_layer;
 mod frame_timing;
+pub(crate) mod dev_flags;
 mod plane_view;
 pub(crate) mod planes;
 mod real_world;
@@ -66,8 +67,11 @@ pub(crate) fn plugins(base: PluginGroupBuilder) -> PluginGroupBuilder {
     // The headset's depth of the room, for real things hiding virtual ones (`occlusion`).
     occlusion::enable(raw);
     controller_shapes::enable(raw);
-    // Meta's keyboard, for typing a name (`virtual_keyboard`).
-    virtual_keyboard::enable(raw);
+    // Meta's keyboard, for typing a name (`virtual_keyboard`): not asked for while it's parked (the runtime starts a
+    // thread of its own for it).
+    if virtual_keyboard::ENABLED {
+        virtual_keyboard::enable(raw);
+    }
     panel_layer::enable(raw);
     // The room's triangle mesh, for objects Scene has no plane or box for.
     raw.meta_spatial_entity_mesh = true;
@@ -106,7 +110,8 @@ pub(crate) struct XrPlugin {
 
 impl Plugin for XrPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(XrFiles(self.files.clone()))
+        app.add_plugins(dev_flags::DevFlagsPlugin(dev_flags::DevFlags::read(&self.files)))
+            .insert_resource(XrFiles(self.files.clone()))
             .insert_resource(crate::skate_audio::clean::TuningFile(self.files.clone()))
             .add_plugins((
                 ar_settings::ArSettingsPlugin,

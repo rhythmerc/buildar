@@ -265,8 +265,41 @@ pub(crate) fn half_rgba(
         let from = (at * stride).min(data.len());
         &data[from..(from + len).min(data.len())]
     }
-    let get = |r: &[u8], i: usize| r.get(i).copied().unwrap_or(0) as i32;
+    // The headset's layout (luma packed, chroma interleaved: pixel stride 2): straight slices in fixed steps, which
+    // the compiler vectorizes. The general loop below is the same arithmetic for any layout.
+    if y.2 == 1 && u.2 == 2 && v.2 == 2 {
+        for py in 0..h {
+            let (y0, y1) = (row(y, py * 2, w * 2), row(y, py * 2 + 1, w * 2));
+            let (ur, vr) = (row(u, py, w * 2 - 1), row(v, py, w * 2 - 1));
+            if y0.len() < w * 2 || y1.len() < w * 2 || ur.len() < w * 2 - 1 || vr.len() < w * 2 - 1 {
+                general_row(&mut out, py, w, y, u, v);
+                continue;
+            }
+            let line = &mut out[py * w * 4..(py + 1) * w * 4];
+            for ((((o, a), b), cu), cv) in line.chunks_exact_mut(4).zip(y0.chunks_exact(2)).zip(y1.chunks_exact(2)).zip(ur.iter().step_by(2)).zip(vr.iter().step_by(2)) {
+                let l = (a[0] as i32 + a[1] as i32 + b[0] as i32 + b[1] as i32) * 64;
+                let (cb, cr) = (*cu as i32 - 128, *cv as i32 - 128);
+                o[0] = ((l + 359 * cr + 128) >> 8).clamp(0, 255) as u8;
+                o[1] = ((l - 88 * cb - 183 * cr + 128) >> 8).clamp(0, 255) as u8;
+                o[2] = ((l + 454 * cb + 128) >> 8).clamp(0, 255) as u8;
+            }
+        }
+        return out;
+    }
     for py in 0..h {
+        general_row(&mut out, py, w, y, u, v);
+    }
+    out
+}
+
+/// One output row of [`half_rgba`], any layout, short planes read as 0.
+fn general_row(out: &mut [u8], py: usize, w: usize, y: (&[u8], usize, usize), u: (&[u8], usize, usize), v: (&[u8], usize, usize)) {
+    fn row<'a>((data, stride, _): (&'a [u8], usize, usize), at: usize, len: usize) -> &'a [u8] {
+        let from = (at * stride).min(data.len());
+        &data[from..(from + len).min(data.len())]
+    }
+    let get = |r: &[u8], i: usize| r.get(i).copied().unwrap_or(0) as i32;
+    {
         let (y0, y1) = (row(y, py * 2, w * 2 * y.2.max(1)), row(y, py * 2 + 1, w * 2 * y.2.max(1)));
         let (ur, vr) = (row(u, py, w * u.2.max(1)), row(v, py, w * v.2.max(1)));
         let (ys, us, vs) = (y.2.max(1), u.2.max(1), v.2.max(1));
@@ -290,7 +323,6 @@ pub(crate) fn half_rgba(
             o[2] = ((l + 454 * cb + 128) >> 8).clamp(0, 255) as u8;
         }
     }
-    out
 }
 
 #[cfg(test)]
@@ -414,6 +446,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The headset layout's fast path writes what the general rows write.
+    #[test]
+    fn the_fast_path_matches_the_general_one() {
+        let (width, height) = (64, 48);
+        let mut seed = 99u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 24) as u8
+        };
+        let y: Vec<u8> = (0..72 * height).map(|_| next()).collect();
+        let uv: Vec<u8> = (0..72 * height / 2).map(|_| next()).collect();
+        let (yp, u, v) = ((&y[..], 72, 1), (&uv[..], 72, 2), (&uv[1..], 72, 2));
+        let fast = half_rgba(yp, u, v, width, height);
+        let mut general = vec![255u8; fast.len()];
+        for py in 0..height / 2 {
+            general_row(&mut general, py, width / 2, yp, u, v);
+        }
+        assert_eq!(fast, general);
     }
 
     #[test]

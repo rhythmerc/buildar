@@ -24,11 +24,11 @@ engine-core = { git = "https://github.com/rhythmerc/buildar-engine-core", rev = 
 # The Skate 3 engine's simulation: https://github.com/rhythmerc/skate3-headless (Bevy-free; the app renders).
 # Bump all four revs together; its engine-core rev must be the one above. To build against a local checkout instead,
 # uncomment the [patch] block below.
-skate3-sim = { git = "https://github.com/rhythmerc/skate3-headless", rev = "92148872e482962806a8ebcc2dcb6a1e1df91455" }
-skate-core = { git = "https://github.com/rhythmerc/skate3-headless", rev = "92148872e482962806a8ebcc2dcb6a1e1df91455" }
-skate-data = { git = "https://github.com/rhythmerc/skate3-headless", rev = "92148872e482962806a8ebcc2dcb6a1e1df91455" }
+skate3-sim = { git = "https://github.com/rhythmerc/skate3-headless", rev = "a4128a036414a1116246c69c56c8ac163f5d9ec9" }
+skate-core = { git = "https://github.com/rhythmerc/skate3-headless", rev = "a4128a036414a1116246c69c56c8ac163f5d9ec9" }
+skate-data = { git = "https://github.com/rhythmerc/skate3-headless", rev = "a4128a036414a1116246c69c56c8ac163f5d9ec9" }
 # Skate 3 as the engine contract, over the sim.
-skate3-engine = { git = "https://github.com/rhythmerc/skate3-headless", rev = "92148872e482962806a8ebcc2dcb6a1e1df91455" }
+skate3-engine = { git = "https://github.com/rhythmerc/skate3-headless", rev = "a4128a036414a1116246c69c56c8ac163f5d9ec9" }
 # The THUG2 engine: https://github.com/rhythmerc/thug2-headless (thug2-decomp run headless, its C API and THUG2 as the
 # engine contract; built with CMake, its decomp a pinned submodule). Bump both revs together; its engine-core rev must
 # be the one above.
@@ -68,5 +68,4 @@ engine-core = { path = "../buildar-engine-core" }
 brres-sys = { path = "../mkw-headless/third_party/brres-sys" }
 bevy_pbr = { path = "vendor/bevy_pbr" }
 bevy_core_pipeline = { path = "vendor/bevy_core_pipeline" }
-bevy_mod_openxr = { path = "vendor/bevy_mod_openxr" }
 winit = { path = "vendor/winit" }

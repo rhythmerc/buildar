@@ -36,7 +36,7 @@ pub(crate) struct VirtualKeyboardPlugin;
 
 /// Parked (2026-11-18): drawn by the app, it came up placed and sized awkwardly and lost its key textures on the
 /// headset; the panel's own keys type until it's picked up again. (True: Meta's keyboard is used where it can be.)
-const ENABLED: bool = false;
+pub(crate) const ENABLED: bool = false;
 
 impl Plugin for VirtualKeyboardPlugin {
     fn build(&self, app: &mut App) {
