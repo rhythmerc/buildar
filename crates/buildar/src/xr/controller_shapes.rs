@@ -155,8 +155,8 @@ fn load(
     }
 }
 
-/// A controller's model as the runtime has it (a binary glTF).
-fn model(session: &OxrSession, path: &str) -> Result<Vec<u8>, String> {
+/// A model as the runtime has it (a binary glTF): a controller's, Meta's keyboard's (`virtual_keyboard`).
+pub(crate) fn model(session: &OxrSession, path: &str) -> Result<Vec<u8>, String> {
     let instance = session.instance();
     let fns = instance.exts().fb_render_model.ok_or("the headset gives no controller models")?;
     let path = instance.string_to_path(path).map_err(|e| e.to_string())?;

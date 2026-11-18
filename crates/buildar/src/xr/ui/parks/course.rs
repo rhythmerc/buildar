@@ -288,7 +288,13 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 return Outcome::Stay;
             }
             Some(Spot::Settings) => world.resource_mut::<ParksScreen>().settings = Some((details.id.clone(), SettingsRow::Size)),
-            Some(Spot::Title) => details.rename = Some(Rename { text: file.name.clone(), shift: false, key: (4, 2) }),
+            Some(Spot::Title) => {
+                details.rename = Some(Rename { text: file.name.clone(), shift: false, key: (4, 2) });
+                // (Meta's keyboard, where the headset has it: `xr::virtual_keyboard`)
+                if let Some(mut wanted) = world.get_resource_mut::<crate::xr::virtual_keyboard::Wanted>() {
+                    wanted.0 = true;
+                }
+            }
             Some(Spot::Mode) => {
                 let at = mode_rows().iter().position(|(m, ..)| *m == mode).unwrap_or(0);
                 details.dropdown = Some((Drop::Mode, at));
