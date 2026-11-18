@@ -97,15 +97,19 @@ struct State {
     /// Tries at fetching the model (the runtime may want a frame or two), and given up (no keyboard here).
     tries: u32,
     failed: bool,
+    /// Every texture fetched once (the glyphs are filled at the start, never marked changed after).
+    primed: bool,
     /// The two-call buffers, kept (the animation states' are made each frame: they hold pointers).
     dirty: Vec<u64>,
     pixels: Vec<u8>,
 }
 
-/// Below the panel, toward the player, tilted up to face them (m, degrees).
-const BELOW_PANEL_M: f32 = 0.1;
-const TOWARD_PLAYER_M: f32 = 0.12;
+/// Below the panel, toward the player, tilted up to face them (m, degrees), and its size: the model is a metre wide
+/// at 1, too big under the panel (0.88 m wide) - 0.7 m.
+const BELOW_PANEL_M: f32 = 0.12;
+const TOWARD_PLAYER_M: f32 = 0.15;
 const TILT_DEG: f32 = 35.0;
+const SCALE: f32 = 0.7;
 
 /// (On the main thread: see the module's notes.)
 #[allow(clippy::too_many_arguments)]
@@ -194,7 +198,7 @@ fn run(
                 location_type: sys::VirtualKeyboardLocationTypeMETA::CUSTOM,
                 space: base,
                 pose_in_space: pose(at, rotation),
-                scale: 1.0,
+                scale: SCALE,
             };
             // SAFETY: as above.
             let placed = unsafe { (fns.suggest_virtual_keyboard_location)(keyboard, &location) };
@@ -295,17 +299,31 @@ fn run(
         }
     }
 
-    // The textures it has changed.
+    // The textures it has changed (and, the first time it's up, all of them: the glyphs are filled at the start).
     let mut dirty = 0u32;
     // SAFETY: a count asked for, then that many ids written.
     let counted = unsafe { (fns.get_virtual_keyboard_dirty_textures)(keyboard, 0, &mut dirty, std::ptr::null_mut()) };
-    if counted.into_raw() >= 0 && dirty > 0 {
+    let prime = !state.primed;
+    if prime || (counted.into_raw() >= 0 && dirty > 0) {
+        state.primed = true;
         let State { dirty: ids, pixels, model, .. } = &mut *state;
         ids.resize(dirty as usize, 0);
         let mut got = 0u32;
         // SAFETY: as above.
-        if unsafe { (fns.get_virtual_keyboard_dirty_textures)(keyboard, dirty, &mut got, ids.as_mut_ptr()) }.into_raw() >= 0 {
-            for &id in ids.iter().take(got as usize) {
+        if dirty > 0 && unsafe { (fns.get_virtual_keyboard_dirty_textures)(keyboard, dirty, &mut got, ids.as_mut_ptr()) }.into_raw() < 0 {
+            got = 0;
+        }
+        ids.truncate(got as usize);
+        if prime {
+            for &id in model.as_ref().map(|m| m.textures.keys().copied().collect::<Vec<_>>()).unwrap_or_default().iter() {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+        }
+        {
+            let mut fetched = 0;
+            for &id in ids.iter() {
                 let mut data = sys::VirtualKeyboardTextureDataMETA {
                     ty: sys::VirtualKeyboardTextureDataMETA::TYPE,
                     next: std::ptr::null_mut(),
@@ -332,7 +350,13 @@ fn run(
                     && image.height() == data.texture_height
                 {
                     image.data = Some(pixels[..data.buffer_count_output as usize].to_vec());
+                    fetched += 1;
+                } else {
+                    warn!("VKB: texture {id}: {}x{} not as the model has it", data.texture_width, data.texture_height);
                 }
+            }
+            if prime {
+                info!("VKB: {fetched} of {} textures fetched", ids.len());
             }
         }
     }

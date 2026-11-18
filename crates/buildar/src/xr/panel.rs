@@ -14,11 +14,13 @@ use bevy_mod_xr::camera::XrCamera;
 /// Panel image size, pixels, and its real size, metres.
 pub(crate) const WIDTH_PX: u32 = 1000;
 pub(crate) const HEIGHT_PX: u32 = 900;
-pub(crate) const WIDTH_M: f32 = 0.62;
+pub(crate) const WIDTH_M: f32 = 0.62 * DISTANCE_M / 0.7;
 pub(crate) const HEIGHT_M: f32 = WIDTH_M * HEIGHT_PX as f32 / WIDTH_PX as f32;
-/// How far in front of the eyes it opens, and how far below them, metres.
-const DISTANCE_M: f32 = 0.7;
-const DROP_M: f32 = 0.12;
+/// How far in front of the eyes it opens, and how far below them, metres. A metre: Meta's guidance for UI worked with
+/// a ray is out of the "middle distance" (0.5 to 0.8 m), at a metre or more. (It was 0.7 m and 0.62 m wide: it's as
+/// big to the eye as it was, as are its drop and its keyboard's place under it.)
+const DISTANCE_M: f32 = 1.0;
+const DROP_M: f32 = 0.12 * DISTANCE_M / 0.7;
 
 /// Marks the panel's UI camera, which `headset_only_rendering` leaves on.
 #[derive(Component)]
