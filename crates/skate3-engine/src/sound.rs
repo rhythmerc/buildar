@@ -91,7 +91,7 @@ impl Heard {
         }
         self.previous = Some(Edges { state: o.state, wiping_out: wiped, pushing, stepping, trick: o.trick_identifier.clone() });
         let s = &mut self.sounds;
-        s.at = Vec3::from_array(o.retail.position);
+        s.at = crate::stage::from_sim(Vec3::from_array(o.retail.position));
         s.speed = o.board_speed;
         s.rolling = if o.grinding || is_grind(o.state) {
             Rolling::Grind
@@ -154,7 +154,7 @@ impl StreamFeed {
     /// A completed tick, with the front-end sounds since the last. The game never waits for the sound: with the
     /// stream behind, the tick is dropped (counted: [`StreamFeed::dropped`]).
     pub fn observe(&mut self, observation: &PlayerAudioObservation) {
-        self.at = Some(Vec3::from_array(observation.retail.position));
+        self.at = Some(crate::stage::from_sim(Vec3::from_array(observation.retail.position)));
         let mut observation = observation.clone();
         observation.frontend_sounds.append(&mut self.front_end);
         match self.input.try_send(observation) {

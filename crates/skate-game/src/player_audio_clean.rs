@@ -1061,7 +1061,8 @@ mod parity {
             frontend_sounds: Vec::new(),
             retail: RetailAudioInputs::default(),
         };
-        o.retail.position = position(t).to_array();
+        // (the sim's world: the room's raised to its floor)
+        o.retail.position = skate3_engine::stage::to_sim(position(t)).to_array();
         let air = |o: &mut PlayerAudioObservation, trick: &str| {
             o.state = 200;
             o.grounded = false;
@@ -1160,9 +1161,11 @@ mod parity {
 
     /// Recorded at c45e939 (`8c0d54649b762692`, Skate 3's knowledge in the driver), and again through the engine's
     /// `skate3_engine::sound::Heard`: one frame differs, the first, before any tick (the loops' silent targets now have
-    /// the standing pitch).
+    /// the standing pitch). Again (from `c46c91528e778afe`) when Skate 3 took the room's floor to its own: the same
+    /// sounds every frame; only the positions written down differ, by the last bit of a y gone into the sim's world
+    /// and back (0.35 as 0.35000002).
     #[cfg(feature = "retail")]
-    const SKATE3_DIGEST: u64 = 0xc46c_9152_8e77_8afe;
+    const SKATE3_DIGEST: u64 = 0x1f76_48db_46d1_1ad7;
 
     /// What SK8 said a frame, as its adapter had it before the skate mode's sounds (`crate::clean::feed_sounds` makes
     /// those from the same).

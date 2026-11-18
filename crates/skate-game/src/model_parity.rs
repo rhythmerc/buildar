@@ -154,6 +154,8 @@ mod skate3 {
             let Some(frame) = sim.camera_frame().copied() else { continue };
             let mut pose = Pose::default();
             skate3_engine::model::pose(&sim.skater, &frame, &mut pose);
+            // (drawn where the sim has it, as recorded: in the contract's space it is lowered to the room's floor)
+            pose.root = skate3_sim::SkaterPose::of(&sim.skater).root;
             ticks.push(Tick {
                 pose,
                 period: if i == 100 { Duration::from_micros(1) } else { sim.period() },
@@ -188,7 +190,8 @@ mod skate3 {
         let mut pose = Pose::default();
         skate3_engine::model::pose(&sim.skater, sim.camera_frame().expect("a camera frame"), &mut pose);
         let bodies = crate::model::bodies(&model.groups, &model.parents, |p| pose.point(p));
-        let deck = sim.link();
+        let mut deck = sim.link();
+        deck.deck = skate3_engine::stage::from_sim(deck.deck);
         let mut segments = 0;
         for body in &bodies {
             match body {

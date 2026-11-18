@@ -1,6 +1,8 @@
 //! The stage and park into the sim's collision and grind rails, putting the skater down, and where the rider and the
-//! board are. The sim's world is the contract's space as it is (metres, y up): no conversion.
-use engine_core::glam::Vec3;
+//! board are. The sim's world is the contract's space (metres, y up) raised to its own floor: the contract's floor
+//! (y = 0) is the sim's at [`FLOOR`], its test course's landing floor, where the sim's own ground is. Everything in or
+//! out of the sim's world is moved by it here ([`to_sim`], [`from_sim`]).
+use engine_core::glam::{Mat4, Vec3};
 use engine_core::skate::{SkatePark, SkaterLink};
 use engine_core::{Applied, Frame, Stage};
 use skate_core::math::Vector3;
@@ -12,7 +14,28 @@ use skate3_sim::physics::{GamePhysics, SkaterRuntime};
 /// How far over the ground point the skater is put down, metres.
 pub const PLACE_LIFT: f32 = 0.05;
 
+/// The contract's origin in the sim's world: its floor at the sim's.
+pub const FLOOR: Vec3 = Vec3::new(0.0, skate3_sim::physics::ground::FLOOR_HEIGHT, 0.0);
+
+/// A point of the contract's space in the sim's world.
+pub fn to_sim(p: Vec3) -> Vec3 {
+    p + FLOOR
+}
+
+/// A point of the sim's world in the contract's space.
+pub fn from_sim(p: Vec3) -> Vec3 {
+    p - FLOOR
+}
+
+/// A frame (a matrix placing something) of the sim's world in the contract's space.
+pub fn frame_from_sim(m: Mat4) -> Mat4 {
+    let mut out = m;
+    out.w_axis = from_sim(m.w_axis.truncate()).extend(m.w_axis.w);
+    out
+}
+
 fn v(p: Vec3) -> Vector3 {
+    let p = to_sim(p);
     Vector3::new(p.x, p.y, p.z)
 }
 
@@ -85,12 +108,13 @@ impl StageFeed {
     }
 }
 
-/// The teleport matrix for putting the skater down at `point` facing `forward` (its level part): row-major, axes in
-/// rows 0-2 (the skater faces row 2), the position in row 3, [`PLACE_LIFT`] over the point.
+/// The teleport matrix for putting the skater down at `point` (the contract's) facing `forward` (its level part):
+/// row-major, axes in rows 0-2 (the skater faces row 2), the position in row 3 (the sim's), [`PLACE_LIFT`] over the
+/// point.
 pub fn place_matrix(point: Vec3, forward: Vec3) -> [[f32; 4]; 4] {
     let forward = forward.with_y(0.0).try_normalize().unwrap_or(Vec3::Z);
     let right = Vec3::Y.cross(forward);
-    let p = point + Vec3::Y * PLACE_LIFT;
+    let p = to_sim(point) + Vec3::Y * PLACE_LIFT;
     [[right.x, right.y, right.z, 0.0], [0.0, 1.0, 0.0, 0.0], [forward.x, forward.y, forward.z, 0.0], [p.x, p.y, p.z, 1.0]]
 }
 
@@ -108,7 +132,7 @@ fn off_board(state: PhysicalStateId) -> bool {
 /// A row-major native frame (axes in rows 0-2, the position in row 3) as a [`Frame`]: forward its row 2, up row 1.
 fn frame(m: &[[f32; 4]; 4]) -> Frame {
     let row = |i: usize| Vec3::new(m[i][0], m[i][1], m[i][2]);
-    Frame { position: row(3), forward: row(2).normalize_or(Vec3::Z), up: row(1).normalize_or(Vec3::Y) }
+    Frame { position: from_sim(row(3)), forward: row(2).normalize_or(Vec3::Z), up: row(1).normalize_or(Vec3::Y) }
 }
 
 /// Where the skater is: the board from its deck's body; the rider from the animation's root, the frame the sim's
@@ -128,7 +152,7 @@ pub fn link(physics: &GamePhysics, skater: &SkaterRuntime) -> SkaterLink {
     }
     SkaterLink {
         rider: Some(frame(&root)),
-        board: Some(Frame { position: at.deck, forward: at.deck_forward, up }),
+        board: Some(Frame { position: from_sim(at.deck), forward: at.deck_forward, up }),
         on_board: !off_board(skater.player_state.current()),
         grinding: at.grinding,
         size: 0.0,
@@ -146,7 +170,20 @@ mod tests {
         let m = place_matrix(Vec3::ZERO, Vec3::new(0.0, -0.5, 1.0));
         assert_eq!(m[0], [1.0, 0.0, 0.0, 0.0]);
         assert_eq!(m[2], [0.0, 0.0, 1.0, 0.0]);
-        assert!((m[3][1] - PLACE_LIFT).abs() < 1e-6);
+        assert!((m[3][1] - FLOOR.y - PLACE_LIFT).abs() < 1e-6, "on the sim's floor");
+    }
+
+    /// The room's floor is the sim's: a point goes in raised to it and comes out lowered; a frame keeps its axes.
+    #[test]
+    fn the_rooms_floor_is_the_sims() {
+        assert!(FLOOR.y < -1.0 && FLOOR.x == 0.0 && FLOOR.z == 0.0);
+        let p = Vec3::new(1.0, 0.0, -2.0);
+        assert_eq!(to_sim(p), Vec3::new(1.0, FLOOR.y, -2.0));
+        assert_eq!(from_sim(to_sim(p)), p);
+        let m = Mat4::from_rotation_y(0.7) * Mat4::from_translation(Vec3::new(0.0, FLOOR.y + 0.5, 3.0));
+        let out = frame_from_sim(m);
+        assert_eq!((out.x_axis, out.y_axis, out.z_axis), (m.x_axis, m.y_axis, m.z_axis));
+        assert!((out.w_axis.truncate() - (m.w_axis.truncate() - FLOOR)).length() < 1e-6 && out.w_axis.w == 1.0);
     }
 
     #[test]
@@ -164,8 +201,8 @@ mod tests {
         };
         let (_, _, _, pieces) = surfaces(&stage, &park);
         assert_eq!(pieces.len(), 2);
-        assert_eq!(pieces[0].quads.iter().map(|q| q[0].y).collect::<Vec<_>>(), [1.0]);
-        assert_eq!(pieces[0].rail_quads.iter().map(|q| q[0].y).collect::<Vec<_>>(), [2.0, 3.0]);
+        assert_eq!(pieces[0].quads.iter().map(|q| q[0].y).collect::<Vec<_>>(), [1.0 + FLOOR.y]);
+        assert_eq!(pieces[0].rail_quads.iter().map(|q| q[0].y).collect::<Vec<_>>(), [2.0 + FLOOR.y, 3.0 + FLOOR.y]);
         assert_eq!(pieces[0].edges.len(), 1);
         assert_eq!((pieces[1].quads.len(), pieces[1].rail_quads.len(), pieces[1].edges.len()), (1, 0, 0));
     }

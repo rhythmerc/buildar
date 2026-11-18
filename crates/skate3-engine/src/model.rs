@@ -5,7 +5,7 @@
 //!   own ([`BASIS`]; both are y-up in the world). That is a skin basis change, not a physics turn. Its bodies: the
 //!   rider (cast from its bones) and the board (its footprint, truck to truck).
 //! - **Pose** ([`pose`]): the sim's render pose (the rig's bones in the animation root's space) and that root in the
-//!   world, published once a tick. It is a cut (not blended from the one before) when the gameplay camera cuts or the
+//!   world (the contract's: `crate::stage::FLOOR`), published once a tick. It is a cut (not blended from the one before) when the gameplay camera cuts or the
 //!   sim's teleport flag is up.
 use engine_core::glam::{Mat4, Vec3, Vec4};
 use engine_core::model::{BodyGroup, Cast, Model, ModelSource, Point, Pose};
@@ -59,7 +59,7 @@ pub fn pose(skater: &SkaterRuntime, camera: &CameraFrame, out: &mut Pose) {
     let pose = skate3_sim::SkaterPose::of(skater);
     out.generation = pose.generation;
     out.discontinuity = camera.discontinuity || skater.player_input.processed.flags_2472 & (1 << 10) != 0;
-    out.root = pose.root;
+    out.root = crate::stage::frame_from_sim(pose.root);
     out.joints.clear();
     out.joints.extend(pose.bones.iter().copied().map(skate3_sim::animation::native_matrix));
 }

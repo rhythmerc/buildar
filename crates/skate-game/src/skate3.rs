@@ -4,9 +4,10 @@
 //! picked, ticked by its own period, its skater drawn from its GLB, its HUD, its sound).
 //!
 //! Here: where its data is (`--assets DIRECTORY` or `SKATE3_ASSET_ROOT` on the desktop, `assets/` in the app's files
-//! in the headset, each with `private/game.json`), the asset source its GLB loads from, its light, which sound it plays
-//! (its own graph on the decoded sound banks, else the skating sounds the app carries; `SKATE_AUDIO=clean|retail`),
-//! and its settings and page.
+//! in the headset, with `private/game.json`: `skate3_engine::DATA`), the asset source its GLB loads from, its light,
+//! which sound it plays (its own graph on the decoded sound banks, else the skating sounds the app carries;
+//! `SKATE_AUDIO=clean|retail`), and its settings and page. It is carried whether its data is there or not: it can be
+//! picked once it is (imported while the app runs, at once), and what it reads of the data it reads when it starts.
 use crate::engines::{self, Engine};
 use bevy::prelude::*;
 use std::path::{Path, PathBuf};
@@ -23,8 +24,8 @@ type Driver = crate::engine_driver::Driver<Skate3>;
 /// The asset source its data is ([`register_assets`]).
 pub(crate) const ASSETS: &str = "skate3";
 
-/// The player's imported Skate 3 data, if there is any: its `assets` folder.
-pub(crate) fn assets(files: &Path) -> Option<PathBuf> {
+/// Where the player's Skate 3 data is, or goes when imported: its `assets` folder.
+pub(crate) fn assets(files: &Path) -> PathBuf {
     let mut given = std::env::var_os("SKATE3_ASSET_ROOT").map(PathBuf::from);
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
@@ -34,8 +35,17 @@ pub(crate) fn assets(files: &Path) -> Option<PathBuf> {
     }
     let root = given.unwrap_or_else(|| if cfg!(target_os = "android") { files.join("assets") } else { PathBuf::from("assets") });
     // (absolute: an asset source's reader resolves a relative folder against Bevy's base path, not this one)
-    root.join("private/game.json").is_file().then(|| std::path::absolute(&root).unwrap_or(root))
+    std::path::absolute(&root).unwrap_or(root)
 }
+
+/// Its data is there.
+pub(crate) fn has_data(assets: &Path) -> bool {
+    skate3_engine::DATA.in_folder(assets)
+}
+
+/// Where its data is.
+#[derive(Resource)]
+struct Data(PathBuf);
 
 /// Its data as an asset source (its GLB loads from it), before the app's plugins.
 pub(crate) fn register_assets(app: &mut App, assets: &Path) {
@@ -59,18 +69,23 @@ fn own_sound() -> bool {
 }
 
 fn available(world: &World) -> Result<(), String> {
-    match world.get_resource::<Driver>().and_then(Driver::failed) {
-        Some(why) => Err(why),
-        None => Ok(()),
+    if let Some(why) = world.get_resource::<Driver>().and_then(Driver::failed) {
+        return Err(why);
     }
+    if world.get_resource::<Data>().is_some_and(|d| has_data(&d.0)) { Ok(()) } else { Err("needs your game files".into()) }
 }
 
 /// Adds Skate 3 to the app's engines, its data at `assets` (`files`: the app's own folder).
 pub(crate) fn install(app: &mut App, files: &Path, assets: PathBuf) {
-    let difficulty = skate3_sim::difficulty::Difficulty::load(&assets).unwrap_or_default();
-    let own = own_sound();
-    info!("Skate 3 carried: {} ({}, {})", assets.display(), difficulty.key(), if own { "its own sound" } else { "the clean sounds" });
-    let factory = skate3_engine::engine::factory(assets, difficulty, own);
+    info!("Skate 3 carried: {} ({})", assets.display(), if has_data(&assets) { "its data there" } else { "no data yet" });
+    app.insert_resource(Data(assets.clone()));
+    // (what it reads of its data, read when it starts: the data may come after the app opened)
+    let factory: engine_core::EngineFactory = Box::new(move || {
+        let difficulty = skate3_sim::difficulty::Difficulty::load(&assets).unwrap_or_default();
+        let own = own_sound();
+        info!("Skate 3 starting: {} ({}, {})", assets.display(), difficulty.key(), if own { "its own sound" } else { "the clean sounds" });
+        skate3_engine::engine::factory(assets, difficulty, own)()
+    });
     let _ = std::fs::create_dir_all(files);
     // (Skate 3 stopped the app while it started last time: the app opens on another engine, and says so)
     let crashed = files.join(STARTING).exists();

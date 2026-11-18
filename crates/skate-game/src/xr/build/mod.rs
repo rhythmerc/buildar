@@ -3120,7 +3120,7 @@ mod tests {
             .init_resource::<PieceAssets>()
             .insert_resource(crate::xr::ar_settings::ArSettings::default())
             .insert_resource(CurrentStage(Stage { revision: 1, room_quads: vec![floor], ..default() }))
-            .insert_resource(Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: Some((Vec3::ZERO, 0.0)) })
+            .insert_resource(Rig { scale: 1.0, anchor: Some((Vec3::ZERO, 0.0)) })
             .init_resource::<crate::xr::link::SkaterLink>();
         let image = Image::new_target_texture(1600, 1000, TextureFormat::Rgba8UnormSrgb, None);
         let image = app.world_mut().resource_mut::<Assets<Image>>().add(image);
@@ -3179,7 +3179,7 @@ mod tests {
             let floor = [Vec3::new(-20.0, 0.0, -20.0), Vec3::new(20.0, 0.0, -20.0), Vec3::new(20.0, 0.0, 20.0), Vec3::new(-20.0, 0.0, 20.0)];
             world.insert_resource(CurrentStage(Stage { revision: 1, room_quads: vec![floor], ..default() }));
             world.init_resource::<SunkHoles>();
-            world.insert_resource(Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: Some((Vec3::ZERO, 0.0)) });
+            world.insert_resource(Rig { scale: 1.0, anchor: Some((Vec3::ZERO, 0.0)) });
             world.insert_resource(BuildMode { active: true });
             world.insert_resource(BuildState { selected: PieceKind::ALL.iter().position(|&k| k == kind).unwrap(), ..default() });
             world.insert_resource(Time::<Real>::default());

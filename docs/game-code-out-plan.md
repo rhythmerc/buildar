@@ -614,9 +614,7 @@ the engine failed (THUG2's way; Skate 3 exited the app); whether an engine steps
 - **The pages:** Settings > Game data lists each offered engine's state ("needs your game files", "imported: reopen
   the app to load it", "ready"); each engine has its own page with the import, "Play it now" and its `how` lines. Files
   an engine has started on aren't replaced while the app runs.
-- **Picking up the files:** THUG2 plays at once after an import. Skate 3 still needs a reopen: its asset source, the
-  room's floor height and its sound choice are fixed when the app is built (carrying it without data is left for
-  later).
+- **Picking up the files:** THUG2 plays at once after an import, and so does Skate 3 since the floor change below.
 - **SK8 is offered only to developers** (`"dev": true`, then Engine > "Offer SK8"; `ArSettings::sk8`), or in a build with
   no other engine. It stays registered: `Engines::shown_if` hides it from the engine page and the parks dropdown, and its
   availability is the same check. A park built for an engine the menus don't offer opens as one built for none.
@@ -627,6 +625,21 @@ the engine failed (THUG2's way; Skate 3 exited the app); whether an engine steps
     could be the barred one).
 - **Not checked in the headset:** the import from `Download` (storage permission, a rename or a copy across storage),
   a THUG2 folder copied in and played without a restart, and opening on Game data with no files.
+
+**Skate 3's floor, its own (2026-11-17):** the app put the room's floor at Skate 3's test course floor
+(`FLOOR_HEIGHT`, -1.535 m) for every engine when Skate 3 was carried (`xr::rig::WorldOrigin`), a Skate 3 need in the
+host. Now `skate3_engine::stage` converts at its boundary: the stage, rails and placements go into the sim raised by
+`stage::FLOOR`; the link, focus, pose root and sound positions come out lowered by it. `WorldOrigin` and
+`Rig::world_origin` are gone: every engine gets the room with its floor at y = 0. (Parks are anchored in tracking
+space, so none moved. THUG2 and SK8 now run at y = 0 whether or not Skate 3 is there.)
+- **Skate 3 carried always** (retail builds): its asset source registered at its data folder whether the data is
+  there or not, its availability that data (`skate3_engine::DATA`), its difficulty and sound choice read when it
+  starts. An import plays at once.
+- **Parity:** the gate run through the old code with the stage and placement raised by the floor and its output
+  lowered is the new code's with the floor at 0, every tick (`skate3_gate::RECORDED`, re-recorded: the old digest had
+  the floor at the sim's 0, which the headset never ran). The same for the stage inputs (`stage_parity`). The clean
+  sounds decide the same every frame (only a printed y's last bit differs). The model parity draws from the sim's own
+  root, as recorded.
 
 ### Risks
 

@@ -1519,7 +1519,7 @@ mod tests {
             .init_resource::<BuildMode>()
             .init_resource::<crate::xr::build::parks::Placing>()
             .init_resource::<crate::xr::build::PlacedPieces>()
-            .insert_resource(crate::xr::rig::Rig { scale: 8.0, world_origin: Vec3::ZERO, anchor: Some((Vec3::ZERO, 0.0)) });
+            .insert_resource(crate::xr::rig::Rig { scale: 8.0, anchor: Some((Vec3::ZERO, 0.0)) });
         let world = app.world_mut();
         assert_eq!(park::engine_fit(world, "t"), EngineFit::Missing(Engine::Thug2));
         assert_eq!(park::engine_fit(world, "k"), EngineFit::Switch(Engine::Skate3));

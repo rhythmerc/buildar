@@ -64,9 +64,12 @@ pub(crate) fn fnv(text: &str) -> u64 {
     text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
 }
 
-/// The run's digest, recorded through the old adapter (at 5f8cd2e: placed at tick 2, pushing from tick 40, an ollie
-/// landed around tick 175, on the floor at its 8.7 cm deck height).
-pub(crate) const RECORDED: u64 = 0xb605_958c_0fd9_cde4;
+/// The run's digest. First recorded through the old adapter (at 5f8cd2e: `b605958c0fd9cde4`, the room's floor at the
+/// sim's y = 0). Skate 3 now puts the room's floor at its own (`skate3_engine::stage::FLOOR`), where the app put it for
+/// every engine before (its `WorldOrigin`): recorded again at fc4a877 with the stage and placement raised by that
+/// floor and what came out lowered by it, as the headset ran it; the engine moving them itself gives the same, tick
+/// for tick.
+pub(crate) const RECORDED: u64 = 0x5689_c0c3_e0cc_0922;
 
 /// The real game's data root, if given.
 pub(crate) fn root() -> Option<std::path::PathBuf> {
@@ -111,7 +114,7 @@ mod driver {
             .init_asset::<bevy::scene::Scene>()
             .add_plugins(bevy::audio::AudioPlugin::default())
             .insert_resource(TimeUpdateStrategy::ManualDuration(period))
-            .insert_resource(crate::xr::rig::Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: None })
+            .insert_resource(crate::xr::rig::Rig { scale: 1.0, anchor: None })
             .init_resource::<CurrentStage>()
             .init_resource::<CurrentPark>()
             .init_resource::<SkaterLink>()

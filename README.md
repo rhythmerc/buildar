@@ -24,7 +24,7 @@ Four steps, one Windows PC:
 2. Put `MAKE-QUEST-ZIP.bat` + `make-bundle.ps1` (from the release) next to `skate3rust.exe`
    and double-click the `.bat`: it writes `Skate3-Quest.zip`.
 3. Copy the zip to the Quest's `Download/Skate3` folder.
-4. In the app: menu > Game data > Skate 3 > Import, then reopen the app.
+4. In the app: menu > Game data > Skate 3 > Import. It plays as soon as the import is done.
 
 **THUG2:** copy your installed PC game folder (the one holding `Data`) to the Quest's
 `Download/THUG2` folder, then menu > Game data > THUG2 > Import; it plays at once

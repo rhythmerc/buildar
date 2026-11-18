@@ -6,10 +6,10 @@
 //!
 //! ```text
 //! rotation    = yaw(-anchor_yaw)
-//! translation = W - rotation * (k * anchor_position)
+//! translation = W - rotation * (k * anchor_position),   W = 0
 //! ```
 //!
-//! puts the world point `W` (the spawn's ground point) exactly at the anchor
+//! puts the world point `W` (the world's origin: `W` = 0) exactly at the anchor
 //! in the room, with world -Z along the anchor's forward direction, and the
 //! whole world `k` times smaller than life.
 //!
@@ -23,9 +23,6 @@ use bevy_mod_xr::session::XrTrackingRoot;
 #[derive(Resource, Debug)]
 pub(crate) struct Rig {
     pub scale: f32,
-    /// World point shown at the anchor: the map spawn's ground point, or the
-    /// test course's landing floor under the spawn.
-    pub world_origin: Vec3,
     /// Tracking-space anchor position and yaw.
     pub anchor: Option<(Vec3, f32)>,
 }
@@ -33,14 +30,16 @@ pub(crate) struct Rig {
 impl Rig {
     pub(crate) fn root_transform(&self) -> Option<Transform> {
         let (position, yaw) = self.anchor?;
-        Some(root_transform(self.scale, self.world_origin, position, yaw))
+        Some(root_transform(self.scale, position, yaw))
     }
 }
 
-pub(crate) fn root_transform(scale: f32, world_origin: Vec3, anchor: Vec3, yaw: f32) -> Transform {
+/// The tracking root that puts the world's origin at `anchor` (each engine puts the room where its own game needs it,
+/// inside itself).
+pub(crate) fn root_transform(scale: f32, anchor: Vec3, yaw: f32) -> Transform {
     let rotation = Quat::from_rotation_y(-yaw);
     Transform {
-        translation: world_origin - rotation * (scale * anchor),
+        translation: -(rotation * (scale * anchor)),
         rotation,
         scale: Vec3::splat(scale),
     }
@@ -54,17 +53,10 @@ pub(crate) fn heading(rotation: Quat) -> f32 {
 
 pub(crate) struct RigPlugin(pub XrOptions);
 
-/// Where in the game world the room's floor is put, if not at its origin: inserted before the XR layer by the app
-/// that builds it (Skate 3's: the map's spawn, which every engine then shares). Without it, y = 0.
-#[derive(Resource, Clone, Copy, Debug)]
-pub(crate) struct WorldOrigin(pub Vec3);
-
 impl Plugin for RigPlugin {
     fn build(&self, app: &mut App) {
-        let world_origin = app.world().get_resource::<WorldOrigin>().map_or(Vec3::ZERO, |o| o.0);
         app.insert_resource(Rig {
             scale: self.0.scale,
-            world_origin,
             anchor: Some((Vec3::ZERO, 0.0)),
         })
         .add_systems(
@@ -93,17 +85,16 @@ mod tests {
 
     #[test]
     fn anchor_shows_the_world_origin() {
-        let origin = Vec3::new(10.0, -0.035, -4.0);
         let anchor = Vec3::new(0.3, 0.75, -0.6);
         for yaw in [0.0, 1.0, -2.5] {
-            let root = root_transform(12.0, origin, anchor, yaw);
-            assert!(to_world(&root, anchor).distance(origin) < 1e-4);
+            let root = root_transform(12.0, anchor, yaw);
+            assert!(to_world(&root, anchor).length() < 1e-4);
         }
     }
 
     #[test]
     fn room_distances_are_scaled_up_in_the_world() {
-        let root = root_transform(12.0, Vec3::ZERO, Vec3::ZERO, 0.7);
+        let root = root_transform(12.0, Vec3::ZERO, 0.7);
         let a = to_world(&root, Vec3::new(0.0, 0.0, 0.0));
         let b = to_world(&root, Vec3::new(0.1, 0.0, 0.0));
         assert!((a.distance(b) - 1.2).abs() < 1e-5, "10 cm of table is 1.2 m of world");
@@ -114,7 +105,7 @@ mod tests {
         let yaw = 0.9;
         let controller = Quat::from_rotation_y(yaw) * Quat::from_rotation_x(-0.4);
         assert!((heading(controller) - yaw).abs() < 1e-5, "pitch does not change heading");
-        let root = root_transform(5.0, Vec3::ZERO, Vec3::ZERO, heading(controller));
+        let root = root_transform(5.0, Vec3::ZERO, heading(controller));
         let forward = (root.rotation * (controller * Vec3::NEG_Z)).with_y(0.0).normalize();
         assert!(forward.distance(Vec3::NEG_Z) < 1e-4);
     }

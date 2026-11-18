@@ -556,7 +556,7 @@ mod tests {
         };
         app.insert_resource(CurrentStage(stage))
             .insert_resource(ArSettings::default())
-            .insert_resource(Rig { scale: 1.0, world_origin: Vec3::ZERO, anchor: Some((Vec3::ZERO, 0.0)) })
+            .insert_resource(Rig { scale: 1.0, anchor: Some((Vec3::ZERO, 0.0)) })
             .insert_resource(SkaterLink(engine_core::skate::SkaterLink {
                 board: Some(engine_core::Frame { position: Vec3::new(0.0, 0.15, 0.0), forward: Vec3::new(1.0, 0.0, 0.3), up: Vec3::Y }),
                 ..default()

@@ -97,10 +97,10 @@ fn build(options: Options) -> App {
         settings::{Backends, InstanceFlags, RenderCreation, WgpuSettings},
     };
     let mut app = App::new();
-    // Skate 3, carried when the player's data is there (the headset, or `--xr` with it): its data an asset source,
-    // which has to be there before the plugins.
+    // Skate 3, carried in the headset (and `--xr`) whether its data is there yet or not: where its data is (or goes),
+    // an asset source, which has to be there before the plugins.
     #[cfg(all(feature = "xr", feature = "retail"))]
-    let skate3 = options.xr.and_then(|_| crate::skate3::assets(&options.files));
+    let skate3 = options.xr.map(|_| crate::skate3::assets(&options.files));
     #[cfg(not(all(feature = "xr", feature = "retail")))]
     let skate3: Option<std::path::PathBuf> = None;
     #[cfg(all(feature = "xr", feature = "retail"))]
@@ -139,11 +139,6 @@ fn build(options: Options) -> App {
     let xr = options.xr.is_some();
     #[cfg(feature = "xr")]
     if let Some(xr_options) = options.xr {
-        // (with Skate 3, the room's floor goes where its test course's landing floor is, for every engine)
-        #[cfg(feature = "retail")]
-        if skate3.is_some() {
-            app.insert_resource(crate::xr::rig::WorldOrigin(Vec3::new(0.0, skate3_sim::physics::ground::FLOOR_HEIGHT, 0.0)));
-        }
         app.add_plugins(crate::xr::XrPlugin { options: xr_options, files: options.files.clone() });
         add_xr_engines(&mut app, &options.files, skate3);
     }
@@ -198,10 +193,10 @@ fn build(options: Options) -> App {
     app
 }
 
-/// The headset app's engines: Skate 3 when the player's data is there (`skate3`: its `assets`), SK8 (offered only to
-/// developers, [`sk8_shown`]), and THUG2 when the app is built with it. The engine to start on is the one last played
-/// or just imported (`engine.txt` in `files`), else Skate 3 if it is carried, else the first that can run, else none:
-/// the menu then offers the game files (`xr::ui::pages`).
+/// The headset app's engines: Skate 3 when the app is built with it (`skate3`: where its data is or goes; it runs once
+/// the data is there), SK8 (offered only to developers, [`sk8_shown`]), and THUG2 when the app is built with it. The
+/// engine to start on is the one last played or just imported (`engine.txt` in `files`), else Skate 3, else the first
+/// that can run, else none: the menu then offers the game files (`xr::ui::pages`).
 #[cfg(feature = "xr")]
 pub(crate) fn add_xr_engines(app: &mut App, files: &std::path::Path, skate3: Option<std::path::PathBuf>) {
     use crate::engines::{Engine, Engines};
@@ -211,7 +206,6 @@ pub(crate) fn add_xr_engines(app: &mut App, files: &std::path::Path, skate3: Opt
     let first = if skate3.is_some() { Engine::Skate3 } else { Engine::Sk8 };
     #[cfg(feature = "retail")]
     {
-        // (offered whether or not it is here: imported, it loads when the app next opens)
         crate::xr::ui::import::offer(app, Engine::Skate3, skate3_engine::DATA);
         if let Some(assets) = skate3 {
             crate::skate3::install(app, files, assets);

@@ -45,8 +45,7 @@ says "Sound banks: none yet", skate in the desktop game for a minute and run it 
    Download/Skate3**, then press the zip it found.
 2. The first time, the Quest opens an "All files access" page for the app: switch it **on**,
    come back to the app and press **Import** again.
-3. When it says it's done, choose **Close the app now**, then open Skate 3 AR again.
-   It now starts in the full Skate 3 tier.
+3. When it says it's done, choose **Play Skate 3 now**. The app also starts on it from now on.
 
 Switch engines any time in **menu > Engine**. You can delete `Download/Skate3/Skate3-Quest.zip`
 after importing to free the space.
