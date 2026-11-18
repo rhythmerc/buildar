@@ -71,6 +71,45 @@ fn options() -> Result<Options, String> {
     Ok(o)
 }
 
+/// The plugins as the headset's dev flags want them made (each flag in `xr::dev_flags`).
+#[cfg(feature = "xr")]
+fn dev_plugins(mut plugins: bevy::app::PluginGroupBuilder, flags: &crate::xr::dev_flags::DevFlags) -> bevy::app::PluginGroupBuilder {
+    // The compute pool's threads: Bevy sizes it from the cores the app may use (on the Quest, 3: one thread). `0`
+    // is none at all: then the threads running the schedules run their systems themselves.
+    if let Some(threads) = flags.number("compute") {
+        plugins = plugins.set(bevy::app::TaskPoolPlugin {
+            task_pool_options: bevy::app::TaskPoolOptions {
+                compute: bevy::app::TaskPoolThreadAssignmentPolicy {
+                    min_threads: threads,
+                    max_threads: if threads == 0 { 0 } else { usize::MAX },
+                    percent: 1.0,
+                    on_thread_spawn: None,
+                    on_thread_destroy: None,
+                },
+                ..default()
+            },
+        });
+    }
+    let (cpu_preprocess, lean) = (flags.has("cpu_preprocess"), flags.has("lean_plugins"));
+    if cpu_preprocess || lean {
+        plugins = plugins.set(bevy::pbr::PbrPlugin {
+            use_gpu_instance_buffer_builder: !cpu_preprocess,
+            add_default_deferred_lighting_plugin: !lean,
+            ..default()
+        });
+    }
+    if lean {
+        plugins = plugins.disable::<bevy::post_process::PostProcessPlugin>().disable::<bevy::anti_alias::AntiAliasPlugin>();
+    }
+    if flags.has("quiet_spans") {
+        plugins = plugins.set(bevy::log::LogPlugin {
+            filter: format!("{},bevy_ecs=warn,bevy_app=warn,bevy_render::renderer=warn,bevy_render::render_graph=warn", bevy::log::DEFAULT_FILTER),
+            ..default()
+        });
+    }
+    plugins
+}
+
 pub(crate) fn run() -> AppExit {
     let options = match options() {
         Ok(o) => o,
@@ -126,22 +165,10 @@ fn build(options: Options) -> App {
             ..default()
         })
         .build();
-    // The compute pool's threads: Bevy sizes it from the cores the app may use (on the Quest, 3: one compute
-    // thread), unless the headset's dev flags say `compute=N` (`xr::dev_flags`).
+    // The headset's dev flags that change how the plugins are made (`xr::dev_flags`).
     #[cfg(feature = "xr")]
-    let plugins = match options.xr.as_ref().and_then(|_| crate::xr::dev_flags::DevFlags::read(&options.files).number("compute")) {
-        Some(threads) => plugins.set(bevy::app::TaskPoolPlugin {
-            task_pool_options: bevy::app::TaskPoolOptions {
-                compute: bevy::app::TaskPoolThreadAssignmentPolicy {
-                    min_threads: threads,
-                    max_threads: usize::MAX,
-                    percent: 1.0,
-                    on_thread_spawn: None,
-                    on_thread_destroy: None,
-                },
-                ..default()
-            },
-        }),
+    let plugins = match options.xr.as_ref().map(|_| crate::xr::dev_flags::DevFlags::read(&options.files)) {
+        Some(flags) => dev_plugins(plugins, &flags),
         None => plugins,
     };
     #[cfg(target_os = "android")]

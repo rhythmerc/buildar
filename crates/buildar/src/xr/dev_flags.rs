@@ -6,7 +6,12 @@
 //! - `single_render`: the render world's likewise.
 //! - `cluster_single`: one light cluster for the eyes, not Bevy's grid of them (a handful of lights).
 //! - `menu_closed`: the menu doesn't open itself at launch (an engine measured as it plays).
-//! - `compute=N`: at least N threads in Bevy's compute pool (read where the plugins are made: `clean::run`).
+//! Read where the plugins are made (`clean::dev_plugins`):
+//! - `compute=N`: at least N threads in Bevy's compute pool; `compute=0`, none (the schedules' own threads run
+//!   their systems).
+//! - `cpu_preprocess`: meshes' instance data built on the CPU, not by GPU preprocessing (six compute passes an eye).
+//! - `lean_plugins`: no post-processing, anti-aliasing or deferred lighting plugins (unused; their systems run).
+//! - `quiet_spans`: the ECS's and the renderer's per-system tracing spans filtered out of the log.
 use bevy::ecs::schedule::{ExecutorKind, Schedules};
 use bevy::prelude::*;
 use bevy::render::RenderApp;
