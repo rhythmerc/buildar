@@ -118,7 +118,9 @@ actions = ["org.khronos.openxr.OpenXRRuntimeService"]
 
 [package.metadata.android.application]
 label = "buildAR"
-debuggable = false
+# Debuggable for development (simpleperf and other profilers attach only to debuggable or profileable apps). Meta's
+# virtual keyboard (parked: xr/virtual_keyboard.rs) needs it off: CheckJNI stalls the runtime's worker.
+debuggable = true
 theme = "@android:style/Theme.Black.NoTitleBar.Fullscreen"
 
 [[package.metadata.android.application.meta_data]]
