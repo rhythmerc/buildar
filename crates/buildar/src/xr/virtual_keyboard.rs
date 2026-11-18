@@ -34,6 +34,10 @@ use std::collections::HashMap;
 
 pub(crate) struct VirtualKeyboardPlugin;
 
+/// Parked (2026-11-18): drawn by the app, it came up placed and sized awkwardly and lost its key textures on the
+/// headset; the panel's own keys type until it's picked up again. (True: Meta's keyboard is used where it can be.)
+const ENABLED: bool = false;
+
 impl Plugin for VirtualKeyboardPlugin {
     fn build(&self, app: &mut App) {
         // (after the menus have asked for it, this frame: they ask each frame a name is typed, and the ask is let go
@@ -160,8 +164,9 @@ fn run(
     mut assets: (ResMut<Assets<Mesh>>, ResMut<Assets<Image>>, ResMut<Assets<StandardMaterial>>),
     mut state: Local<State>,
 ) {
-    let Some(fns) = instance.exts().meta_virtual_keyboard else {
+    let Some(fns) = instance.exts().meta_virtual_keyboard.filter(|_| ENABLED) else {
         typing.up = false;
+        typing.area = None;
         return;
     };
     let (Some(reference), Some(frame)) = (reference, frame) else { return };
