@@ -16,7 +16,7 @@
 //! full SK8 sheet. This module then only listens for the menu tap that
 //! closes everything.
 pub(crate) mod hud;
-#[cfg(feature = "retail")]
+#[cfg(any(feature = "retail", feature = "thug2"))]
 pub(crate) mod import;
 pub(crate) mod pages;
 pub(crate) mod parks;
@@ -217,10 +217,12 @@ impl ControlsSheet {
         self.0.insert(engine, rows);
     }
 
-    /// The running engine's.
+    /// The running engine's (none running: the shared layer's).
     pub(crate) fn rows(world: &World) -> Vec<Control> {
         let running = world.get_resource::<Engines>().and_then(Engines::current);
-        running.and_then(|e| world.resource::<ControlsSheet>().0.get(&e).cloned()).unwrap_or_default()
+        running
+            .and_then(|e| world.resource::<ControlsSheet>().0.get(&e).cloned())
+            .unwrap_or_else(|| HOST_CONTROLS.to_vec())
     }
 }
 
@@ -367,7 +369,7 @@ pub(crate) struct XrUiPlugin;
 impl Plugin for XrUiPlugin {
     fn build(&self, app: &mut App) {
         crate::fonts::embed(app);
-        #[cfg(feature = "retail")]
+        #[cfg(any(feature = "retail", feature = "thug2"))]
         app.add_plugins(import::ImportPlugin);
         let mut providers = UiProviders::default();
         providers.0.push(Arc::new(pages::Shared));
@@ -517,14 +519,16 @@ fn frame(world: &mut World) {
     let providers = UiProviders::active(world);
     let building = world.resource::<BuildMode>().active;
     let onboarded = world.resource::<super::ar_settings::ArSettings>().onboarding_done;
+    // (the menu's home: the parks, or with no engine to play them the game data, to bring one's files)
+    let home = if cfg!(any(feature = "retail", feature = "thug2")) && pages::no_engine(world) { pages::DATA } else { pages::PARKS };
     {
-        // Open at launch: the intro the first time, else the parks
+        // Open at launch: the intro the first time, else the home page
         // (the scripted demo, SK8_DEMO, starts skating).
         let mut ui = world.resource_mut::<XrUi>();
         if !ui.started {
             ui.started = true;
             if std::env::var_os("SK8_DEMO").is_none() {
-                ui.request = Some(if onboarded { pages::PARKS } else { pages::INTRO });
+                ui.request = Some(if onboarded { home } else { pages::INTRO });
             }
         }
     }
@@ -542,7 +546,7 @@ fn frame(world: &mut World) {
             if ui.open || ui.external.is_some() {
                 ui.close();
             } else {
-                ui.show(if onboarded { pages::PARKS } else { pages::INTRO });
+                ui.show(if onboarded { home } else { pages::INTRO });
             }
         } else if building && ui.open {
             // Holding the menu button for build mode closes the menu.

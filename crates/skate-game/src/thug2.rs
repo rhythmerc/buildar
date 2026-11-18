@@ -30,21 +30,16 @@ fn game_folder(files: &Path) -> PathBuf {
     std::env::var_os("THUG2_GAME_DIR").map(PathBuf::from).unwrap_or_else(|| files.join("thug2"))
 }
 
-fn has_data(game: &Path) -> bool {
-    std::fs::read_dir(game).into_iter().flatten().flatten().any(|e| {
-        e.file_name().to_string_lossy().eq_ignore_ascii_case("data") && e.path().is_dir()
-    })
-}
 
 fn available(world: &World) -> Result<(), String> {
     if let Some(why) = world.get_resource::<Driver>().and_then(Driver::failed) {
         return Err(why);
     }
     let files = world.resource::<Thug2Files>();
-    if has_data(&files.game) {
+    if thug2_engine::DATA.in_folder(&files.game) {
         Ok(())
     } else {
-        Err("needs your THUG2 files: docs/THUG2.md".into())
+        Err("needs your game files".into())
     }
 }
 
@@ -66,6 +61,7 @@ pub(crate) fn install(app: &mut App, files: &Path) {
         .insert_resource(Tuning::load(&files.join("thug2.json")))
         .insert_resource(TuningFile(files.join("thug2.json")));
     app.world_mut().resource_mut::<crate::xr::ui::UiProviders>().0.push(std::sync::Arc::new(Thug2Pages));
+    crate::xr::ui::import::offer(app, Engine::Thug2, thug2_engine::DATA);
     app.init_resource::<engines::CourseSettings>();
     app.world_mut().resource_mut::<engines::CourseSettings>().0.insert(Engine::Thug2, (park_settings, apply_park_settings));
     app.world_mut()

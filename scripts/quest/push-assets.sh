@@ -23,7 +23,6 @@ adb push --sync "$ASSETS/." "$DEST/assets/"
 if [ -n "$CACHE" ]; then
   adb push --sync "$CACHE/." "$DEST/Skate3RustEngine/audio-pcm-cache/"
 fi
-# With the data there the app carries Skate 3 beside SK8 (switched in Settings > Engine); this mark starts the next
-# launch on it.
-adb shell touch "$DEST/use-retail-data"
+# With the data there the app carries Skate 3 (switched in Settings > Engine); this starts the next launch on it.
+adb shell "printf skate3 > '$DEST/engine.txt'"
 echo "Pushed to $DEST; the next launch loads this data and starts on Skate 3 (Settings > Engine switches)"

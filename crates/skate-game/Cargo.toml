@@ -26,7 +26,7 @@ retail = [
 xr = ["dep:gltf", "dep:bevy_mod_openxr", "dep:bevy_mod_xr", "dep:openxr", "dep:roomtone-sys", "dep:wgpu", "dep:wgpu-hal", "dep:ash"]
 # THUG2's own engine (thug2-sys: thug2-decomp run headless) as a third engine in the headset, on the player's own
 # game files. Builds the engine with CMake from the thug2-headless and thug2-decomp checkouts (crates/thug2-sys).
-thug2 = ["xr", "dep:thug2-sys", "dep:thug2-engine"]
+thug2 = ["xr", "dep:thug2-sys", "dep:thug2-engine", "dep:zip", "zip/deflate-flate2-zlib-rs"]
 # Desktop XR keeps a mirror window beside the headset view.
 xr-window = ["xr", "bevy_mod_openxr/window_support"]
 

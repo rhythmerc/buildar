@@ -12,18 +12,23 @@ Ollies and flip tricks, grinds and slides, manuals, grabs, body flips, spins and
 and install it with `adb install -r skate3ar.apk` (or SideQuest). Open **Skate 3 AR** from the
 headset's Library > Unknown Sources.
 
-**It plays straight away with no game files.** The default skater is our own clean-room
-engine: original physics, model, animations and CC0 sounds, with nothing taken from EA.
+**It runs on your own game files.** Bring Skate 3 (Xbox 360) or THUG2 (PC) from your own copy;
+until then the app opens on Settings > Game data, which says how. (Our own clean-room engine,
+SK8, is not offered yet: too rough. Developers can turn it on.)
 
-**Own Skate 3 for Xbox 360? Import it for the full retail tier** (retail skater, animations,
-controls and sounds), converted from your own disc. Four steps, one Windows PC:
+**Skate 3** (retail skater, animations, controls and sounds), converted from your own disc.
+Four steps, one Windows PC:
 
 1. Run the [Skate 3 Rust Engine](https://github.com/SK8-ENGINE/skate-3-rust-engine/releases/tag/experimental)
    once on your ISO and skate for a minute.
 2. Put `MAKE-QUEST-ZIP.bat` + `make-bundle.ps1` (from the release) next to `skate3rust.exe`
    and double-click the `.bat`: it writes `Skate3-Quest.zip`.
 3. Copy the zip to the Quest's `Download/Skate3` folder.
-4. In the app: menu > Skate 3 data > Import, then reopen the app.
+4. In the app: menu > Game data > Skate 3 > Import, then reopen the app.
+
+**THUG2:** copy your installed PC game folder (the one holding `Data`) to the Quest's
+`Download/THUG2` folder, then menu > Game data > THUG2 > Import; it plays at once
+([docs/THUG2.md](docs/THUG2.md)).
 
 Step-by-step with pictures of where everything is: **[docs/IMPORT-SKATE3.md](docs/IMPORT-SKATE3.md)**.
 No EA assets are in this repo or the APK.

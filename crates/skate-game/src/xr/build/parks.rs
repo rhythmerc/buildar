@@ -578,7 +578,8 @@ pub(crate) enum EngineFit {
 pub(crate) fn engine_fit(world: &World, id: &str) -> EngineFit {
     let built = world.resource::<Parks>().get(id).and_then(|p| p.file.engine());
     let Some(engines) = world.get_resource::<Engines>() else { return EngineFit::Running };
-    match built {
+    // (one the menus don't offer, as SK8 to players: as if it had none)
+    match built.filter(|&e| engines.listed(e, world)) {
         Some(e) if engines.available(e, world).is_err() => EngineFit::Missing(e),
         Some(e) if engines.current() != Some(e) => EngineFit::Switch(e),
         _ => EngineFit::Running,
@@ -589,7 +590,7 @@ pub(crate) fn engine_fit(world: &World, id: &str) -> EngineFit {
 pub(crate) fn use_its_engine(world: &mut World, id: &str) {
     let Some(file) = world.resource::<Parks>().get(id).map(|p| p.file.clone()) else { return };
     let Some(engine) = file.engine() else { return };
-    if world.get_resource::<Engines>().is_none_or(|e| e.available(engine, world).is_err()) {
+    if world.get_resource::<Engines>().is_none_or(|e| !e.listed(engine, world) || e.available(engine, world).is_err()) {
         return;
     }
     if world.resource::<Engines>().current() != Some(engine) {

@@ -119,6 +119,9 @@ pub(crate) struct ArSettings {
     /// (`xr::room_light::session`). Read at start: a change applies on the next.
     #[serde(default)]
     pub room_record: bool,
+    /// Developers: SK8, the clean-room engine, offered with the others (`clean::add_xr_engines`).
+    #[serde(default)]
+    pub sk8: bool,
     #[serde(skip)]
     pub revision: u64,
 }
@@ -148,6 +151,7 @@ impl Default for ArSettings {
             hud_depth_at_controller: false,
             dev: false,
             room_record: false,
+            sk8: false,
             revision: 0,
         }
     }

@@ -301,7 +301,7 @@ the same way skate's park annotations do. Nothing in core has to change.
 | 6 | Model and pose: generic binding and blending; engines provide the source and pose | M |
 | 7 | Audio: voices, pull stream and events; the dead decode path removed | M |
 | 8 | One generic driver replaces `thug2.rs`, `link_retail.rs` and `add_retail`; one host builder; Skate 3 boots lazily; the Android asset-source hack goes (done 2026-11-17) | L |
-| 9 | A generic data installer and pages | S |
+| 9 | A generic data installer and pages; SK8 offered only to developers (done 2026-11-17) | S |
 | 10 | `thug2-sys` moves into thug2-headless | S |
 | 11 | Optional: SK8 onto the contract | M |
 
@@ -598,6 +598,35 @@ nothing loads before the app.
 
 Shared policies: the driver steps an engine only while `PadHeld.pause` is off (both engines' hold); a step error marks
 the engine failed (THUG2's way; Skate 3 exited the app); whether an engine steps before it has a stage is its own.
+
+**Step 9, as done (2026-11-17):**
+- **The contract:** `engine_core::GameFiles`, plain data an engine states before it is made:
+  - where the player puts its files (`Download/<drop>`) and where they are kept (`<app files>/<folder>`);
+  - how they are known (a marker path, matched in any case);
+  - the folders brought from beside them;
+  - what to tell the player.
+
+  `skate3_engine::DATA` and `thug2_engine::DATA` state theirs. THUG2's availability check is its spec's.
+- **One installer** (`xr::ui::import`): scan, move or copy a folder, unzip a zip (no path out of the target), each
+  engine's status apart, one import at a time. An import goes into a folder of its own and is swapped in once whole,
+  so files half copied (or an import cut short) are never taken for the game's. A finished import writes `engine.txt`, so the next launch starts on that
+  engine; `use-retail-data` is gone (`push-assets.sh` writes `engine.txt` too).
+- **The pages:** Settings > Game data lists each offered engine's state ("needs your game files", "imported: reopen
+  the app to load it", "ready"); each engine has its own page with the import, "Play it now" and its `how` lines. Files
+  an engine has started on aren't replaced while the app runs.
+- **Picking up the files:** THUG2 plays at once after an import. Skate 3 still needs a reopen: its asset source, the
+  room's floor height and its sound choice are fixed when the app is built (carrying it without data is left for
+  later).
+- **SK8 is offered only to developers** (`"dev": true`, then Engine > "Offer SK8"; `ArSettings::sk8`), or in a build with
+  no other engine. It stays registered: `Engines::shown_if` hides it from the engine page and the parks dropdown, and its
+  availability is the same check. A park built for an engine the menus don't offer opens as one built for none.
+- **No engine** is a state of its own:
+  - the first frame starts on the first carried engine that can run and may start the app, else none;
+  - with none, the menu's home is Game data;
+  - the engine kept or asked for is passed over when it is barred after a start crash (before, Skate 3 as the fallback
+    could be the barred one).
+- **Not checked in the headset:** the import from `Download` (storage permission, a rename or a copy across storage),
+  a THUG2 folder copied in and played without a restart, and opening on Game data with no files.
 
 ### Risks
 

@@ -50,6 +50,10 @@ pub(crate) struct Engines {
     /// Where the choice is kept between launches.
     file: Option<PathBuf>,
     not_at_launch: HashSet<Engine>,
+    /// Engines listed only while their check says so (or while they run): [`Engines::listed`].
+    shown_if: HashMap<Engine, fn(&World) -> bool>,
+    /// The first frame's choice made (the engine to start on, or none: [`switch`]).
+    launched: bool,
     /// The systems made an engine's through its set (each once), and the schedules its set is gated in.
     wrapped: HashSet<(InternedScheduleLabel, SystemKey)>,
     gated_sets: HashSet<(InternedScheduleLabel, Engine)>,
@@ -67,6 +71,8 @@ impl Engines {
             paused: HashSet::new(),
             file: None,
             not_at_launch: HashSet::new(),
+            shown_if: HashMap::new(),
+            launched: false,
             wrapped: HashSet::new(),
             gated_sets: HashSet::new(),
         }
@@ -87,6 +93,31 @@ impl Engines {
         self.carried.iter().any(|(e, _)| *e == engine)
     }
 
+    /// Whether `engine` has run since the app opened (its files are in use).
+    #[cfg_attr(not(any(feature = "retail", feature = "thug2")), allow(dead_code))]
+    pub(crate) fn started(&self, engine: Engine) -> bool {
+        self.started.contains(&engine)
+    }
+
+    /// Whether the menus offer `engine`: unless it is shown only by a check ([`Engines::shown_if`]) that says no, and
+    /// it isn't running.
+    pub(crate) fn listed(&self, engine: Engine, world: &World) -> bool {
+        self.current == Some(engine) || self.shown_if.get(&engine).is_none_or(|shown| shown(world))
+    }
+
+    /// Offer `engine` only while `shown` says so (its availability is the adder's: [`add_engine`]).
+    pub(crate) fn shown_if(&mut self, engine: Engine, shown: fn(&World) -> bool) {
+        self.shown_if.insert(engine, shown);
+    }
+
+    /// The first engine carried that can run now and may start the app.
+    fn first_runnable(&self, world: &World) -> Option<Engine> {
+        self.carried
+            .iter()
+            .map(|(e, _)| *e)
+            .find(|e| !self.not_at_launch.contains(e) && self.available(*e, world).is_ok())
+    }
+
     /// Whether `engine` can be switched to now.
     pub(crate) fn available(&self, engine: Engine, world: &World) -> Result<(), String> {
         match self.carried.iter().find(|(e, _)| *e == engine) {
@@ -101,20 +132,27 @@ impl Engines {
     }
 
     /// Where the choice is kept (`<folder>/engine.txt`), and the engine to start on: the one kept there, else
-    /// `fallback` (also when the kept one is barred from starting the app: [`Engines::not_at_launch`]).
+    /// `fallback`, unless barred from starting the app ([`Engines::not_at_launch`]). One that can't run then (or none)
+    /// leaves the first frame to start on the first carried engine that can, if any ([`switch`]).
     pub(crate) fn remember_in(&mut self, folder: PathBuf, fallback: Engine) {
-        let file = folder.join("engine.txt");
+        let file = engine_file(&folder);
         let kept = std::fs::read_to_string(&file).ok().and_then(|s| Engine::from_key(&s));
-        self.wanted = Some(kept.filter(|e| !self.not_at_launch.contains(e)).unwrap_or(fallback));
+        let allowed = |e: &Engine| !self.not_at_launch.contains(e);
+        self.wanted = kept.filter(allowed).or(Some(fallback).filter(allowed));
         self.file = Some(file);
     }
 
     /// Don't start the app on `engine` this launch (it crashed the app while starting last time): it can still be
     /// picked from the menu.
-    #[cfg(any(feature = "thug2", test))]
+    #[cfg(any(feature = "retail", feature = "thug2", test))]
     pub(crate) fn not_at_launch(&mut self, engine: Engine) {
         self.not_at_launch.insert(engine);
     }
+}
+
+/// Where the engine the app starts on is kept, in the app's folder.
+pub(crate) fn engine_file(folder: &std::path::Path) -> PathBuf {
+    folder.join("engine.txt")
 }
 
 // The engine whose systems are running (or whose commands are being applied) on this thread.
@@ -402,19 +440,26 @@ fn scripted(time: Res<Time<Real>>, mut engines: ResMut<Engines>, mut script: Loc
 
 /// Carries out a requested switch (and starts the first engine on the first frame).
 fn switch(world: &mut World) {
-    let (current, wanted) = {
+    let (current, wanted, first) = {
         let engines = world.resource::<Engines>();
-        (engines.current, engines.wanted)
+        (engines.current, engines.wanted, !engines.launched)
+    };
+    if first {
+        world.resource_mut::<Engines>().launched = true;
+    }
+    // (the first frame: none asked for starts on the first that can run; with none, the app runs without one, its
+    // menu offering the game files: `xr::ui::pages`)
+    let wanted = match wanted {
+        None if first => world.resource::<Engines>().first_runnable(world),
+        wanted => wanted,
     };
     let Some(wanted) = wanted.filter(|w| Some(*w) != current) else { return };
-    // (an engine that can't run now - its data gone - leaves things as they are: the first frame falls back to the
-    // first engine added)
+    // (an engine that can't run now - its data gone - leaves things as they are; at the start, the first that can)
     let check = world.resource::<Engines>().available(wanted, world);
     if let Err(why) = check {
         warn!("engines: can't run {}: {why}", wanted.name());
-        let fallback = world.resource::<Engines>().carried.first().map(|(e, _)| *e);
-        let mut engines = world.resource_mut::<Engines>();
-        engines.wanted = if current.is_none() { fallback } else { current };
+        let fallback = if first { world.resource::<Engines>().first_runnable(world) } else { current };
+        world.resource_mut::<Engines>().wanted = fallback;
         return;
     }
     if let Some(old) = current {
@@ -676,6 +721,60 @@ mod tests {
         barred.world_mut().resource_mut::<Engines>().remember_in(dir.clone(), Engine::Sk8);
         let first = frame(&mut barred);
         assert!(first.contains(&"a start") && !first.contains(&"b start"), "{first:?}");
+        // Nor when it is the one to start on with nothing kept: the first other that can run instead.
+        std::fs::remove_file(dir.join("engine.txt")).unwrap();
+        let mut barred = self::app();
+        barred.world_mut().resource_mut::<Engines>().not_at_launch(Engine::Sk8);
+        barred.world_mut().resource_mut::<Engines>().remember_in(dir.clone(), Engine::Sk8);
+        let first = frame(&mut barred);
+        assert!(first.contains(&"b start") && !first.contains(&"a start"), "{first:?}");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn no(_: &World) -> Result<(), String> {
+        Err("its files aren't here".into())
+    }
+
+    /// The engine to start on can't run: the first that can; none can: the app runs without one until one is picked.
+    #[test]
+    fn it_starts_on_one_that_can_run_or_on_none() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<Ran>();
+        add_engine(&mut app, Engine::Skate3, no, |_| {});
+        add_engine(&mut app, Engine::Sk8, |_| Ok(()), |app| {
+            app.add_systems(Update, (|mut ran: ResMut<Ran>| ran.0.push("a")).in_set(EngineSet(Engine::Sk8)));
+        });
+        frame(&mut app);
+        assert_eq!(app.world().resource::<Engines>().current(), None);
+        assert_eq!(frame(&mut app), ["a"]);
+        assert_eq!(app.world().resource::<Engines>().current(), Some(Engine::Sk8));
+
+        let mut none = App::new();
+        none.add_plugins(MinimalPlugins).init_resource::<Ran>();
+        add_engine(&mut none, Engine::Skate3, no, |_| {});
+        add_engine(&mut none, Engine::Thug2, no, |_| {});
+        for _ in 0..3 {
+            frame(&mut none);
+        }
+        let engines = none.world().resource::<Engines>();
+        assert_eq!((engines.current(), engines.wanted), (None, None), "none, and not asked again each frame");
+        none.world_mut().resource_mut::<Engines>().request(Engine::Thug2);
+        frame(&mut none);
+        assert_eq!(none.world().resource::<Engines>().current(), None, "still none: it can't run");
+    }
+
+    /// An engine shown only by a check is offered while it says so, or while it runs.
+    #[test]
+    fn an_engine_can_be_hidden() {
+        #[derive(Resource)]
+        struct Show;
+        let mut app = app();
+        app.world_mut().resource_mut::<Engines>().shown_if(Engine::Sk8, |world| world.contains_resource::<Show>());
+        app.world_mut().resource_mut::<Engines>().request(Engine::Thug2);
+        frame(&mut app);
+        let engines = app.world().resource::<Engines>();
+        assert!(!engines.listed(Engine::Sk8, app.world()) && engines.listed(Engine::Thug2, app.world()));
+        app.insert_resource(Show);
+        assert!(app.world().resource::<Engines>().listed(Engine::Sk8, app.world()));
     }
 }

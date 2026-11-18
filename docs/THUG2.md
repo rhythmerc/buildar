@@ -14,6 +14,13 @@ own copy of the game.
 
 ## Putting your THUG2 files on the headset
 
+In the headset: copy your installed PC game folder (the one holding `Data`), or a zip of it, to
+the Quest's `Download/THUG2` folder (USB, or any file app), then in the app **menu > Game data >
+THUG2 > Import**. The first time, allow "All files access" and press it again. THUG2 plays as
+soon as the import is done; the whole folder is copied (about 1.4 GB).
+
+Or over adb, only the files the engine reads:
+
 1. Install the app once, so its files folder exists.
 2. With the headset connected over USB (developer mode on):
 

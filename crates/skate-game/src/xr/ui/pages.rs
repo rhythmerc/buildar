@@ -1,9 +1,9 @@
 //! The headset menu's shared pages, the same whatever the engine: the start
 //! page, the first-run intro, AR settings, building a park, controls, the
-//! engine choice and the Skate 3 data page. An engine adds its own (SK8's
-//! skater page).
-#[cfg(feature = "retail")]
-use super::import::{Import, Status};
+//! engine choice and the game data pages (the installer's: `super::import`).
+//! An engine adds its own (SK8's skater page).
+#[cfg(any(feature = "retail", feature = "thug2"))]
+use super::import::{Import, Offered, Status};
 use super::{Act, ControlsSheet, Outcome, PageId, UiPage, UiProvider, UiProviders, Widget, XrUi};
 use crate::engines::{Engine, Engines};
 use crate::xr::actions::Hand;
@@ -29,13 +29,15 @@ pub(crate) const BUILD: PageId = "build";
 pub(crate) const CONTROLS: PageId = "controls";
 pub(crate) const ENGINE: PageId = "engine";
 const BUILD_CONTROLS: PageId = "build_controls";
-#[cfg(feature = "retail")]
+/// The game data pages: every engine's, and each one's.
 pub(crate) const DATA: PageId = "data";
+#[cfg(any(feature = "retail", feature = "thug2"))]
+const DATA_PAGES: [(Engine, PageId); 3] = [(Engine::Sk8, "data_sk8"), (Engine::Skate3, "data_skate3"), (Engine::Thug2, "data_thug2")];
 
 /// Where "put the skater in front of me" aims, real metres ahead of the head.
 const AHEAD_M: f32 = 0.6;
-/// Import buttons, one per bundle found.
-#[cfg(feature = "retail")]
+/// Import buttons, one per copy found.
+#[cfg(any(feature = "retail", feature = "thug2"))]
 const IMPORT_IDS: [&str; 4] = ["import0", "import1", "import2", "import3"];
 
 /// The running engine (none before the first frame).
@@ -63,8 +65,8 @@ impl UiProvider for Shared {
                     Widget::link("Build a park", BUILD),
                     Widget::button("recenter", "Place the skater: point, then A"),
                     Widget::link("Controls", CONTROLS),
-                    #[cfg(feature = "retail")]
-                    Widget::link("Skate 3 data", DATA),
+                    #[cfg(any(feature = "retail", feature = "thug2"))]
+                    Widget::link("Game data", DATA),
                     Widget::info(""),
                     Widget::info(tier_line(engine)),
                     Widget::info(mode_line(settings)),
@@ -131,8 +133,10 @@ impl UiProvider for Shared {
             }
             BUILD_CONTROLS => UiPage::new("Build mode controls", BUILD_HELP.iter().map(|(a, b)| pair(a, b)).collect()),
             ENGINE => UiPage::new("Skate engine", engine_widgets(world)),
-            #[cfg(feature = "retail")]
-            DATA => UiPage::new("Skate 3 data", data_widgets(world)),
+            #[cfg(any(feature = "retail", feature = "thug2"))]
+            DATA => UiPage::new("Game data", data_widgets(world)),
+            #[cfg(any(feature = "retail", feature = "thug2"))]
+            page if let Some(engine) = data_engine(page) => UiPage::new(format!("{} data", engine.name()), files_widgets(world, engine)),
             _ => return None,
         })
     }
@@ -152,8 +156,8 @@ impl UiProvider for Shared {
             (INTRO, "next") => Outcome::Replace(INTRO_MODE),
             (INTRO, "skip") | (INTRO_CONTROLS, "done") => {
                 edit(world, |s| s.onboarding_done = true);
-                // (on to the parks)
-                Outcome::Home
+                // (on to the parks; with no engine, to the game data first)
+                if no_engine(world) { Outcome::Replace(DATA) } else { Outcome::Home }
             }
             (INTRO_MODE, "room" | "room_scan" | "free") => {
                 let mode = if widget == "free" { ArMode::FreeRoam } else { ArMode::Room };
@@ -187,8 +191,8 @@ impl UiProvider for Shared {
             (ENGINE, _) => engine_act(widget, world),
             (AR, _) => ar_act(widget, world),
             (BUILD | INTRO_FLOOR, _) => build_act(widget, act, world)?,
-            #[cfg(feature = "retail")]
-            (DATA, _) => data_act(widget, world),
+            #[cfg(any(feature = "retail", feature = "thug2"))]
+            (page, _) if let Some(engine) = data_engine(page) => files_act(engine, widget, world),
             _ => return None,
         })
     }
@@ -206,8 +210,14 @@ fn tier_line(engine: Option<Engine>) -> &'static str {
     match engine {
         Some(Engine::Skate3) => "Playing your own Skate 3 data (retail controls and skaters).",
         Some(Engine::Thug2) => "Playing THUG2's own engine, on your copy of the game.",
-        _ => "SK8: every move, value and sound in it was made for this app.",
+        Some(Engine::Sk8) => "SK8: every move, value and sound in it was made for this app.",
+        None => "No game yet: bring your own game files (Settings > Game data).",
     }
+}
+
+/// No engine runs, nor is one about to: the app has none that can (`crate::engines`).
+pub(crate) fn no_engine(world: &World) -> bool {
+    world.get_resource::<Engines>().is_some_and(|e| e.current().is_none() && e.settled().is_none())
 }
 
 // ---------------------------------------------------------------- engine
@@ -224,27 +234,43 @@ fn engine_about(engine: Engine) -> &'static str {
     }
 }
 
+/// The engines the menus offer: listed ([`Engines::listed`]) and either in this app or with game files to bring.
+fn offered_engines(world: &World) -> Vec<Engine> {
+    let Some(engines) = world.get_resource::<Engines>() else { return Vec::new() };
+    Engine::ALL
+        .into_iter()
+        .filter(|&e| engines.listed(e, world) && (engines.carries(e) || files_of(world, e).is_some()))
+        .collect()
+}
+
 fn engine_widgets(world: &World) -> Vec<Widget> {
     let Some(engines) = world.get_resource::<Engines>() else { return vec![Widget::info("One engine in this app.")] };
     let current = engines.current();
+    let offered = offered_engines(world);
     let mut w = Vec::new();
-    for (id, engine) in ENGINE_IDS {
+    for (id, engine) in ENGINE_IDS.into_iter().filter(|(_, e)| offered.contains(e)) {
         let label = match engines.available(engine, world) {
             Ok(()) => engine.name().to_string(),
-            Err(_) if !engines.carries(engine) && engine == Engine::Skate3 && skate3_imported(world) => {
-                format!("{}  (imported: reopen the app to load it)", engine.name())
-            }
-            Err(why) => format!("{}  ({why})", engine.name()),
+            Err(why) => format!("{}  ({})", engine.name(), files_state(world, engine).map_or(why, str::to_string)),
         };
         w.push(Widget::toggle(id, label, current == Some(engine)));
     }
     w.push(Widget::info(""));
     w.push(Widget::info("Switch any time; each engine carries on where it left off."));
-    w.extend(Engine::ALL.map(|e| Widget::info(engine_about(e))));
+    w.extend(offered.iter().map(|&e| Widget::info(engine_about(e))));
+    // (developers: SK8 offered too)
+    if super::sound_lab::dev(world) {
+        w.push(Widget::info(""));
+        w.push(Widget::toggle("sk8_shown", "Offer SK8, the clean-room engine (developers)", world.resource::<ArSettings>().sk8));
+    }
     w
 }
 
 fn engine_act(widget: &str, world: &mut World) -> Outcome {
+    if widget == "sk8_shown" {
+        edit(world, |s| s.sk8 = !s.sk8);
+        return Outcome::Stay;
+    }
     let Some(&(_, engine)) = ENGINE_IDS.iter().find(|(id, _)| *id == widget) else { return Outcome::Stay };
     let Some(engines) = world.get_resource::<Engines>() else { return Outcome::Stay };
     if engines.current() == Some(engine) {
@@ -259,16 +285,41 @@ fn engine_act(widget: &str, world: &mut World) -> Outcome {
     }
 }
 
-/// Skate 3 data is imported (it loads at launch: imported during this run, it is there from the next).
-fn skate3_imported(world: &World) -> bool {
-    #[cfg(feature = "retail")]
+/// The game files `engine` runs on, when the player brings them (the installer's: `super::import`).
+fn files_of(world: &World, engine: Engine) -> Option<engine_core::GameFiles> {
+    #[cfg(any(feature = "retail", feature = "thug2"))]
     {
-        world.get_resource::<Import>().is_some_and(Import::installed)
+        world.get_resource::<Offered>()?.of(engine).copied()
     }
-    #[cfg(not(feature = "retail"))]
+    #[cfg(not(any(feature = "retail", feature = "thug2")))]
     {
-        let _ = world;
-        false
+        let _ = (world, engine);
+        None
+    }
+}
+
+/// Where `engine`'s game files are, when it can't run for want of them: none brought, or brought but loaded only when
+/// the app next opens (an engine not carried at launch).
+fn files_state(world: &World, engine: Engine) -> Option<&'static str> {
+    #[cfg(any(feature = "retail", feature = "thug2"))]
+    {
+        let files = files_of(world, engine)?;
+        let engines = world.get_resource::<Engines>()?;
+        // (running on files from elsewhere: a desktop's own folder)
+        if engines.available(engine, world).is_ok() {
+            return None;
+        }
+        let installed = world.get_resource::<Import>().is_some_and(|i| i.installed(&files));
+        match (installed, engines.carries(engine)) {
+            (false, _) => Some("needs your game files"),
+            (true, false) => Some("imported: reopen the app to load it"),
+            (true, true) => None,
+        }
+    }
+    #[cfg(not(any(feature = "retail", feature = "thug2")))]
+    {
+        let _ = (world, engine);
+        None
     }
 }
 
@@ -647,88 +698,111 @@ const BUILD_HELP: [(&str, &str); 16] = [
 
 // ---------------------------------------------------------------- data
 
-#[cfg(feature = "retail")]
+/// The engine whose game data page `page` is.
+#[cfg(any(feature = "retail", feature = "thug2"))]
+fn data_engine(page: PageId) -> Option<Engine> {
+    DATA_PAGES.iter().find(|(_, p)| *p == page).map(|(e, _)| *e)
+}
+
+#[cfg(any(feature = "retail", feature = "thug2"))]
+fn data_page(engine: Engine) -> PageId {
+    DATA_PAGES.iter().find(|(e, _)| *e == engine).map_or(DATA, |(_, p)| p)
+}
+
+/// Every engine's game files: each one's state, a link to its page.
+#[cfg(any(feature = "retail", feature = "thug2"))]
 fn data_widgets(world: &World) -> Vec<Widget> {
-    let engine = running(world);
-    let carried = world.get_resource::<Engines>().is_some_and(|e| e.carries(Engine::Skate3));
+    let mut w = vec![Widget::info(tier_line(running(world))), Widget::info("")];
+    let offered = offered_engines(world);
+    for (e, _) in world.resource::<Offered>().0.iter().filter(|(e, _)| offered.contains(e)) {
+        let state = files_state(world, *e).unwrap_or("ready");
+        w.push(Widget::link(format!("{}: {state}", e.name()), data_page(*e)));
+    }
+    w.extend([
+        Widget::info(""),
+        Widget::info("The games run on your own copy of their files: nothing of"),
+        Widget::info("theirs comes with this app. Bring each one's once."),
+    ]);
+    w
+}
+
+/// One engine's game files: where they are, importing them, and how to make them.
+#[cfg(any(feature = "retail", feature = "thug2"))]
+fn files_widgets(world: &World, engine: Engine) -> Vec<Widget> {
+    let Some(files) = files_of(world, engine) else { return Vec::new() };
+    let engines = world.resource::<Engines>();
     let import = world.resource::<Import>();
-    let installed = import.installed();
-    let mut w = vec![
-        Widget::info(tier_line(engine)),
-        Widget::info(match (installed, carried) {
-            (true, true) => "Your Skate 3 data is loaded.",
-            (true, false) => "Your Skate 3 data is imported: it loads when the app opens.",
-            (false, _) => "No Skate 3 data imported.",
-        }),
-    ];
-    if carried && engine != Some(Engine::Skate3) {
-        w.push(Widget::button("use_retail", "Play Skate 3 now"));
+    let installed = import.installed(&files);
+    let mut w = vec![Widget::info(match files_state(world, engine) {
+        None => "Your files are in: it's ready to play.",
+        Some(_) if !installed => "Your files aren't here yet.",
+        Some(state) => state,
+    })];
+    if engines.available(engine, world).is_ok() && engines.current() != Some(engine) {
+        w.push(Widget::button("play", format!("Play {} now", engine.name())));
     }
-    if engine == Some(Engine::Skate3) {
-        w.push(Widget::button("use_clean", "Play SK8 (the clean-room engine) now"));
+    if installed && !engines.carries(engine) {
+        w.push(Widget::button("restart", "Close the app now (then open it again)"));
     }
-    match import.status() {
+    // (files an engine has started on stay as they are until the app closes)
+    let in_use = engines.started(engine);
+    let drop = files.drop;
+    match import.status(engine) {
         Status::Working { what, done, total } => {
             let pct = if total > 0 { done as f32 / total as f32 * 100.0 } else { 0.0 };
             w.push(Widget::info(format!("Importing: {pct:.0}%  {what}")));
         }
-        Status::Done(Ok(msg)) => {
-            w.push(Widget::info(msg));
-            w.push(Widget::button("restart", "Close the app now (then open it again)"));
-        }
+        Status::Done(Ok(msg)) => w.push(Widget::info(msg)),
         Status::Done(Err(e)) => w.push(Widget::info(format!("Import failed: {e}"))),
         Status::Scanned(found) if found.is_empty() => {
-            w.push(Widget::info("Nothing found in Download/Skate3."));
+            w.push(Widget::info(format!("Nothing found in Download/{drop}.")));
             w.push(Widget::button("scan", "Look again"));
         }
+        Status::Scanned(_) if in_use => w.push(Widget::info("In use: close and reopen the app to replace them.")),
         Status::Scanned(found) => {
             for (id, source) in IMPORT_IDS.iter().zip(found.iter()) {
                 w.push(Widget::button(id, format!("Import {}", source.describe())));
             }
             w.push(Widget::button("scan", "Look again"));
         }
-        Status::Idle => w.push(Widget::button("scan", "Import Skate 3 data from Download/Skate3")),
+        Status::Idle => w.push(Widget::button("scan", format!("Import from Download/{drop}"))),
     }
-    if installed && !carried {
-        w.push(Widget::button("restart", "Close the app now (then open it again)"));
-    }
-    w.extend([
-        Widget::info(""),
-        Widget::info("How (on a Windows PC, once): run skate3rust.exe on your own"),
-        Widget::info("Skate 3 ISO, skate a minute, then double-click MAKE-QUEST-ZIP.bat."),
-        Widget::info("Copy Skate3-Quest.zip to Download/Skate3 on this headset and"),
-        Widget::info("press Import above. Guide: docs/IMPORT-SKATE3.md on GitHub."),
-    ]);
+    w.push(Widget::info(""));
+    w.extend(files.how.iter().map(|line| Widget::info(*line)));
     w.dedup();
     w
 }
 
-#[cfg(feature = "retail")]
-fn data_act(widget: &str, world: &mut World) -> Outcome {
+#[cfg(any(feature = "retail", feature = "thug2"))]
+fn files_act(engine: Engine, widget: &str, world: &mut World) -> Outcome {
+    let Some(files) = files_of(world, engine) else { return Outcome::Stay };
     let import = world.resource::<Import>().clone();
     match widget {
-        "use_retail" | "use_clean" => {
-            let engine = if widget == "use_retail" { Engine::Skate3 } else { Engine::Sk8 };
-            engine_act(ENGINE_IDS.iter().find(|(_, e)| *e == engine).map_or("", |(id, _)| id), world)
-        }
+        "play" => engine_act(ENGINE_IDS.iter().find(|(_, e)| *e == engine).map_or("", |(id, _)| id), world),
         "scan" => {
             if !crate::storage_access() {
                 crate::request_storage_access();
                 return Outcome::Say("Allow \"All files access\" for SK8 AR, then press it again.".into());
             }
-            import.scan();
+            import.scan(engine, &files);
             Outcome::Stay
         }
         "restart" => {
-            info!("UI closing the app to load the imported data");
+            info!("UI closing the app to load the imported files");
             std::process::exit(0);
         }
         id => {
             let Some(i) = IMPORT_IDS.iter().position(|&x| x == id) else { return Outcome::Stay };
-            if let Status::Scanned(found) = import.status() {
-                if let Some(source) = found.get(i) {
-                    import.start(source.clone());
-                }
+            if world.resource::<Engines>().started(engine) {
+                return Outcome::Say("In use: close and reopen the app to replace them".into());
+            }
+            if import.working() {
+                return Outcome::Say("Another import is running".into());
+            }
+            if let Status::Scanned(found) = import.status(engine)
+                && let Some(source) = found.get(i)
+            {
+                import.start(engine, files, source.clone());
             }
             Outcome::Stay
         }
@@ -757,4 +831,56 @@ pub(crate) fn put_skater_ahead(world: &mut World) {
     let floor_y = world.resource::<ArSettings>().floor_offset;
     let point = ground.unwrap_or_else(|| root.transform_point(ahead_tracking.with_y(floor_y)));
     world.write_message(PlacePlayer::new(point, root.rotation * forward));
+}
+
+#[cfg(all(test, feature = "retail", feature = "thug2"))]
+mod tests {
+    use super::*;
+    use crate::engines::add_engine;
+
+    fn needs_files(_: &World) -> Result<(), String> {
+        Err("needs your game files".into())
+    }
+
+    fn text(world: &World, page: PageId) -> String {
+        format!("{:?}", Shared.page(page, world).expect("the page").widgets)
+    }
+
+    /// No game files and SK8 not offered: the app runs no engine, and its menu offers each game's files (SK8 nowhere);
+    /// SK8 turned on, it is offered again.
+    #[test]
+    fn with_no_game_files_the_menu_offers_them() {
+        let files = std::env::temp_dir().join(format!("pages-test-{}", std::process::id()));
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins).init_resource::<ArSettings>().init_resource::<SceneCapture>().init_resource::<ControlsSheet>().init_resource::<UiProviders>();
+        add_engine(&mut app, Engine::Sk8, |w| if w.resource::<ArSettings>().sk8 { Ok(()) } else { Err("not offered".into()) }, |_| {});
+        add_engine(&mut app, Engine::Thug2, needs_files, |_| {});
+        app.world_mut().resource_mut::<Engines>().shown_if(Engine::Sk8, |w| w.resource::<ArSettings>().sk8);
+        app.insert_resource(Import::new(files.clone()));
+        crate::xr::ui::import::offer(&mut app, Engine::Skate3, skate3_engine::DATA);
+        crate::xr::ui::import::offer(&mut app, Engine::Thug2, thug2_engine::DATA);
+        app.update();
+        let world = app.world();
+        assert!(no_engine(world));
+        let data = text(world, DATA);
+        assert!(data.contains("Skate 3: needs your game files") && data.contains("THUG2: needs your game files"), "{data}");
+        let thug2 = text(world, "data_thug2");
+        assert!(thug2.contains("Import from Download/THUG2") && thug2.contains("docs/THUG2.md"), "{thug2}");
+        let engine = text(world, ENGINE);
+        assert!(!engine.contains("SK8") && engine.contains("Skate 3  (needs your game files)"), "{engine}");
+        // (the pages a first run goes through, with no engine)
+        for page in [START, INTRO, INTRO_MODE, INTRO_FLOOR, INTRO_CONTROLS, CONTROLS] {
+            assert!(!text(world, page).contains("SK8:"), "{page}");
+        }
+        assert!(text(world, CONTROLS).contains("this menu"), "the shared layer's controls");
+        assert!(text(world, INTRO).contains("No game yet"));
+
+        app.world_mut().resource_mut::<ArSettings>().sk8 = true;
+        let engine = text(app.world(), ENGINE);
+        assert!(engine.contains("engine_sk8"), "{engine}");
+        app.world_mut().resource_mut::<Engines>().request(Engine::Sk8);
+        app.update();
+        assert!(!no_engine(app.world()));
+        let _ = std::fs::remove_dir_all(files);
+    }
 }

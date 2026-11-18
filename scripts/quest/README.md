@@ -13,9 +13,10 @@ It has two tiers:
   (`crates/skate-game/src/clean/`), and the sounds are CC0 recordings or
   original synthesis. It reads no game data at all, and
   `scripts/cleanroom/audit.py` checks it against a retail tree.
-- **Imported disc (opt-in).** The faithful engine port, run on data you
-  converted from your own Skate 3 disc (below). It is used only when
-  `files/use-retail-data` exists.
+- **Imported disc.** The faithful engine port, run on data you converted from
+  your own Skate 3 disc (below), once `files/assets/private/game.json` is there.
+  (SK8 is offered in the headset only to developers: `"dev": true` and the
+  Engine page's "Offer SK8" toggle.)
 
 ## One-time setup
 
@@ -64,14 +65,10 @@ scripts/quest/push-assets.sh quest-data/assets quest-data/audio-pcm-cache
 That lands in `/sdcard/Android/data/com.andrewnakas.skate3ar/files/`:
 `assets/` (the converted installation) and
 `Skate3RustEngine/audio-pcm-cache/` (pre-decoded player sound banks; the
-headset has no ffmpeg). `push-assets.sh` also creates `files/use-retail-data`,
-so the next launch runs the imported disc (only while `files/assets/private/game.json`
-exists, so a marker without data still starts the clean tier). Menu > Skate 3 data
-switches between the tiers in either one, or delete the file:
-
-```sh
-adb shell rm /sdcard/Android/data/com.andrewnakas.skate3ar/files/use-retail-data
-```
+headset has no ffmpeg). `push-assets.sh` also writes `skate3` to
+`files/engine.txt`, so the next launch starts on it. In the headset, Settings >
+Game data imports the same from `Download/Skate3` (and THUG2's files from
+`Download/THUG2`), and Settings > Engine switches engines.
 
 ## Run and read logs
 

@@ -1,9 +1,8 @@
 # Play with your own Skate 3 (optional)
 
-Skate 3 AR works out of the box with no game files: the default **clean-room** skater is
-our own (own physics, model, animations and CC0 sounds). If you own Skate 3 for Xbox 360 you
-can also switch the app to the **full Skate 3 tier**: the retail skater, animations, controls
-and sounds, run from data converted from **your own disc**. Nothing from EA is in this repo or
+Skate 3 AR runs on your own game files. If you own Skate 3 for Xbox 360, this brings the
+**full Skate 3 tier** into the app: the retail skater, animations, controls and sounds, run
+from data converted from **your own disc**. Nothing from EA is in this repo or
 the APK, and nothing is downloaded: you bring the disc.
 
 You need a Windows PC once (to convert the disc) and about 5 GB free on the Quest.
@@ -42,20 +41,21 @@ says "Sound banks: none yet", skate in the desktop game for a minute and run it 
 
 ## 4. Import in the headset
 
-1. Open Skate 3 AR, tap the **left menu** button, go to **Skate 3 data > Import**.
+1. Open Skate 3 AR, tap the **left menu** button, go to **Game data > Skate 3 > Import from
+   Download/Skate3**, then press the zip it found.
 2. The first time, the Quest opens an "All files access" page for the app: switch it **on**,
    come back to the app and press **Import** again.
 3. When it says it's done, choose **Close the app now**, then open Skate 3 AR again.
    It now starts in the full Skate 3 tier.
 
-Switch back any time: **menu > Skate 3 data > Play the clean-room game from the next launch**. You can delete
-`Download/Skate3/Skate3-Quest.zip` after importing to free the space.
+Switch engines any time in **menu > Engine**. You can delete `Download/Skate3/Skate3-Quest.zip`
+after importing to free the space.
 
 ## Troubleshooting
 
 - **Sounds:** with the decoded sound banks imported (`audio-pcm-cache`), the Skate 3 tier plays
   Skate 3's own player sounds through its recovered sound graph, from the skater in the room.
-  Without them it falls back to the clean-room sounds. `SKATE_AUDIO=clean|retail` overrides it.
+  Without them it falls back to the app's own skating sounds. `SKATE_AUDIO=clean|retail` overrides it.
 - **The HUD:** Skate 3's own trick display (the tricks, the multiplier ring, the score and the
   line's) floats by a controller (Settings > AR picks the left or right one).
 - **No sound in the Skate 3 tier:** the zip had no sound banks. Skate in the desktop game for a

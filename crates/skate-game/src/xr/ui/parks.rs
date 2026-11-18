@@ -154,6 +154,7 @@ struct Model {
 /// An engine in the dropdown.
 #[derive(Clone, PartialEq, Debug)]
 struct EngineRow {
+    engine: Engine,
     name: String,
     /// It can be switched to (else greyed out, `why` says why not).
     installed: bool,
@@ -350,15 +351,16 @@ fn menu_for(here: Here, current: bool) -> Vec<MenuAction> {
     rows
 }
 
-/// The engines for the dropdown (none: the app has no engine choice).
+/// The engines for the dropdown, those the menus offer (none: the app has no engine choice).
 fn engine_rows(world: &World) -> Option<Vec<EngineRow>> {
     let engines = world.get_resource::<Engines>()?;
     Some(
         Engine::ALL
             .iter()
+            .filter(|&&e| engines.listed(e, world))
             .map(|&e| {
                 let why = engines.available(e, world).err().unwrap_or_default();
-                EngineRow { name: e.name().to_string(), installed: why.is_empty(), why, running: engines.current() == Some(e) }
+                EngineRow { engine: e, name: e.name().to_string(), installed: why.is_empty(), why, running: engines.current() == Some(e) }
             })
             .collect(),
     )
@@ -516,7 +518,7 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 Some(r)
             }
             Some(Some(r)) => {
-                let engine = Engine::ALL[r];
+                let engine = rows[r].engine;
                 if !rows[r].running {
                     world.resource_mut::<Engines>().request(engine);
                     outcome = Outcome::Say(format!("Switched to {}", engine.name()));

@@ -198,10 +198,10 @@ fn build(options: Options) -> App {
     app
 }
 
-/// The headset app's engines: Skate 3 when the player's data is there (`skate3`: its `assets`), SK8, and THUG2 when
-/// the app is built with it. The engine to start on is the one last played (`engine.txt` in `files`), else Skate 3
-/// if it is carried, else SK8; a Skate 3 import just finished (`use-retail-data`, the importer's mark) starts on
-/// Skate 3 once.
+/// The headset app's engines: Skate 3 when the player's data is there (`skate3`: its `assets`), SK8 (offered only to
+/// developers, [`sk8_shown`]), and THUG2 when the app is built with it. The engine to start on is the one last played
+/// or just imported (`engine.txt` in `files`), else Skate 3 if it is carried, else the first that can run, else none:
+/// the menu then offers the game files (`xr::ui::pages`).
 #[cfg(feature = "xr")]
 pub(crate) fn add_xr_engines(app: &mut App, files: &std::path::Path, skate3: Option<std::path::PathBuf>) {
     use crate::engines::{Engine, Engines};
@@ -210,21 +210,34 @@ pub(crate) fn add_xr_engines(app: &mut App, files: &std::path::Path, skate3: Opt
     crate::skate_audio::clean::install(app);
     let first = if skate3.is_some() { Engine::Skate3 } else { Engine::Sk8 };
     #[cfg(feature = "retail")]
-    if let Some(assets) = skate3 {
-        crate::skate3::install(app, files, assets);
+    {
+        // (offered whether or not it is here: imported, it loads when the app next opens)
+        crate::xr::ui::import::offer(app, Engine::Skate3, skate3_engine::DATA);
+        if let Some(assets) = skate3 {
+            crate::skate3::install(app, files, assets);
+        }
     }
     #[cfg(not(feature = "retail"))]
     let _ = skate3;
-    crate::engines::add_engine(app, Engine::Sk8, |_| Ok(()), move |app| add_sk8(app, &sk8_files, true));
+    crate::engines::add_engine(app, Engine::Sk8, sk8_available, move |app| add_sk8(app, &sk8_files, true));
     #[cfg(feature = "thug2")]
     crate::thug2::install(app, files);
     let mut engines = app.world_mut().resource_mut::<Engines>();
+    engines.shown_if(Engine::Sk8, sk8_shown);
     engines.remember_in(files.to_path_buf(), first);
-    let imported = files.join("use-retail-data");
-    if engines.carries(Engine::Skate3) && imported.exists() {
-        engines.request(Engine::Skate3);
-        let _ = std::fs::remove_file(imported);
-    }
+}
+
+/// SK8 is offered to developers who turn it on (AR settings), not to players: too rough yet. A build with no other
+/// engine offers it anyway.
+#[cfg(feature = "xr")]
+fn sk8_shown(world: &World) -> bool {
+    !cfg!(any(feature = "retail", feature = "thug2"))
+        || world.get_resource::<crate::xr::ar_settings::ArSettings>().is_some_and(|s| s.sk8)
+}
+
+#[cfg(feature = "xr")]
+fn sk8_available(world: &World) -> Result<(), String> {
+    if sk8_shown(world) { Ok(()) } else { Err("not offered yet".into()) }
 }
 
 /// SK8's per-frame systems (its own when the app carries engines; on the desktop just a set).

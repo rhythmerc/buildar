@@ -12,9 +12,23 @@
 //! - [`sound`]: the game's voices as the contract's, from the skater's board, and its sounds' samples.
 //! - [`stage`]: the stage and park as the game's world (its units, face classes, rails; not mid-grind), putting the
 //!   skater down, and where it is.
+//! - [`DATA`]: the player's THUG2 files, as the app's installer finds and keeps them.
 pub mod engine;
 pub mod hud;
 pub mod input;
 pub mod model;
 pub mod sound;
 pub mod stage;
+
+/// The player's THUG2 files: their installed PC game, the folder holding `Data` (`docs/THUG2.md`).
+pub const DATA: engine_core::GameFiles = engine_core::GameFiles {
+    drop: "THUG2",
+    folder: "thug2",
+    marker: "Data",
+    beside: &[],
+    how: &[
+        "Copy your installed THUG2 PC game folder (the one holding Data),",
+        "or a zip of it, to Download/THUG2 on this headset, then import",
+        "it here. Over USB: scripts/quest/push-thug2.sh. Guide: docs/THUG2.md.",
+    ],
+};

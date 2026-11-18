@@ -15,6 +15,7 @@
 //! - [`sound`]: its own sound graph as a stream, or its ticks as the skating sounds the app carries, and retail's
 //!   multiplier sounds.
 //! - [`trick`]: the sim's scoring as the plain trick readout.
+//! - [`DATA`]: the player's Skate 3 data, as the app's installer finds and keeps it.
 pub mod engine;
 pub mod hud;
 pub mod input;
@@ -22,3 +23,19 @@ pub mod model;
 pub mod sound;
 pub mod stage;
 pub mod trick;
+
+/// The player's Skate 3 data: what the desktop setup makes from their own disc (`docs/IMPORT-SKATE3.md`), an `assets`
+/// folder with `private/game.json` and, beside it, the decoded sound banks (`audio-pcm-cache`: the headset can't
+/// decode them itself).
+pub const DATA: engine_core::GameFiles = engine_core::GameFiles {
+    drop: "Skate3",
+    folder: "assets",
+    marker: "private/game.json",
+    beside: &[("audio-pcm-cache", "Skate3RustEngine/audio-pcm-cache")],
+    how: &[
+        "On a Windows PC, once: run skate3rust.exe on your own Skate 3",
+        "ISO, skate a minute, then double-click MAKE-QUEST-ZIP.bat.",
+        "Copy Skate3-Quest.zip to Download/Skate3 on this headset,",
+        "then import it here. Guide: docs/IMPORT-SKATE3.md on GitHub.",
+    ],
+};

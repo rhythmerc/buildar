@@ -657,7 +657,7 @@ fn select(menu: &mut Menu, sim: &mut CleanSkate, alt: bool) {
                 }
                 #[cfg(feature = "retail")]
                 "Use my imported disc from the next launch" => {
-                    match std::fs::write(menu.files.join("use-retail-data"), b"") {
+                    match std::fs::write(crate::engines::engine_file(&menu.files), crate::engines::Engine::Skate3.key()) {
                         Ok(()) => menu.say("Imported disc next launch. Quit and reopen the app."),
                         Err(e) => menu.say(format!("Could not switch: {e}")),
                     }
