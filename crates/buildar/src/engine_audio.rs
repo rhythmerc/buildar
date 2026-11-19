@@ -14,6 +14,10 @@
 use crate::live_pcm::LivePcm;
 use crate::stream_pcm::StreamPcm;
 use crate::binaural::{Emitter, Spatialised};
+
+/// A sound's place (its engine's emitter) and level, as Steam Audio hears it (`binaural::Voice`; not an engine's
+/// [`Voice`]).
+type Heard3d = crate::binaural::Voice;
 use bevy::audio::{AudioPlayer, AudioSink, AudioSinkPlayback, PlaybackSettings, Volume};
 use bevy::prelude::*;
 use engine_core::audio::{Clip, StreamFactory, Voice};
@@ -23,11 +27,11 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// An engine's mix as an audio source: heard from its emitter.
+/// An engine's mix as an audio source: heard from its emitter (and in the room's reverberation at full level).
 #[derive(Asset, TypePath, Clone)]
 pub(crate) struct EngineMix {
     live: LivePcm,
-    emitter: Arc<Emitter>,
+    voice: Arc<Heard3d>,
 }
 
 impl bevy::audio::Decodable for EngineMix {
@@ -35,7 +39,7 @@ impl bevy::audio::Decodable for EngineMix {
     type Decoder = Spatialised<crate::live_pcm::LivePlayback>;
 
     fn decoder(&self) -> Self::Decoder {
-        Spatialised::new(bevy::audio::Decodable::decoder(&self.live), self.emitter.clone())
+        Spatialised::new(bevy::audio::Decodable::decoder(&self.live), self.voice.clone())
     }
 }
 
@@ -91,7 +95,9 @@ impl EngineStream {
             match status {
                 Status::Ready(live) => {
                     info!("{}: stream ready", self.name);
-                    let handle = assets.add(EngineMix { live: live.clone(), emitter: emitter.clone() });
+                    let voice = Heard3d::new(emitter.clone());
+                    voice.set_level(1.0);
+                    let handle = assets.add(EngineMix { live: live.clone(), voice });
                     self.output = Some(
                         commands
                             .spawn((
@@ -183,9 +189,10 @@ impl Heard {
     }
 }
 
-/// Clips as an audio source of their own: the voices' (`StreamPcm` plays them), heard from their engine's emitter.
+/// A clip playing as an audio source of its own: a voice's (`StreamPcm` plays it), heard from its engine's emitter at
+/// its level.
 #[derive(Asset, TypePath, Clone)]
-pub(crate) struct VoicePcm(StreamPcm, Arc<Emitter>);
+pub(crate) struct VoicePcm(StreamPcm, Arc<Heard3d>);
 
 impl bevy::audio::Decodable for VoicePcm {
     type DecoderItem = f32;
@@ -204,18 +211,19 @@ pub(crate) fn add_voice_source(app: &mut App) {
     }
 }
 
-/// An engine's clips, and each as a source once and looping.
+/// An engine's clips.
 #[derive(Default)]
 pub(crate) struct Voices {
     clips: HashMap<u32, (Arc<Vec<i16>>, u16, u32)>,
-    sources: HashMap<(u32, bool), Handle<VoicePcm>>,
 }
 
-/// An emitter playing one of an engine's voices.
+/// One of an engine's voices playing: which, whether it loops, and its level as Steam Audio has it (the room's
+/// reverberation takes it at that level).
 #[derive(Component)]
 pub(crate) struct VoiceEmitter {
     pub(crate) voice: u32,
     pub(crate) looping: bool,
+    heard: Arc<Heard3d>,
 }
 
 impl Voices {
@@ -251,6 +259,7 @@ impl Voices {
                 continue;
             }
             let Some(v) = now else { continue };
+            voice.heard.set_level(v.gain * level);
             if let Some(mut sink) = sink {
                 sink.set_volume(Volume::Linear(v.gain * level));
                 sink.set_speed(v.speed);
@@ -266,14 +275,12 @@ impl Voices {
         }
         for v in started {
             let Some((samples, channels, rate)) = self.clips.get(&v.clip).cloned() else { continue };
-            let source = self
-                .sources
-                .entry((v.clip, v.looping))
-                .or_insert_with(|| assets.add(VoicePcm(StreamPcm::from_i16(samples, channels, rate, v.looping), emitter.clone())))
-                .clone();
+            let heard = Heard3d::new(emitter.clone());
+            heard.set_level(v.gain * level);
+            let source = assets.add(VoicePcm(StreamPcm::from_i16(samples, channels, rate, v.looping), heard.clone()));
             let settings = if v.looping { PlaybackSettings::ONCE } else { PlaybackSettings::DESPAWN };
             commands.spawn((
-                VoiceEmitter { voice: v.id, looping: v.looping },
+                VoiceEmitter { voice: v.id, looping: v.looping, heard },
                 AudioPlayer(source),
                 settings.with_volume(Volume::Linear(v.gain * level)).with_speed(v.speed),
                 Name::new("engine voice"),

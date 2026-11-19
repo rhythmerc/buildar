@@ -488,10 +488,10 @@ impl Decodable for CleanPcm {
 
 // ---------------------------------------------------------------- any source, from an emitter
 
-/// Any sound (an engine's own mix, its clips) heard from `emitter` through the HRTF: folded to mono, at the
-/// emitter's level for its distance, toward its direction from the head - in stereo. Steam Audio's HRTF is at 44.1 or
-/// 48 kHz only: a sound at another rate (an engine's own: Mario Kart Wii's 32 kHz) is resampled to 48 kHz first.
-/// Without Steam Audio, mono as it is (a development build's).
+/// Any sound (an engine's own mix, its clips) heard from its voice's emitter through the HRTF: folded to mono, sent
+/// to the room's reverberation at the voice's level, at the emitter's level for its distance, toward its direction
+/// from the head - in stereo, at 48 kHz (the room's rate, and one the HRTF is at: a sound at another - Mario Kart
+/// Wii's 32 kHz mix - is resampled). Without Steam Audio, mono as it is (a development build's).
 pub(crate) struct Spatialised<S> {
     inner: S,
     channels: u16,
@@ -502,33 +502,37 @@ pub(crate) struct Spatialised<S> {
     around: (f32, f32),
     phase: f64,
     effect: Option<Effect>,
-    emitter: Arc<Emitter>,
+    voice: Arc<Voice>,
     /// The emitter's level as the last frame ended (levels ramp over a frame).
     gain: f32,
     ready: VecDeque<f32>,
     /// The inner source has ended; frames of silence still to go through the effect (the HRTF's tail).
     ended: bool,
     tail: u32,
+    /// The room it reverberates in, and its place on that room's bus.
+    room: Option<Arc<crate::reverb::Room>>,
+    sent: Option<u64>,
 }
 
-/// The rates Steam Audio's HRTF is at; the one others are resampled to.
-const HRTF_RATES: [u32; 2] = [44_100, 48_000];
-const HRTF_RATE: u32 = 48_000;
+/// The rate it is heard at, through the HRTF: the room's (`reverb`), and one Steam Audio's HRTF is at.
+const HEARD_RATE: u32 = crate::clean_synth::RATE;
 
 impl<S: Source<Item = f32>> Spatialised<S> {
-    pub(crate) fn new(inner: S, emitter: Arc<Emitter>) -> Self {
+    pub(crate) fn new(inner: S, voice: Arc<Voice>) -> Self {
         let (channels, own) = (inner.channels().max(1), inner.sample_rate().max(1));
-        let effect = if HRTF_RATES.contains(&own) { Effect::new(own) } else { Effect::new(HRTF_RATE) };
-        let rate = if effect.is_some() && !HRTF_RATES.contains(&own) { HRTF_RATE } else { own };
+        let effect = Effect::new(HEARD_RATE);
+        let rate = if effect.is_some() { HEARD_RATE } else { own };
         let mut out = Self {
             channels,
             rate,
             step: f64::from(own) / f64::from(rate),
             around: (0.0, 0.0),
             phase: 0.0,
+            room: effect.as_ref().and_then(|_| crate::reverb::room().cloned()),
+            sent: None,
             effect,
-            gain: load(&emitter.gain),
-            emitter,
+            gain: load(&voice.emitter.gain),
+            voice,
             inner,
             ready: VecDeque::with_capacity(2 * FRAME),
             ended: false,
@@ -577,13 +581,20 @@ impl<S: Source<Item = f32>> Spatialised<S> {
                 count += 1;
             }
         }
-        let target = load(&self.emitter.gain);
+        // To the room, as loud as it's played and before distance takes its part (the room's response has the way
+        // from the player to the head in it).
+        if let Some(room) = &self.room
+            && room.sounding()
+        {
+            room.send(&mut self.sent, &mono, load(&self.voice.level));
+        }
+        let target = load(&self.voice.emitter.gain);
         for (i, out) in mono.iter_mut().enumerate() {
             *out *= self.gain + (target - self.gain) * (i as f32 / FRAME as f32);
         }
         self.gain = target;
         match &self.effect {
-            Some(effect) => effect.apply(&mut mono, self.emitter.direction.each_ref().map(load), &mut self.ready),
+            Some(effect) => effect.apply(&mut mono, self.voice.emitter.direction.each_ref().map(load), &mut self.ready),
             None if count == 0 => return false,
             None => self.ready.extend(&mono[..count]),
         }
@@ -691,7 +702,7 @@ mod tests {
             let emitter = Arc::new(Emitter::default());
             emitter.set(direction, gain);
             let clip = crate::stream_pcm::StreamPcm::from_i16(Arc::new(stereo.clone()), 2, 48_000, false);
-            let playback = Spatialised::new(Decodable::decoder(&clip), emitter);
+            let playback = Spatialised::new(Decodable::decoder(&clip), Voice::new(emitter));
             assert_eq!((playback.channels(), playback.sample_rate()), (2, 48_000));
             let samples: Vec<f32> = playback.collect();
             let power = |skip: usize| samples.iter().skip(skip).step_by(2).map(|s| s * s).sum::<f32>().sqrt();
@@ -719,7 +730,7 @@ mod tests {
         emitter.set(Vec3::X, 1.0);
         let thirty_two: Vec<i16> = tone(0.5).iter().step_by(3).copied().collect();
         let clip = crate::stream_pcm::StreamPcm::from_i16(Arc::new(thirty_two.clone()), 1, 16_000, false);
-        let playback = Spatialised::new(Decodable::decoder(&clip), emitter.clone());
+        let playback = Spatialised::new(Decodable::decoder(&clip), Voice::new(emitter.clone()));
         assert_eq!((playback.channels(), playback.sample_rate()), (2, 48_000));
         let samples: Vec<f32> = playback.collect();
         let frames = samples.len() / 2;
@@ -727,7 +738,9 @@ mod tests {
         let power = |skip: usize| samples.iter().skip(skip).step_by(2).map(|s| s * s).sum::<f32>();
         assert!(power(1) > 2.0 * power(0), "to the right");
         let clip = crate::stream_pcm::StreamPcm::from_i16(Arc::new(vec![1000; 32_000]), 1, 32_000, false);
-        assert_eq!(Spatialised::new(Decodable::decoder(&clip), emitter).sample_rate(), 48_000, "32 kHz too");
+        assert_eq!(Spatialised::new(Decodable::decoder(&clip), Voice::new(emitter.clone())).sample_rate(), 48_000, "32 kHz too");
+        let clip = crate::stream_pcm::StreamPcm::from_i16(Arc::new(vec![1000; 44_100]), 1, 44_100, false);
+        assert_eq!(Spatialised::new(Decodable::decoder(&clip), Voice::new(emitter)).sample_rate(), 48_000, "44.1 kHz too: the room's rate");
     }
 
     /// Placed from the head: a sound to the head's right, turned or not, is heard to its right; twice the spatial

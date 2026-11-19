@@ -526,14 +526,20 @@ fn publish<M: Hosted>(
 }
 
 /// Its sounds' emitter at its player (its feet, after its last step), as the head hears it - every engine's sound,
-/// voices and mix alike, comes from where its player is.
+/// voices and mix alike, comes from where its player is - and the room's reverberation of them from there too.
 fn aim<M: Hosted>(
     driver: Res<Driver<M>>,
     listener: Query<&Transform, With<bevy::audio::SpatialListener>>,
     scale: Res<bevy::audio::DefaultSpatialScale>,
+    room_from_world: Option<Res<crate::reverb::RoomFromWorld>>,
 ) {
-    if let (Some(focus), Ok(head)) = (driver.focus[1], listener.single()) {
+    let Some(focus) = driver.focus[1] else { return };
+    if let Ok(head) = listener.single() {
         crate::binaural::place(&driver.emitter, focus.feet, head, scale.0.0.x);
+    }
+    // (and the room's reverberation traced from there, in the room's own space)
+    if let (Some(room), Some(to_room)) = (crate::reverb::room(), room_from_world.and_then(|r| r.0)) {
+        room.set_source(to_room.transform_point3(focus.feet));
     }
 }
 

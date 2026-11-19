@@ -799,14 +799,18 @@ fn mix(
     scale: Res<bevy::audio::DefaultSpatialScale>,
     lab: Option<Res<SoundLab>>,
     room_from_world: Res<RoomFromWorld>,
+    engines: Option<Res<crate::engines::Engines>>,
 ) {
     let Some(mut audio) = audio else { return };
-    // Where the skater is in the real room, for its reverberation.
-    if let (Some(room), Some(to_room), Some(_)) = (crate::reverb::room(), room_from_world.0, &audio.emitter) {
+    // Where the skater is in the real room, for its reverberation (SK8's; an engine the driver hosts puts its own
+    // player there: `engine_driver::aim`).
+    let sk8 = engines.is_some_and(|e| e.current() == Some(crate::engines::Engine::Sk8));
+    if let (Some(room), Some(to_room), Some(_), true) = (crate::reverb::room(), room_from_world.0, &audio.emitter, sk8) {
         room.set_source(to_room.transform_point3(audio.source));
-        if let Some(lab) = &lab {
-            room.set_mix(lab.reverb, lab.damping);
-        }
+    }
+    // (the sound lab's level and deadness of the room: every engine's)
+    if let (Some(room), Some(lab)) = (crate::reverb::room(), &lab) {
+        room.set_mix(lab.reverb, lab.damping);
     }
     // The sound lab holds the loop being tuned on, whatever the skater is doing.
     let held = lab.filter(|lab| lab.audition && lab.selected < Loop::ALL.len()).map(|lab| (lab.selected, lab.pitch));
