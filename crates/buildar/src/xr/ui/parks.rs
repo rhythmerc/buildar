@@ -408,13 +408,12 @@ fn moved(focus: Focus, nav: &Nav, items: &[Item], lines: &[Line]) -> Focus {
         Focus::Tab(_) if nav.right => Focus::Engine,
         Focus::Tab(_) if nav.down => Focus::Item(0, Part::Main),
         Focus::Tab(_) => focus,
-        Focus::Settings if nav.left => Focus::EngineGear,
-        Focus::Settings if nav.down => Focus::Item(0, Part::Main),
+        // (the buildAR Menu, bottom right: up to the last cards)
+        Focus::Settings if nav.up => Focus::Item(items.len() - 1, Part::Main),
         Focus::Settings => focus,
         Focus::Engine if nav.left => Focus::Tab(last_tab),
         Focus::Engine if nav.right => Focus::EngineGear,
         Focus::EngineGear if nav.left => Focus::Engine,
-        Focus::EngineGear if nav.right => Focus::Settings,
         Focus::EngineGear if nav.down => Focus::Item(0, Part::Main),
         Focus::EngineGear => focus,
         Focus::Engine if nav.down => Focus::Item(0, Part::Main),
@@ -447,7 +446,7 @@ fn moved(focus: Focus, nav: &Nav, items: &[Item], lines: &[Line]) -> Focus {
                 }
                 l += step;
             }
-            if nav.up { Focus::Tab(0) } else { focus }
+            if nav.up { Focus::Tab(0) } else { Focus::Settings }
         }
     }
 }
@@ -846,7 +845,7 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
         // (no gear without engine settings: the stick passes it)
         let gear = rows.as_ref().and_then(|r| r.iter().find(|e| e.running)).is_some_and(|e| !EngineToggles::of(world, e.engine).is_empty());
         if focus == Focus::EngineGear && !gear {
-            focus = if nav.left { Focus::Engine } else if nav.right { Focus::Settings } else { Focus::Item(0, Part::Main) };
+            focus = if nav.down { Focus::Item(0, Part::Main) } else { Focus::Engine };
         }
         // The laser chooses what it is on.
         match hovered {
@@ -1251,24 +1250,6 @@ pub(super) fn draw(world: &mut World) {
                         engine_gear(bar, Hit::EngineGear, focus == Some(Focus::EngineGear), &icons);
                     }
                 }
-                // (the app's own menu: its settings and the rest, apart from an engine's own by its gear)
-                bar.spawn((
-                    Hit::Settings,
-                    Node {
-                        height: px(56),
-                        flex_shrink: 0.0,
-                        padding: UiRect::axes(px(20), px(0)),
-                        border: UiRect::all(px(1)),
-                        border_radius: BorderRadius::all(px(16)),
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
-                    BorderColor::all(LINE),
-                    ring(focus == Some(Focus::Settings), 3.5, 4.0),
-                ))
-                .with_children(|b| {
-                    b.spawn((Text::new("buildAR Menu"), fonts.body(19.0, 600), TextColor(DIM), TextLayout::new_with_no_wrap()));
-                });
             });
             // The cards, and how far down them it is.
             panel.spawn(Node { width: percent(100), flex_grow: 1.0, flex_direction: FlexDirection::Column, row_gap: px(GAP_PX), ..default() }).with_children(|cards| {
@@ -1310,16 +1291,36 @@ pub(super) fn draw(world: &mut World) {
             // What the buttons do.
             panel
                 .spawn((
-                    Node { width: percent(100), flex_shrink: 0.0, border: UiRect::top(px(1)), padding: UiRect::top(px(18)), column_gap: px(30), row_gap: px(12), flex_wrap: FlexWrap::Wrap, ..default() },
+                    Node { width: percent(100), flex_shrink: 0.0, border: UiRect::top(px(1)), padding: UiRect::top(px(14)), column_gap: px(24), align_items: AlignItems::Center, ..default() },
                     BorderColor::all(LINE),
                 ))
-                .with_children(|legend| {
-                    for (control, what) in [("Trigger", "play · pencil builds"), ("Grip", "more"), ("B / Menu", "back to playing"), ("Stick", "move")] {
-                        legend.spawn(Node { column_gap: px(7), ..default() }).with_children(|l| {
-                            l.spawn((Text::new(control), fonts.body(17.5, 600), TextColor(DIM)));
-                            l.spawn((Text::new(what), fonts.body(17.5, 400), TextColor(OFF)));
-                        });
-                    }
+                .with_children(|foot| {
+                    foot.spawn(Node { flex_grow: 1.0, flex_shrink: 1.0, column_gap: px(30), row_gap: px(12), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|legend| {
+                        for (control, what) in [("Trigger", "play · pencil builds"), ("Grip", "more"), ("B / Menu", "back to playing"), ("Stick", "move")] {
+                            legend.spawn(Node { column_gap: px(7), ..default() }).with_children(|l| {
+                                l.spawn((Text::new(control), fonts.body(17.5, 600), TextColor(DIM)));
+                                l.spawn((Text::new(what), fonts.body(17.5, 400), TextColor(OFF)));
+                            });
+                        }
+                    });
+                    // The app's own menu, bottom right.
+                    foot.spawn((
+                        Hit::Settings,
+                        Node {
+                            height: px(56),
+                            flex_shrink: 0.0,
+                            padding: UiRect::axes(px(20), px(0)),
+                            border: UiRect::all(px(1)),
+                            border_radius: BorderRadius::all(px(16)),
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BorderColor::all(LINE),
+                        ring(focus == Some(Focus::Settings), 3.5, 4.0),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((Text::new("buildAR Menu"), fonts.body(19.0, 600), TextColor(DIM), TextLayout::new_with_no_wrap()));
+                    });
                 });
         });
         // The engine dropdown's list, over the cards under its pill.
@@ -1853,14 +1854,16 @@ mod tests {
         // Down past the divider keeps the column it can; up from the top line is the first tab.
         assert_eq!(go(Focus::Item(2, Part::Edit), |n| n.down = true), Focus::Item(3, Part::Edit));
         assert_eq!(go(Focus::Item(1, Part::Main), |n| n.up = true), Focus::Tab(0));
-        assert_eq!(go(Focus::Settings, |n| n.down = true), Focus::Item(0, Part::Main));
-        // Along the top: the tabs, the engine, its gear (passed over where it isn't shown: `frame`), Settings, and back.
+        assert_eq!(go(Focus::Settings, |n| n.down = true), Focus::Settings, "the bottom");
+        // Along the top: the tabs, the engine, its gear (passed over where it isn't shown: `frame`), and back.
         assert_eq!(go(Focus::Tab(0), |n| n.right = true), Focus::Tab(1));
         assert_eq!(go(Focus::Tab(1), |n| n.right = true), Focus::Engine);
         assert_eq!(go(Focus::Engine, |n| n.right = true), Focus::EngineGear);
-        assert_eq!(go(Focus::EngineGear, |n| n.right = true), Focus::Settings);
-        assert_eq!(go(Focus::Settings, |n| n.left = true), Focus::EngineGear);
+        assert_eq!(go(Focus::EngineGear, |n| n.right = true), Focus::EngineGear, "the last along the top");
         assert_eq!(go(Focus::EngineGear, |n| n.left = true), Focus::Engine);
+        // The buildAR Menu, bottom right: down from the last cards, up back to them.
+        assert_eq!(go(Focus::Item(3, Part::Main), |n| n.down = true), Focus::Settings);
+        assert_eq!(go(Focus::Settings, |n| n.up = true), Focus::Item(3, Part::Main));
         assert_eq!(go(Focus::Engine, |n| n.left = true), Focus::Tab(1));
         assert_eq!(go(Focus::Tab(1), |n| n.left = true), Focus::Tab(0));
         assert_eq!(go(Focus::Tab(0), |n| n.left = true), Focus::Tab(0));
