@@ -1,6 +1,6 @@
 //! A course's details: what the menu opens on while a course is open (in place of the parks screen; its back arrow, or
 //! B, goes to the parks screen). Its name - big, and renamed in place on a keyboard of the panel's own - its mode and
-//! engine (each a dropdown), its picture, and play, build and delete; its settings (Player scale) in the course
+//! engine (each a dropdown), its picture, and play, build, put down elsewhere and delete; its settings in the course
 //! settings dialog.
 //!
 //! Worked like the parks screen: the laser (the trigger presses), or the sticks (move, A presses, B goes back).
@@ -30,11 +30,13 @@ pub(crate) enum Spot {
     EngineGear,
     Play,
     Edit,
+    /// Put down somewhere else (by hand, where the player points).
+    Place,
     Delete,
 }
 
 /// The screen's spots in rows, as the stick walks them.
-const ROWS: [&[Spot]; 4] = [&[Spot::Back, Spot::Settings], &[Spot::Title], &[Spot::Mode, Spot::Engine, Spot::EngineGear], &[Spot::Play, Spot::Edit, Spot::Delete]];
+const ROWS: [&[Spot]; 4] = [&[Spot::Back, Spot::Settings], &[Spot::Title], &[Spot::Mode, Spot::Engine, Spot::EngineGear], &[Spot::Play, Spot::Edit, Spot::Place, Spot::Delete]];
 
 /// A dropdown: the mode's or the engine's.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -358,6 +360,7 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
             // first)
             Some(Spot::Play) => outcome = super::open_with_engine(world, &details.id, super::Then::Open(false)),
             Some(Spot::Edit) => outcome = super::open_with_engine(world, &details.id, super::Then::Open(true)),
+            Some(Spot::Place) => outcome = super::open_with_engine(world, &details.id, super::Then::Place),
             Some(Spot::Delete) => world.resource_mut::<ParksScreen>().confirm = Some((details.id.clone(), false)),
             None if nav.back => {
                 // (B: to the parks)
@@ -611,10 +614,11 @@ pub(super) fn panel(root: &mut Spawner, view: &View, fonts: &Fonts, icons: &Icon
                     super::tag(picture, fonts, (None, Some(16.0)), &view.info, DIM, MENU.with_alpha(0.85));
                 }
             });
-        // Play, build, delete.
+        // Play, build, put down elsewhere, delete.
         panel.spawn(Node { width: percent(100), flex_shrink: 0.0, align_items: AlignItems::Center, column_gap: px(14), ..default() }).with_children(|row| {
             pill(row, CHit::Spot(Spot::Play), Tone::Main, focus == Some(Spot::Play), &icons.play, "Play", fonts);
             pill(row, CHit::Spot(Spot::Edit), Tone::Plain, focus == Some(Spot::Edit), &icons.pencil, "Edit", fonts);
+            pill(row, CHit::Spot(Spot::Place), Tone::Plain, focus == Some(Spot::Place), &icons.place, "Place", fonts);
             row.spawn(Node { flex_grow: 1.0, ..default() });
             pill(row, CHit::Spot(Spot::Delete), Tone::Danger, focus == Some(Spot::Delete), &icons.trash, "Delete", fonts);
         });
@@ -742,7 +746,7 @@ mod tests {
 
     #[test]
     fn every_spot_is_in_a_row() {
-        for spot in [Spot::Back, Spot::Settings, Spot::Title, Spot::Mode, Spot::Engine, Spot::EngineGear, Spot::Play, Spot::Edit, Spot::Delete] {
+        for spot in [Spot::Back, Spot::Settings, Spot::Title, Spot::Mode, Spot::Engine, Spot::EngineGear, Spot::Play, Spot::Edit, Spot::Place, Spot::Delete] {
             let (r, c) = spot_at(spot);
             assert_eq!(ROWS[r][c], spot);
         }

@@ -1,14 +1,14 @@
 //! The parks screen: what the menu opens on (at launch, and on a menu tap
 //! while skating). A tab for each mode's courses (Parks for skating, Tracks for
-//! racing), and on it a card for each saved course ([`crate::xr::build::parks`])
-//! with a play and an edit button, and a card to start a new one first.
-//! Parks found in this room come first; past a divider, the ones that have to
-//! be put down by hand. Each lot by when it was last opened. The open park is
-//! ringed. Settings (the old start page) is the gear in the top right corner.
+//! racing), and on it a card for each saved course ([`crate::xr::build::parks`]:
+//! pressed, its details - played, built, put down, set and deleted there), and a
+//! card to start a new one first, with the engine dropdown on it. Parks found in
+//! this room come first; past a divider, the ones that have to be put down by
+//! hand. Each lot by when it was last opened. The open park is ringed. The
+//! buildAR Menu (the old start page) is bottom right.
 //!
-//! Worked with the laser (the trigger on a card plays it; on its pencil,
-//! builds it) or the sticks (move, A presses, the right grip opens a park's
-//! "more" menu, B goes back to skating).
+//! Worked with the laser (the trigger presses) or the sticks (move, A presses,
+//! B goes back to skating).
 mod course;
 
 use super::{pages, Nav, Outcome, XrUi, UI_BODY_FONT, UI_FONT};
@@ -64,10 +64,8 @@ enum Hit {
     EngineRow(usize),
     /// The missing engine's warning: "Play with current engine" (true) or "Cancel".
     Warn(bool),
-    /// A card (the new-course card: a new course; a course's: its details), and a course's menu (the grip on its card).
+    /// A card (the new-course card: a new course; a course's: its details).
     Item(usize),
-    More(usize),
-    MenuRow(usize),
     Confirm(bool),
     /// The course settings: its size a step bigger (true) or smaller; its engine's setting (by its place) likewise;
     /// and Done.
@@ -127,27 +125,6 @@ enum Line {
     Divider(&'static str),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum MenuAction {
-    Settings,
-    Duplicate,
-    PlaceElsewhere,
-    Forget,
-    Delete,
-}
-
-impl MenuAction {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Settings => "Course settings",
-            Self::Duplicate => "Duplicate",
-            Self::PlaceElsewhere => "Put it somewhere else",
-            Self::Forget => "Forget it in this room",
-            Self::Delete => "Delete park",
-        }
-    }
-}
-
 /// What the screen shows (drawn again whenever it changes).
 #[derive(Clone, PartialEq, Debug, Default)]
 struct Model {
@@ -157,8 +134,6 @@ struct Model {
     lines: Vec<Line>,
     first: usize,
     focus: Option<Focus>,
-    /// A park's "more" menu: its name, the rows, the one chosen.
-    menu: Option<(String, Vec<MenuAction>, usize)>,
     /// A park about to be deleted: its name, and which button is chosen.
     confirm: Option<(String, bool)>,
     /// A course's settings open.
@@ -253,8 +228,6 @@ pub(crate) struct ParksScreen {
     tab: usize,
     focus: Focus,
     first: usize,
-    /// The park whose menu is open, and the row chosen.
-    menu: Option<(String, usize)>,
     /// The park asked to be deleted, and whether "Delete" is chosen.
     confirm: Option<(String, bool)>,
     /// A course's details open (the open course's, the menu opened while playing it): in place of the parks.
@@ -288,6 +261,7 @@ struct Icons {
     chevron: Handle<Image>,
     sliders: Handle<Image>,
     check: Handle<Image>,
+    place: Handle<Image>,
 }
 
 /// The display face (titles, names) and the running text's.
@@ -435,7 +409,6 @@ pub(crate) fn opened_by_menu(world: &mut World) {
     let current = world.resource::<Parks>().current.as_ref().map(|c| c.id.clone());
     let mut screen = world.resource_mut::<ParksScreen>();
     screen.details = current.map(course::Details::new);
-    screen.menu = None;
     screen.settings = None;
     screen.engine_settings = None;
     screen.confirm = None;
@@ -446,15 +419,6 @@ pub(crate) fn opened_on_parks(world: &mut World) {
     world.resource_mut::<ParksScreen>().details = None;
 }
 
-fn menu_for(here: Here, current: bool) -> Vec<MenuAction> {
-    let mut rows = vec![MenuAction::Settings, MenuAction::Duplicate, MenuAction::PlaceElsewhere];
-    // (the open park is kept here: forgetting it would only anchor it again)
-    if here == Here::Found && !current {
-        rows.push(MenuAction::Forget);
-    }
-    rows.push(MenuAction::Delete);
-    rows
-}
 
 /// The engines for the dropdown, those the menus offer for courses of `mode` (none: the app has no engine choice
 /// for them).
@@ -577,9 +541,9 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
     let pressed = |hit: Option<Hit>| if point.click { hit } else { None };
     let mut outcome = Outcome::Stay;
 
-    let (menu, confirm, warning, dropdown, settings) = {
+    let (confirm, warning, dropdown, settings) = {
         let screen = world.resource::<ParksScreen>();
-        (screen.menu.clone(), screen.confirm.clone(), screen.warning.clone(), screen.engines, screen.settings.clone())
+        (screen.confirm.clone(), screen.warning.clone(), screen.engines, screen.settings.clone())
     };
     let rows = engine_rows(world, mode);
     if let Some((id, then, play)) = warning {
@@ -757,60 +721,6 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
             Some(false) => world.resource_mut::<ParksScreen>().confirm = None,
             None => world.resource_mut::<ParksScreen>().confirm = Some((id, delete)),
         }
-    } else if let Some((id, row)) = menu {
-        let (here, current) = {
-            let parks = world.resource::<Parks>();
-            (parks.here(&id, world.resource::<Anchors>()), parks.is_current(&id))
-        };
-        let rows = menu_for(here, current);
-        let mut row = row.min(rows.len() - 1);
-        if nav.up {
-            row = (row + rows.len() - 1) % rows.len();
-        }
-        if nav.down {
-            row = (row + 1) % rows.len();
-        }
-        if let Some(Hit::MenuRow(r)) = hovered {
-            row = r.min(rows.len() - 1);
-        }
-        let action = match pressed(hovered) {
-            Some(Hit::MenuRow(r)) => rows.get(r).copied(),
-            Some(_) => {
-                world.resource_mut::<ParksScreen>().menu = None;
-                None
-            }
-            None if nav.select => Some(rows[row]),
-            None if nav.back || nav.more => {
-                world.resource_mut::<ParksScreen>().menu = None;
-                None
-            }
-            None => {
-                world.resource_mut::<ParksScreen>().menu = Some((id.clone(), row));
-                None
-            }
-        };
-        if let Some(action) = action {
-            world.resource_mut::<ParksScreen>().menu = None;
-            outcome = match action {
-                MenuAction::Settings => {
-                    world.resource_mut::<ParksScreen>().settings = Some((id, SettingsRow::Size));
-                    Outcome::Stay
-                }
-                MenuAction::Duplicate => match park::duplicate(world, &id) {
-                    Some(_) => Outcome::Say("Copied".into()),
-                    None => Outcome::Stay,
-                },
-                MenuAction::PlaceElsewhere => open_with_engine(world, &id, Then::Place),
-                MenuAction::Forget => {
-                    park::forget_here(world, &id);
-                    Outcome::Say("Forgotten in this room: it opens in its other places".into())
-                }
-                MenuAction::Delete => {
-                    world.resource_mut::<ParksScreen>().confirm = Some((id, false));
-                    Outcome::Stay
-                }
-            };
-        }
     } else if world.resource::<ParksScreen>().details.is_some() {
         outcome = course::frame(world, nav, point);
     } else {
@@ -838,11 +748,6 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 Focus::Engine => Hit::Engine,
                 Focus::Item(i) => Hit::Item(i),
             }),
-            // (the grip on a course's card: its menu)
-            None if nav.more => match focus {
-                Focus::Item(i) => Some(Hit::More(i)),
-                Focus::Tab(_) | Focus::Settings | Focus::Engine => None,
-            },
             None => None,
         };
         outcome = match press {
@@ -874,21 +779,15 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 }
                 Outcome::Stay
             }
-            Some(Hit::More(i)) => {
-                if let Some(id) = park_id(i) {
-                    world.resource_mut::<ParksScreen>().menu = Some((id, 0));
-                }
-                Outcome::Stay
-            }
             _ if nav.back => Outcome::Back,
             _ => Outcome::Stay,
         };
     }
 
     // What to draw.
-    let (focus, first, menu, confirm, warning, dropdown) = {
+    let (focus, first, confirm, warning, dropdown) = {
         let screen = world.resource::<ParksScreen>();
-        (screen.focus, screen.first, screen.menu.clone(), screen.confirm.clone(), screen.warning.clone(), screen.engines)
+        (screen.focus, screen.first, screen.confirm.clone(), screen.warning.clone(), screen.engines)
     };
     let focus_line = match focus {
         Focus::Item(i) => line_of(&lines, i).map_or(0, |(l, _)| l),
@@ -910,11 +809,6 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
     });
     let first = scrolled(&lines, first, focus_line);
     let name = |id: &str| world.resource::<Parks>().get(id).map_or(String::new(), |p| p.file.name.clone());
-    let menu = menu.map(|(id, row)| {
-        let parks = world.resource::<Parks>();
-        let rows = menu_for(parks.here(&id, world.resource::<Anchors>()), parks.is_current(&id));
-        (name(&id), rows, row)
-    });
     let confirm = confirm.map(|(id, delete)| (name(&id), delete));
     let settings = world.resource::<ParksScreen>().settings.clone().map(|(id, row)| {
         let t = size::course_times(world, &id);
@@ -945,7 +839,7 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
         row,
     });
     let details = course::view(world, settings.is_some() || confirm.is_some() || engine_settings.is_some());
-    let model = Model { tab, items, lines, first, focus: Some(focus), menu, confirm, settings, engine_settings, details, engine, warning, status };
+    let model = Model { tab, items, lines, first, focus: Some(focus), confirm, settings, engine_settings, details, engine, warning, status };
     let mut screen = world.resource_mut::<ParksScreen>();
     screen.first = first;
     screen.model = model;
@@ -1052,7 +946,7 @@ fn thumbnail(file: &ParkFile, w: u32, h: u32) -> Vec<u8> {
 
 /// The icons, white on clear (tinted where they are drawn): play, a pencil,
 /// three dots, a gear.
-fn icons() -> [Vec<u8>; 8] {
+fn icons() -> [Vec<u8>; 9] {
     let n = ICON as f32;
     let shape = |inside: &dyn Fn(Vec2) -> bool| -> Vec<u8> {
         let mut out = vec![0u8; (ICON * ICON * 4) as usize];
@@ -1111,15 +1005,20 @@ fn icons() -> [Vec<u8>; 8] {
         bars || p.distance(Vec2::new(0.64, 0.32)) <= 0.11 || p.distance(Vec2::new(0.38, 0.68)) <= 0.11
     });
     let check = shape(&|p| stroke(p, Vec2::new(0.2, 0.52), Vec2::new(0.42, 0.74), 0.08) || stroke(p, Vec2::new(0.42, 0.74), Vec2::new(0.82, 0.3), 0.08));
-    [play, pencil, gear, back, trash, chevron, sliders, check]
+    // (a target: a ring and its middle - where a course is put down)
+    let place = shape(&|p| {
+        let d = p.distance(Vec2::splat(0.5));
+        (0.27..=0.37).contains(&d) || d <= 0.1
+    });
+    [play, pencil, gear, back, trash, chevron, sliders, check, place]
 }
 
 // ---------------------------------------------------------------- view
 
 pub(super) fn spawn(mut commands: Commands, panel: Res<XrPanel>, assets: Res<AssetServer>, mut images: ResMut<Assets<Image>>, mut screen: ResMut<ParksScreen>) {
     screen.fonts = Some(Fonts { display: assets.load(UI_FONT), body: assets.load(UI_BODY_FONT) });
-    let [play, pencil, gear, back, trash, chevron, sliders, check] = icons().map(|pixels| images.add(image_of(pixels, ICON, ICON)));
-    screen.icons = Some(Icons { play, pencil, gear, back, trash, chevron, sliders, check });
+    let [play, pencil, gear, back, trash, chevron, sliders, check, place] = icons().map(|pixels| images.add(image_of(pixels, ICON, ICON)));
+    screen.icons = Some(Icons { play, pencil, gear, back, trash, chevron, sliders, check, place });
     let root = commands
         .spawn((
             ParksRoot,
@@ -1181,7 +1080,7 @@ pub(super) fn draw(world: &mut World) {
     let (Some(fonts), Some(icons)) = (fonts, icons) else { return };
     world.resource_mut::<ParksScreen>().drawn = Some(model.clone());
     let dropdown_open = model.engine.as_ref().is_some_and(|(_, d)| d.is_some());
-    let modal = model.menu.is_some() || model.confirm.is_some() || model.warning.is_some() || model.engine_settings.is_some() || dropdown_open;
+    let modal = model.confirm.is_some() || model.warning.is_some() || model.engine_settings.is_some() || dropdown_open;
     let focus = model.focus.filter(|_| !modal);
     world.entity_mut(root).despawn_children();
     world.entity_mut(root).with_children(|root| {
@@ -1265,7 +1164,7 @@ pub(super) fn draw(world: &mut World) {
                 ))
                 .with_children(|foot| {
                     foot.spawn(Node { flex_grow: 1.0, flex_shrink: 1.0, column_gap: px(30), row_gap: px(12), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|legend| {
-                        for (control, what) in [("Trigger", "open"), ("Grip", "more"), ("B / Menu", "back to playing"), ("Stick", "move")] {
+                        for (control, what) in [("Trigger", "open"), ("B / Menu", "back to playing"), ("Stick", "move")] {
                             legend.spawn(Node { column_gap: px(7), ..default() }).with_children(|l| {
                                 l.spawn((Text::new(control), fonts.body(17.5, 600), TextColor(DIM)));
                                 l.spawn((Text::new(what), fonts.body(17.5, 400), TextColor(OFF)));
@@ -1305,27 +1204,6 @@ pub(super) fn draw(world: &mut World) {
                     .with_children(|t| {
                         t.spawn((Text::new(model.status.clone()), fonts.body(19.0, 600), TextColor(INK)));
                     });
-            });
-        }
-        if let Some((name, rows, chosen)) = &model.menu {
-            modal_box(root, 420.0, |b| {
-                b.spawn((Text::new(fitted(name)), fonts.display(22.0, 700), TextColor(Color::WHITE), Node { padding: UiRect::new(px(18), px(18), px(10), px(8)), ..default() }));
-                for (k, action) in rows.iter().enumerate() {
-                    let danger = *action == MenuAction::Delete;
-                    if danger {
-                        b.spawn((Node { height: px(1), margin: UiRect::axes(px(6), px(6)), ..default() }, BackgroundColor(LINE)));
-                    }
-                    let on = k == *chosen;
-                    b.spawn((
-                        Hit::MenuRow(k),
-                        Node { width: percent(100), padding: UiRect::axes(px(18), px(12)), border_radius: BorderRadius::all(px(10)), ..default() },
-                        BackgroundColor(if on { SELECTED } else { Color::NONE }),
-                    ))
-                    .with_children(|r| {
-                        let color = if danger { DANGER } else if on { Color::WHITE } else { DIM };
-                        r.spawn((Text::new(action.label()), fonts.body(21.0, 500), TextColor(color)));
-                    });
-                }
             });
         }
         if let Some(view) = &model.engine_settings {
@@ -1820,8 +1698,7 @@ mod tests {
     }
 
     /// The parks screen as the headset draws it, saved as a picture to look at:
-    /// `SK8_UI_SHOT=/path/parks.png cargo test ... a_picture_of_the_parks_screen -- --ignored`
-    /// (`SK8_UI_SHOT_MENU=1` with a park's menu open).
+    /// `SK8_UI_SHOT=/path/parks.png cargo test ... a_picture_of_the_parks_screen -- --ignored`.
     #[test]
     #[ignore = "needs a GPU; writes a picture"]
     fn a_picture_of_the_parks_screen() {
@@ -1918,7 +1795,6 @@ mod tests {
             app.insert_resource(registry);
             app.world_mut().resource_mut::<Parks>().list.iter_mut().find(|p| p.id == "t").unwrap().file.engine = Some("mkwii".into());
         }
-        let menu = std::env::var_os("SK8_UI_SHOT_MENU").is_some();
         // (`SK8_UI_SHOT_ENGINES=1`: the engine dropdown open; `SK8_UI_SHOT_WARNING=1`: a park built for Skate 3, which
         // isn't in the app, opened)
         let dropdown = std::env::var_os("SK8_UI_SHOT_ENGINES").is_some();
@@ -1954,9 +1830,6 @@ mod tests {
                         screen.focus = Focus::Item(if tracks { 0 } else { 2 });
                         if tracks {
                             screen.tab = 1;
-                        }
-                        if menu {
-                            screen.menu = Some(("b".into(), 1));
                         }
                         if dropdown && screen.engines.is_none() {
                             screen.engines = Some(1);

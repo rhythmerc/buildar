@@ -833,19 +833,6 @@ pub(crate) fn set_mode(world: &mut World, id: &str, mode: Mode) {
     }
 }
 
-/// A copy of park `id`, in the same places.
-pub(crate) fn duplicate(world: &mut World, id: &str) -> Option<String> {
-    let mut parks = world.resource_mut::<Parks>();
-    let mut file = parks.get(id)?.file.clone();
-    let copy = new_id(&parks.list);
-    file.name = next_name(&parks.list, &format!("{} copy", file.name));
-    file.created = now();
-    file.opened = file.created;
-    parks.list.push(ParkEntry { id: copy.clone(), file, edits: 0 });
-    parks.save(&copy);
-    Some(copy)
-}
-
 /// Park `id` gone, and the anchors of it that the headset has found erased.
 pub(crate) fn delete(world: &mut World, id: &str) {
     let Some(entry) = world.resource::<Parks>().get(id).cloned() else { return };
@@ -870,26 +857,6 @@ pub(crate) fn delete(world: &mut World, id: &str) {
     parks.revision += 1;
     info!("PARKS deleted {id}");
 }
-
-/// Park `id` no longer kept in this room: the anchors of it found here are dropped.
-pub(crate) fn forget_here(world: &mut World, id: &str) {
-    let here: Vec<String> = {
-        let anchors = world.resource::<Anchors>();
-        world.resource::<Parks>().get(id).map(|p| p.file.anchors.iter().filter(|r| anchors.located(&r.uuid).is_some()).map(|r| r.uuid.clone()).collect()).unwrap_or_default()
-    };
-    let shared: Vec<String> = world.resource::<Parks>().list.iter().filter(|p| p.id != id).flat_map(|p| p.file.anchors.iter().map(|r| r.uuid.clone())).collect();
-    for uuid in &here {
-        if !shared.contains(uuid) {
-            world.resource_mut::<Anchors>().erase(uuid);
-        }
-    }
-    let mut parks = world.resource_mut::<Parks>();
-    if let Some(entry) = parks.get_mut(id) {
-        entry.file.anchors.retain(|r| !here.contains(&r.uuid));
-    }
-    parks.save(id);
-}
-
 
 #[cfg(test)]
 mod tests {
