@@ -1917,11 +1917,6 @@ pub(crate) fn snap_scale(scale: f32) -> f32 {
     ((scale / SIZE_STEP).round() * SIZE_STEP).clamp(MIN_PIECE_SCALE, MAX_PIECE_SCALE)
 }
 
-/// Drop the skater onto whatever is at `at` (tracking space), facing
-/// `forward`, once the collision for `revision` has been made.
-pub(crate) fn drop_skater_after_rebuild(world: &mut World, at: Vec3, forward: Vec3, revision: u64) {
-    world.resource_mut::<BuildState>().drop_after_rebuild = Some((at, forward, revision));
-}
 
 /// A park being put down ([`parks::Placing`]): it follows the pointer on the
 /// room's level surfaces (floor, table, shelf: its floor goes on what is

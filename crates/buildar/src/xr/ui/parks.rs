@@ -69,8 +69,10 @@ enum Hit {
     More(usize),
     MenuRow(usize),
     Confirm(bool),
-    /// The course settings: its size a step bigger (true) or smaller, and Done.
+    /// The course settings: its size a step bigger (true) or smaller; its engine's setting (by its place) likewise;
+    /// and Done.
     SizeStep(bool),
+    EngineStep(usize, bool),
     SettingsDone,
     /// Around an open menu: closes it.
     Backdrop,
@@ -175,7 +177,7 @@ struct Model {
 }
 
 /// A course's settings as shown: its title, its name, its size and whether it can go smaller and
-/// bigger, and the row chosen (the size, Done).
+/// bigger, its engine's settings the player steps, and the row chosen.
 #[derive(Clone, PartialEq, Debug)]
 struct SettingsView {
     title: String,
@@ -183,14 +185,38 @@ struct SettingsView {
     size: String,
     smaller: bool,
     bigger: bool,
+    steppers: Vec<StepperView>,
     row: SettingsRow,
 }
 
+/// An engine's setting of the course as shown (`engines::CourseStepper`): its label, its line, its value, and
+/// whether it can go down and up.
+#[derive(Clone, PartialEq, Debug)]
+struct StepperView {
+    label: String,
+    help: String,
+    value: String,
+    down: bool,
+    up: bool,
+}
+
+/// The dialog's rows: the player scale, the engine's settings (each by its place), Done.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 enum SettingsRow {
     #[default]
     Size,
+    Engine(usize),
     Done,
+}
+
+impl SettingsRow {
+    /// The row above (`up`) or below, of a dialog with `engine` engine settings (round from the ends).
+    fn moved(self, up: bool, engine: usize) -> Self {
+        let rows: Vec<SettingsRow> =
+            std::iter::once(SettingsRow::Size).chain((0..engine).map(SettingsRow::Engine)).chain(std::iter::once(SettingsRow::Done)).collect();
+        let at = rows.iter().position(|r| *r == self).unwrap_or(0);
+        rows[if up { (at + rows.len() - 1) % rows.len() } else { (at + 1) % rows.len() }]
+    }
 }
 
 /// An engine in the dropdown.
@@ -614,23 +640,31 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
             None => Some(row),
         };
     } else if let Some((id, row)) = settings {
-        // A course's settings: its size stepped (left/right on its row, or the laser's -/+, held to repeat), Done.
+        // A course's settings: its size and its engine's settings stepped (left/right on its row, or the laser's -/+,
+        // held to repeat), Done.
+        let steppers = park::course_steppers(world, &id);
         let mut row = row;
+        if let SettingsRow::Engine(i) = row
+            && i >= steppers.len()
+        {
+            row = SettingsRow::Size;
+        }
         if nav.up || nav.down {
-            row = if row == SettingsRow::Size { SettingsRow::Done } else { SettingsRow::Size };
+            row = row.moved(nav.up, steppers.len());
         }
         match hovered {
             Some(Hit::SizeStep(_)) => row = SettingsRow::Size,
+            Some(Hit::EngineStep(i, _)) => row = SettingsRow::Engine(i),
             Some(Hit::SettingsDone) => row = SettingsRow::Done,
             _ => {}
         }
         let dt = world.resource::<Time<Real>>().delta_secs();
         let mut steps = 0;
-        if row == SettingsRow::Size {
+        if row != SettingsRow::Done {
             steps += i32::from(nav.right) - i32::from(nav.left);
         }
         let held_on = match hovered {
-            Some(Hit::SizeStep(up)) if point.held || point.click => Some(up),
+            Some(Hit::SizeStep(up) | Hit::EngineStep(_, up)) if point.held || point.click => Some(up),
             _ => None,
         };
         {
@@ -640,8 +674,18 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
             }
         }
         if steps != 0 {
-            let t = size::stepped(size::course_times(world, &id), steps);
-            size::set_course_times(world, &id, t);
+            match row {
+                SettingsRow::Size => {
+                    let t = size::stepped(size::course_times(world, &id), steps);
+                    size::set_course_times(world, &id, t);
+                }
+                SettingsRow::Engine(i) => {
+                    let stepper = steppers[i];
+                    let value = stepper.stepped(park::stepper_value(world, &id, &stepper), steps);
+                    park::set_stepper(world, &id, &stepper, value);
+                }
+                SettingsRow::Done => {}
+            }
         }
         let close = match pressed(hovered) {
             Some(Hit::SettingsDone | Hit::Backdrop) => true,
@@ -829,12 +873,20 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
     let confirm = confirm.map(|(id, delete)| (name(&id), delete));
     let settings = world.resource::<ParksScreen>().settings.clone().map(|(id, row)| {
         let t = size::course_times(world, &id);
+        let steppers = park::course_steppers(world, &id)
+            .iter()
+            .map(|s| {
+                let v = park::stepper_value(world, &id, s);
+                StepperView { label: s.label.into(), help: s.help.into(), value: s.label_of(v), down: s.stepped(v, -1) < v, up: s.stepped(v, 1) > v }
+            })
+            .collect();
         SettingsView {
             title: "Course settings".into(),
             name: name(&id),
             size: size::label(t),
             smaller: size::stepped(t, -1) < t,
             bigger: size::stepped(t, 1) > t,
+            steppers,
             row,
         }
     });
@@ -1377,34 +1429,17 @@ fn settings_box(root: &mut Spawner, view: &SettingsView, fonts: &Fonts) {
             words.spawn((Text::new(view.title.clone()), fonts.display(28.0, 800), TextColor(Color::WHITE)));
             words.spawn((Text::new(fitted(&view.name)), fonts.body(19.0, 500), TextColor(DIM)));
         });
-        let on = view.row == SettingsRow::Size;
-        b.spawn((
-            Node {
-                width: percent(100),
-                padding: UiRect::axes(px(18), px(14)),
-                column_gap: px(18),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
-                border_radius: BorderRadius::all(px(12)),
-                ..default()
-            },
-            BackgroundColor(if on { SELECTED } else { CARD }),
-        ))
-        .with_children(|row| {
-            row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), flex_shrink: 1.0, ..default() }).with_children(|words| {
-                words.spawn((Text::new("Player scale"), fonts.display(22.0, 700), TextColor(Color::WHITE)));
-                words.spawn((Text::new("x1.0 is the default (toy-sized)"), fonts.body(17.0, 400), TextColor(if on { Color::WHITE } else { DIM })));
-            });
-            row.spawn(Node { column_gap: px(12), align_items: AlignItems::Center, flex_shrink: 0.0, ..default() }).with_children(|stepper| {
-                step_button(stepper, false, view.smaller, fonts);
-                stepper
-                    .spawn(Node { width: px(96), justify_content: JustifyContent::Center, ..default() })
-                    .with_children(|v| {
-                        v.spawn((Text::new(view.size.clone()), fonts.display(28.0, 800), TextColor(TEAL)));
-                    });
-                step_button(stepper, true, view.bigger, fonts);
-            });
-        });
+        stepper_row(
+            b,
+            view.row == SettingsRow::Size,
+            ("Player scale", "x1.0 is the default (toy-sized)", &view.size),
+            (view.smaller, view.bigger),
+            Hit::SizeStep,
+            fonts,
+        );
+        for (i, s) in view.steppers.iter().enumerate() {
+            stepper_row(b, view.row == SettingsRow::Engine(i), (&s.label, &s.help, &s.value), (s.down, s.up), move |up| Hit::EngineStep(i, up), fonts);
+        }
         b.spawn(Node { padding: UiRect::all(px(18)), justify_content: JustifyContent::FlexEnd, ..default() }).with_children(|buttons| {
             let on = view.row == SettingsRow::Done;
             buttons
@@ -1421,11 +1456,41 @@ fn settings_box(root: &mut Spawner, view: &SettingsView, fonts: &Fonts) {
     });
 }
 
+/// A setting's row in the course settings: its label and line, and its value between a smaller and a bigger button
+/// (`hit` names them), highlighted when `on`.
+fn stepper_row(b: &mut Spawner, on: bool, (label, help, value): (&str, &str, &str), (down, up): (bool, bool), hit: impl Fn(bool) -> Hit, fonts: &Fonts) {
+    b.spawn((
+        Node {
+            width: percent(100),
+            padding: UiRect::axes(px(18), px(14)),
+            column_gap: px(18),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::SpaceBetween,
+            border_radius: BorderRadius::all(px(12)),
+            ..default()
+        },
+        BackgroundColor(if on { SELECTED } else { CARD }),
+    ))
+    .with_children(|row| {
+        row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), flex_shrink: 1.0, ..default() }).with_children(|words| {
+            words.spawn((Text::new(label), fonts.display(22.0, 700), TextColor(Color::WHITE)));
+            words.spawn((Text::new(help), fonts.body(17.0, 400), TextColor(if on { Color::WHITE } else { DIM })));
+        });
+        row.spawn(Node { column_gap: px(12), align_items: AlignItems::Center, flex_shrink: 0.0, ..default() }).with_children(|stepper| {
+            step_button(stepper, hit(false), false, down, fonts);
+            stepper.spawn(Node { width: px(96), justify_content: JustifyContent::Center, ..default() }).with_children(|v| {
+                v.spawn((Text::new(value), fonts.display(28.0, 800), TextColor(TEAL)));
+            });
+            step_button(stepper, hit(true), true, up, fonts);
+        });
+    });
+}
+
 /// A stepper's round button: a step bigger ("+") or smaller ("−"); greyed at its end.
-fn step_button(parent: &mut Spawner, bigger: bool, can: bool, fonts: &Fonts) {
+fn step_button(parent: &mut Spawner, hit: Hit, bigger: bool, can: bool, fonts: &Fonts) {
     parent
         .spawn((
-            Hit::SizeStep(bigger),
+            hit,
             Node {
                 width: px(54),
                 height: px(54),
@@ -1720,6 +1785,19 @@ mod tests {
         // (`SK8_UI_SHOT_TAB=1`: the Tracks tab; `SK8_UI_SHOT_SETTINGS=1`: a park's settings open)
         let tracks = std::env::var_os("SK8_UI_SHOT_TAB").is_some();
         let settings = std::env::var_os("SK8_UI_SHOT_SETTINGS").is_some();
+        // (`SK8_UI_SHOT_SETTINGS=track`: a Mario Kart Wii track's, its engine's settings below the scale, one kept)
+        let track_settings = std::env::var("SK8_UI_SHOT_SETTINGS").is_ok_and(|v| v == "track");
+        if track_settings {
+            use crate::engines::{CourseStepper, CourseSteppers, Engine};
+            let step = |key, label, range| CourseStepper { key, label, help: "100% is the kart's own", range, default: 1.0, percent: true };
+            let mut steppers = CourseSteppers::default();
+            steppers.0.insert(Engine::Mkwii, vec![step("speed", "Top speed", (0.5, 2.0, 0.05)), step("acceleration", "Acceleration", (0.5, 3.0, 0.1))]);
+            app.insert_resource(steppers);
+            let mut parks = app.world_mut().resource_mut::<Parks>();
+            let t = parks.list.iter_mut().find(|p| p.id == "t").unwrap();
+            t.file.engine = Some("mkwii".into());
+            t.file.engine_settings = Some(serde_json::json!({ "speed": 1.5 }));
+        }
         // (`SK8_UI_SHOT_DETAILS=open|rename|mode|engine`: a course's details, as it says)
         let details = std::env::var("SK8_UI_SHOT_DETAILS").ok();
         if warning {
@@ -1746,7 +1824,7 @@ mod tests {
                             screen.warning = Some(("b".into(), Then::Open(false), false));
                         }
                         if settings && screen.settings.is_none() {
-                            screen.settings = Some(("b".into(), SettingsRow::Size));
+                            screen.settings = Some(if track_settings { ("t".into(), SettingsRow::Engine(0)) } else { ("b".into(), SettingsRow::Size) });
                         }
                         if let Some(state) = &details
                             && screen.details.is_none()

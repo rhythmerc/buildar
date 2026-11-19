@@ -32,7 +32,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 pub(crate) use engine_api::{Availability, BeforeSwitch, Engine, EngineOwned, EngineSet, EngineSwitched};
 #[cfg(feature = "xr")]
-pub(crate) use engine_api::{CourseSettings, Mode};
+pub(crate) use engine_api::{CourseSettings, CourseStepper, CourseSteppers, Mode};
 
 /// The engines the app carries and which one runs.
 #[derive(Resource)]

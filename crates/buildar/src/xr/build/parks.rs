@@ -17,7 +17,7 @@
 //! [`Current::pose`] there.
 use super::anchor::Anchors;
 use super::{MAX_PARK_SCALE, MAX_SCALE, MIN_PARK_SCALE, MIN_SCALE, Placed, PlacedPieces};
-use crate::engines::{CourseSettings, Engine, Engines, Mode};
+use crate::engines::{CourseSettings, CourseStepper, CourseSteppers, Engine, Engines, Mode};
 use crate::xr::rig::Rig;
 use crate::xr::XrFiles;
 use bevy::prelude::*;
@@ -610,6 +610,41 @@ pub(crate) fn use_its_engine(world: &mut World, id: &str) {
     CourseSettings::apply(world, engine, &settings);
 }
 
+/// The engine course `id` plays on: the one it was built for, else its mode's.
+pub(crate) fn course_engine(world: &World, id: &str) -> Option<Engine> {
+    let file = &world.resource::<Parks>().get(id)?.file;
+    file.engine().or_else(|| engine_of_mode(world, file.mode()?))
+}
+
+/// The settings course `id` keeps that the player steps (its engine's, in the course settings dialog).
+pub(crate) fn course_steppers(world: &World, id: &str) -> Vec<CourseStepper> {
+    let Some(engine) = course_engine(world, id) else { return Vec::new() };
+    world.get_resource::<CourseSteppers>().and_then(|s| s.0.get(&engine)).cloned().unwrap_or_default()
+}
+
+/// A stepped setting's value on course `id`: what it keeps, else its default.
+pub(crate) fn stepper_value(world: &World, id: &str, stepper: &CourseStepper) -> f32 {
+    let kept = world.resource::<Parks>().get(id).and_then(|p| p.file.engine_settings.as_ref()?.get(stepper.key)?.as_f64());
+    kept.map_or(stepper.default, |v| v as f32)
+}
+
+/// A stepped setting of course `id` set: kept with it, and in play now if it's the open course.
+pub(crate) fn set_stepper(world: &mut World, id: &str, stepper: &CourseStepper, value: f32) {
+    let Some(engine) = course_engine(world, id) else { return };
+    let settings = {
+        let mut parks = world.resource_mut::<Parks>();
+        let Some(entry) = parks.get_mut(id) else { return };
+        let mut settings = entry.file.engine_settings.take().filter(serde_json::Value::is_object).unwrap_or_else(|| serde_json::json!({}));
+        settings[stepper.key] = serde_json::json!(value);
+        entry.file.engine_settings = Some(settings.clone());
+        parks.save(id);
+        settings
+    };
+    if world.resource::<Parks>().is_current(id) {
+        CourseSettings::apply(world, engine, &settings);
+    }
+}
+
 /// For a course of `mode`: the running engine if it is of that mode, else the first of that mode the menus offer
 /// that can run.
 pub(crate) fn engine_of_mode(world: &World, mode: Mode) -> Option<Engine> {
@@ -1065,6 +1100,57 @@ mod tests {
         tag_engine(app.world_mut());
         assert_eq!(kept(&app, "s3").engine.as_deref(), Some("skate3"));
         assert_eq!(kept(&app, "s3").engine_settings, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A course's engine settings stepped in its settings dialog: its default until it keeps one; set, kept with
+    /// it (and written), and in play only if it is the open course.
+    #[test]
+    fn a_courses_stepped_settings_are_kept_with_it() {
+        use crate::engines::Engine;
+        #[derive(Resource, Default)]
+        struct Live(Option<serde_json::Value>);
+        let mut world = World::new();
+        world.init_resource::<Live>();
+        world.init_resource::<CourseSettings>();
+        world.init_resource::<CourseSteppers>();
+        world.resource_mut::<CourseSettings>().0.insert(
+            Engine::Mkwii,
+            (|w: &World| w.resource::<Live>().0.clone().unwrap_or_default(), |w: &mut World, v: &serde_json::Value| w.resource_mut::<Live>().0 = Some(v.clone())),
+        );
+        let speed = CourseStepper { key: "speed", label: "Top speed", help: "", range: (0.5, 2.0, 0.05), default: 1.0, percent: true };
+        world.resource_mut::<CourseSteppers>().0.insert(Engine::Mkwii, vec![speed]);
+        let dir = std::env::temp_dir().join(format!("sk8-parks-steppers-test-{}", std::process::id()));
+        let track = ParkFile {
+            version: VERSION,
+            name: "t".into(),
+            created: 0,
+            opened: 0,
+            pieces: Vec::new(),
+            scale: 8.0,
+            park_scale: 1.0,
+            anchors: Vec::new(),
+            engine: Some("mkwii".into()),
+            engine_settings: None,
+            mode: "race".into(),
+        };
+        let mut parks = Parks { dir: Some(dir.clone()), ..default() };
+        parks.list.push(ParkEntry { id: "a".into(), file: track.clone(), edits: 0 });
+        parks.list.push(ParkEntry { id: "b".into(), file: track, edits: 0 });
+        parks.current = Some(Current { id: "a".into(), pose: ParkPose::default(), anchor: None });
+        world.insert_resource(parks);
+        assert_eq!(course_steppers(&world, "b"), vec![speed]);
+        assert_eq!(stepper_value(&world, "b", &speed), 1.0, "its default");
+        // (a course not open: kept, not played)
+        set_stepper(&mut world, "b", &speed, speed.stepped(1.0, 2));
+        assert!((stepper_value(&world, "b", &speed) - 1.1).abs() < 1e-5);
+        assert_eq!(world.resource::<Live>().0, None);
+        let written = read_all(&dir).into_iter().find(|(id, _)| id == "b").unwrap().1;
+        assert!((written.engine_settings.unwrap()["speed"].as_f64().unwrap() - 1.1).abs() < 1e-5, "written");
+        // (the open course: in play too)
+        set_stepper(&mut world, "a", &speed, 1.5);
+        assert_eq!(world.resource::<Live>().0, Some(serde_json::json!({ "speed": 1.5 })));
+        assert_eq!(stepper_value(&world, "a", &speed), 1.5);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

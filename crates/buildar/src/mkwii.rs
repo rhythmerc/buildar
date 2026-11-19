@@ -88,10 +88,13 @@ pub(crate) fn install(app: &mut App, files: &Path) {
         mkw_engine::engine::factory(library, factory_disc, data)()
     });
     app.insert_resource(MkwiiFiles { disc })
-        .insert_resource(Settings::load(&files.join(SETTINGS_FILE)))
+        .insert_resource(PlayerSettings::load(&files.join(SETTINGS_FILE)))
+        .init_resource::<TrackSettings>()
         .insert_resource(SettingsFile(files.join(SETTINGS_FILE)));
     app.init_resource::<engines::CourseSettings>();
     app.world_mut().resource_mut::<engines::CourseSettings>().0.insert(Engine::Mkwii, (park_settings, apply_park_settings));
+    app.init_resource::<engines::CourseSteppers>();
+    app.world_mut().resource_mut::<engines::CourseSteppers>().0.insert(Engine::Mkwii, TRACK_STEPPERS.to_vec());
     app.world_mut().resource_mut::<crate::xr::ui::UiProviders>().0.push(std::sync::Arc::new(MkwiiPages));
     crate::xr::ui::import::offer(app, Engine::Mkwii, mkw_engine::DATA);
     app.world_mut().resource_mut::<crate::xr::ui::ControlsSheet>().set(Engine::Mkwii, CONTROLS.iter().map(|&(a, b)| engine_api::Control::new(a, b)).collect());
@@ -105,98 +108,97 @@ pub(crate) fn install(app: &mut App, files: &Path) {
 
 /// What the controllers do (`mkw_engine::engine::pad`).
 const CONTROLS: &[(&str, &str)] = &[
-    ("Right trigger / A", "drive"),
+    ("Right trigger / A", "drive (part way: slower)"),
     ("Left trigger / B", "brake, reverse"),
     ("Left stick", "steer"),
     ("Right grip", "drift (hop)"),
 ];
 
-/// Mario Kart Wii's settings, kept in `mkwii.json` beside the app's other settings; a track keeps its speed and
-/// acceleration (`park_settings`).
+// Its settings are of two kinds: the player's own (`PlayerSettings`: how they drive, on every track, kept in
+// `mkwii.json`) and the open track's (`TrackSettings`: how the kart goes on it, kept with the track as its engine
+// settings - `engines::CourseSettings` - and stepped in the course settings dialog, `TRACK_STEPPERS`; back to the
+// kart's own on a track that kept none).
+
+/// The player's own: how they drive, on every track.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
-struct Settings {
+struct PlayerSettings {
     /// The kart drifts by itself when it turns hard (no mini-turbos); off, manual: hop and steer.
     drift_automatic: bool,
-    /// The kart's top speed and acceleration, multiples of its own (1: as the game has them).
-    speed: f32,
-    acceleration: f32,
+    /// The right trigger as an analog throttle (how far it is pulled, how fast the kart goes); off, all or nothing.
+    analog_throttle: bool,
 }
 
-impl Default for Settings {
+impl Default for PlayerSettings {
     fn default() -> Self {
-        Self { drift_automatic: false, speed: 1.0, acceleration: 1.0 }
+        Self { drift_automatic: false, analog_throttle: true }
     }
 }
-
-/// The sliders' ranges: least, most, step.
-const SPEED_RANGE: (f32, f32, f32) = (0.5, 2.0, 0.05);
-const ACCELERATION_RANGE: (f32, f32, f32) = (0.5, 3.0, 0.1);
 
 const SETTINGS_FILE: &str = "mkwii.json";
 
-impl Settings {
+impl PlayerSettings {
+    /// (an older file's track settings in it are left: tracks keep those)
     fn load(file: &Path) -> Self {
-        let s: Settings = std::fs::read(file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        s.clamped()
-    }
-
-    fn clamped(self) -> Self {
-        let within = |v: f32, (lo, hi, _): (f32, f32, f32)| if v.is_finite() { v.clamp(lo, hi) } else { 1.0 };
-        Self { speed: within(self.speed, SPEED_RANGE), acceleration: within(self.acceleration, ACCELERATION_RANGE), ..self }
-    }
-}
-
-/// `s` in use, and kept for the next launch.
-fn keep(world: &mut World, s: Settings) {
-    world.insert_resource(s);
-    let file = world.resource::<SettingsFile>().0.clone();
-    if let Ok(json) = serde_json::to_vec_pretty(&s) {
-        let _ = std::fs::write(&file, json);
-    }
-}
-
-/// What a track keeps of Mario Kart Wii's settings: the kart's speed and acceleration it was built for (the drift is
-/// the player's own).
-/// (a track that kept none, or an older one: the kart's own)
-#[derive(serde::Serialize, serde::Deserialize)]
-#[serde(default)]
-struct TrackTuning {
-    speed: f32,
-    acceleration: f32,
-}
-
-impl Default for TrackTuning {
-    fn default() -> Self {
-        Self { speed: 1.0, acceleration: 1.0 }
-    }
-}
-
-fn park_settings(world: &World) -> serde_json::Value {
-    let s = world.resource::<Settings>();
-    serde_json::to_value(TrackTuning { speed: s.speed, acceleration: s.acceleration }).unwrap_or_default()
-}
-
-fn apply_park_settings(world: &mut World, settings: &serde_json::Value) {
-    let Ok(track) = serde_json::from_value::<TrackTuning>(settings.clone()) else { return };
-    let now = *world.resource::<Settings>();
-    let s = Settings { speed: track.speed, acceleration: track.acceleration, ..now }.clamped();
-    if s != now {
-        keep(world, s);
+        std::fs::read(file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
     }
 }
 
 #[derive(Resource)]
 struct SettingsFile(PathBuf);
 
-/// Its settings to the engine (the driver gives them again each time it is made).
-fn tune(settings: Res<Settings>, mut driver: ResMut<Driver>) {
-    driver.set_setting(mkw_engine::engine::settings::DRIFT_AUTOMATIC, if settings.drift_automatic { 1.0 } else { 0.0 });
-    driver.set_setting(mkw_engine::engine::settings::SPEED, settings.speed);
-    driver.set_setting(mkw_engine::engine::settings::ACCELERATION, settings.acceleration);
+/// The open track's: the kart's top speed and acceleration on it, multiples of its own (1: as the game has them).
+/// Kept with the track (`park_settings`), never in the player's file.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct TrackSettings {
+    speed: f32,
+    acceleration: f32,
 }
 
-/// Mario Kart Wii's page in the headset menu (shown while it runs).
+impl Default for TrackSettings {
+    fn default() -> Self {
+        Self { speed: 1.0, acceleration: 1.0 }
+    }
+}
+
+/// The track's settings in the course settings dialog.
+const TRACK_STEPPERS: [engines::CourseStepper; 2] = [
+    engines::CourseStepper { key: "speed", label: "Top speed", help: "100% is the kart's own", range: (0.5, 2.0, 0.05), default: 1.0, percent: true },
+    engines::CourseStepper { key: "acceleration", label: "Acceleration", help: "100% is the kart's own", range: (0.5, 3.0, 0.1), default: 1.0, percent: true },
+];
+
+impl TrackSettings {
+    /// Within the steppers' ranges.
+    fn clamped(self) -> Self {
+        let within = |v: f32, s: &engines::CourseStepper| if v.is_finite() { v.clamp(s.range.0, s.range.1) } else { s.default };
+        Self { speed: within(self.speed, &TRACK_STEPPERS[0]), acceleration: within(self.acceleration, &TRACK_STEPPERS[1]) }
+    }
+}
+
+/// The open track's settings for it to keep (`xr::build::parks::tag_engine` saves them with it).
+fn park_settings(world: &World) -> serde_json::Value {
+    serde_json::to_value(*world.resource::<TrackSettings>()).unwrap_or_default()
+}
+
+/// A track's settings in play (as it opens, or stepped; one that kept none, `{}`: the kart's own).
+fn apply_park_settings(world: &mut World, settings: &serde_json::Value) {
+    let track = serde_json::from_value::<TrackSettings>(settings.clone()).unwrap_or_default().clamped();
+    world.insert_resource(track);
+}
+
+/// Its settings to the engine (the driver gives them again each time it is made).
+fn tune(player: Res<PlayerSettings>, track: Res<TrackSettings>, mut driver: ResMut<Driver>) {
+    use mkw_engine::engine::settings;
+    let flag = |on: bool| if on { 1.0 } else { 0.0 };
+    driver.set_setting(settings::DRIFT_AUTOMATIC, flag(player.drift_automatic));
+    driver.set_setting(settings::ANALOG_THROTTLE, flag(player.analog_throttle));
+    driver.set_setting(settings::SPEED, track.speed);
+    driver.set_setting(settings::ACCELERATION, track.acceleration);
+}
+
+/// Mario Kart Wii's page in the headset menu (shown while it runs; this menu is on its way out - the courses screens
+/// are the app's UI).
 struct MkwiiPages;
 
 const PAGE: crate::xr::ui::PageId = "mkwii";
@@ -207,15 +209,10 @@ impl crate::xr::ui::UiProvider for MkwiiPages {
         if id != PAGE {
             return None;
         }
-        let s = *world.resource::<Settings>();
+        let s = *world.resource::<PlayerSettings>();
         Some(UiPage::new(
             "Mario Kart Wii",
             vec![
-                Widget::slider("speed", "Top speed", s.speed, SPEED_RANGE, format!("{:.0}%", s.speed * 100.0)),
-                Widget::slider("acceleration", "Acceleration", s.acceleration, ACCELERATION_RANGE, format!("{:.0}%", s.acceleration * 100.0)),
-                Widget::button("reset", "Back to the kart's own (100%)"),
-                Widget::info("Speed and acceleration are kept with the track."),
-                Widget::info(""),
                 Widget::toggle("drift_automatic", "Drift: automatic", s.drift_automatic),
                 Widget::info("Off (manual): hop with the right grip and steer to drift, for mini-turbos."),
             ],
@@ -233,20 +230,21 @@ impl crate::xr::ui::UiProvider for MkwiiPages {
         if page != PAGE {
             return None;
         }
-        let mut s = *world.resource::<Settings>();
+        let mut s = *world.resource::<PlayerSettings>();
         match (widget, act) {
             ("drift_automatic", Act::Press) => s.drift_automatic = !s.drift_automatic,
-            ("speed", Act::Set(v)) => s.speed = v,
-            ("acceleration", Act::Set(v)) => s.acceleration = v,
-            ("reset", Act::Press) => s = Settings { drift_automatic: s.drift_automatic, ..Settings::default() },
             _ => return Some(Outcome::Stay),
         }
-        keep(world, s.clamped());
+        world.insert_resource(s);
+        let file = world.resource::<SettingsFile>().0.clone();
+        if let Ok(json) = serde_json::to_vec_pretty(&s) {
+            let _ = std::fs::write(&file, json);
+        }
         Some(Outcome::Stay)
     }
 
     fn start_items(&self, _world: &World) -> Vec<crate::xr::ui::Widget> {
-        vec![crate::xr::ui::Widget::link("Mario Kart Wii: speed, acceleration, drift", PAGE)]
+        vec![crate::xr::ui::Widget::link("Mario Kart Wii: driving", PAGE)]
     }
 
     fn engine(&self) -> Option<Engine> {
@@ -258,40 +256,38 @@ impl crate::xr::ui::UiProvider for MkwiiPages {
 mod tests {
     use super::*;
 
-    /// Manual by default; a saved choice read back (and an old or broken file: the default).
+    /// Manual drift and an analog throttle by default; a saved choice read back (and a broken file: the default).
     #[test]
-    fn the_drift_is_manual_unless_chosen() {
-        assert!(!Settings::default().drift_automatic);
+    fn the_players_settings_are_their_own() {
+        let p = PlayerSettings::default();
+        assert!(!p.drift_automatic && p.analog_throttle);
         let dir = std::env::temp_dir().join(format!("mkwii-settings-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("auto.json"), br#"{ "drift_automatic": true }"#).unwrap();
-        assert!(Settings::load(&dir.join("auto.json")).drift_automatic);
+        // (an older file: the drift and the track settings it once held, those left for the track)
+        std::fs::write(dir.join("old.json"), br#"{ "drift_automatic": true, "speed": 1.5, "acceleration": 2.0 }"#).unwrap();
+        let p = PlayerSettings::load(&dir.join("old.json"));
+        assert!(p.drift_automatic && p.analog_throttle);
         std::fs::write(dir.join("broken.json"), b"{").unwrap();
-        assert!(!Settings::load(&dir.join("broken.json")).drift_automatic);
+        assert_eq!(PlayerSettings::load(&dir.join("broken.json")), PlayerSettings::default());
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// The kart's own speed and acceleration by default; a track's put back (out of range: clamped), the drift left
-    /// as the player has it.
+    /// A track keeps its speed and acceleration; one put back (out of range: clamped) leaves the player's settings
+    /// alone; a track that kept none, the kart's own.
     #[test]
     fn a_track_keeps_its_speed_and_acceleration() {
-        let s = Settings::default();
-        assert_eq!((s.speed, s.acceleration), (1.0, 1.0));
         let mut world = World::new();
-        let dir = std::env::temp_dir().join(format!("mkwii-track-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        world.insert_resource(SettingsFile(dir.join(SETTINGS_FILE)));
-        world.insert_resource(Settings { drift_automatic: true, ..Settings::default() });
+        world.insert_resource(PlayerSettings { drift_automatic: true, analog_throttle: false });
+        world.insert_resource(TrackSettings::default());
         apply_park_settings(&mut world, &serde_json::json!({ "speed": 1.5, "acceleration": 9.0 }));
-        let s = *world.resource::<Settings>();
-        assert_eq!((s.speed, s.acceleration, s.drift_automatic), (1.5, ACCELERATION_RANGE.1, true));
+        assert_eq!(*world.resource::<TrackSettings>(), TrackSettings { speed: 1.5, acceleration: TRACK_STEPPERS[1].range.1 });
         assert_eq!(park_settings(&world), serde_json::json!({ "speed": 1.5, "acceleration": 3.0 }));
-        // (a track that kept none: the kart's own)
+        assert_eq!(*world.resource::<PlayerSettings>(), PlayerSettings { drift_automatic: true, analog_throttle: false });
         apply_park_settings(&mut world, &serde_json::json!({}));
-        assert_eq!((world.resource::<Settings>().speed, world.resource::<Settings>().acceleration), (1.0, 1.0));
-        // (an old mkwii.json, with only the drift: the kart's own)
-        std::fs::write(dir.join("old.json"), br#"{ "drift_automatic": true }"#).unwrap();
-        assert_eq!(Settings::load(&dir.join("old.json")).speed, 1.0);
-        let _ = std::fs::remove_dir_all(dir);
+        assert_eq!(*world.resource::<TrackSettings>(), TrackSettings::default());
+        // (the steppers' defaults and keys are the track settings')
+        assert_eq!((TRACK_STEPPERS[0].default, TRACK_STEPPERS[1].default), (1.0, 1.0));
+        let keys = serde_json::to_value(TrackSettings::default()).unwrap();
+        assert!(TRACK_STEPPERS.iter().all(|s| keys.get(s.key).is_some()));
     }
 }

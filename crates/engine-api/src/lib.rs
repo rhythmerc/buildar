@@ -116,6 +116,40 @@ pub struct EngineSwitched {
 #[derive(Resource, Default)]
 pub struct BeforeSwitch(pub Vec<fn(&mut World, Engine)>);
 
+/// A setting a course keeps that the player steps in its settings (the course settings dialog shows each of its
+/// engine's below the player scale): a number in the engine's course settings ([`CourseSettings`]) under `key`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CourseStepper {
+    pub key: &'static str,
+    pub label: &'static str,
+    /// A line under the label (what it does, what its default is).
+    pub help: &'static str,
+    /// Least, most, and a step.
+    pub range: (f32, f32, f32),
+    /// Its value on a course that keeps none.
+    pub default: f32,
+    /// Shown as a percentage (else as a multiple: "x1.5").
+    pub percent: bool,
+}
+
+impl CourseStepper {
+    /// `value` stepped `steps` steps (within its range, on its steps).
+    pub fn stepped(&self, value: f32, steps: i32) -> f32 {
+        let (lo, hi, step) = self.range;
+        let v = value + steps as f32 * step;
+        (((v - lo) / step).round() * step + lo).clamp(lo, hi)
+    }
+
+    /// `value` as shown.
+    pub fn label_of(&self, value: f32) -> String {
+        if self.percent { format!("{:.0}%", value * 100.0) } else { format!("x{value:.2}") }
+    }
+}
+
+/// Each engine's [`CourseStepper`]s.
+#[derive(Resource, Default)]
+pub struct CourseSteppers(pub HashMap<Engine, Vec<CourseStepper>>);
+
 /// A park setting's getter and setter.
 pub type CourseSettingHooks = (fn(&World) -> serde_json::Value, fn(&mut World, &serde_json::Value));
 
@@ -276,6 +310,17 @@ impl HandHud {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A step at a time, on its steps (from its least), and never out of its range; shown as it says.
+    #[test]
+    fn a_stepper_steps_within_its_range() {
+        let s = CourseStepper { key: "speed", label: "", help: "", range: (0.5, 2.0, 0.05), default: 1.0, percent: true };
+        assert!((s.stepped(1.0, 1) - 1.05).abs() < 1e-5);
+        assert!((s.stepped(1.02, 0) - 1.0).abs() < 1e-5, "onto its steps");
+        assert_eq!((s.stepped(0.5, -1), s.stepped(2.0, 3)), (0.5, 2.0));
+        assert_eq!(s.label_of(1.5), "150%");
+        assert_eq!(CourseStepper { percent: false, ..s }.label_of(1.5), "x1.50");
+    }
 
     #[test]
     fn engine_keys_round_trip() {
