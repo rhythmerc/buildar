@@ -44,6 +44,8 @@ const THUMB_BG: Color = Color::srgb(0.114, 0.165, 0.184);
 const LINE: Color = Color::srgb(0.169, 0.231, 0.251);
 const TEAL: Color = Color::srgb(0.451, 0.902, 0.851);
 const SELECTED: Color = Color::srgb(0.122, 0.42, 0.4);
+/// A card under the laser or the stick.
+const HOVER: Color = Color::srgb(0.13, 0.19, 0.21);
 const DIM: Color = Color::srgb(0.722, 0.78, 0.8);
 const OFF: Color = Color::srgb(0.549, 0.58, 0.6);
 const INK: Color = Color::srgb(0.055, 0.082, 0.09);
@@ -62,10 +64,8 @@ enum Hit {
     EngineRow(usize),
     /// The missing engine's warning: "Play with current engine" (true) or "Cancel".
     Warn(bool),
-    /// A card (the new-park card, or a park's: it plays it).
+    /// A card (the new-course card: a new course; a course's: its details), and a course's menu (the grip on its card).
     Item(usize),
-    Edit(usize),
-    Play(usize),
     More(usize),
     MenuRow(usize),
     Confirm(bool),
@@ -73,34 +73,27 @@ enum Hit {
     /// and Done.
     SizeStep(bool),
     EngineStep(usize, bool),
-    /// The small gear by an engine's dropdown (its engine settings), and in that dialog a toggle (by its place).
-    EngineGear,
+    /// In an engine's settings, a toggle (by its place).
     Toggle(usize),
     SettingsDone,
     /// Around an open menu: closes it.
     Backdrop,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-enum Part {
-    /// The card itself (play).
-    #[default]
-    Main,
-    Edit,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Focus {
     Tab(usize),
+    /// The buildAR Menu, bottom right.
     Settings,
+    /// The engine dropdown, on the new-course card.
     Engine,
-    EngineGear,
-    Item(usize, Part),
+    /// A card (the new-course card, or a course's: its details).
+    Item(usize),
 }
 
 impl Default for Focus {
     fn default() -> Self {
-        Focus::Item(0, Part::Main)
+        Focus::Item(0)
     }
 }
 
@@ -172,8 +165,6 @@ struct Model {
     settings: Option<SettingsView>,
     /// An engine's settings open.
     engine_settings: Option<EngineSettingsView>,
-    /// The engine in the dropdown has settings of the player's (its gear shown).
-    engine_gear: bool,
     /// A course's details, in place of the cards.
     details: Option<course::View>,
     /// The engine running, and (open) the dropdown's rows and the one chosen.
@@ -291,7 +282,6 @@ pub(crate) struct ParksScreen {
 struct Icons {
     play: Handle<Image>,
     pencil: Handle<Image>,
-    more: Handle<Image>,
     gear: Handle<Image>,
     back: Handle<Image>,
     trash: Handle<Image>,
@@ -399,39 +389,29 @@ fn shown(lines: &[Line], first: usize) -> usize {
 
 /// The stick moves the focus between cards, and on a park's card between
 /// its pencil and itself.
-fn moved(focus: Focus, nav: &Nav, items: &[Item], lines: &[Line]) -> Focus {
-    let parts = |i: usize| matches!(items.get(i), Some(Item::Park(_)));
+fn moved(focus: Focus, nav: &Nav, items: &[Item], lines: &[Line], engine: bool) -> Focus {
     let last_tab = TABS.len() - 1;
+    // (the engine dropdown, under the new-course card's own: reached down from it)
+    let new_card = matches!(items.first(), Some(Item::New(_)));
     match focus {
         Focus::Tab(t) if nav.left && t > 0 => Focus::Tab(t - 1),
         Focus::Tab(t) if nav.right && t < last_tab => Focus::Tab(t + 1),
-        Focus::Tab(_) if nav.right => Focus::Engine,
-        Focus::Tab(_) if nav.down => Focus::Item(0, Part::Main),
+        Focus::Tab(_) if nav.down => Focus::Item(0),
         Focus::Tab(_) => focus,
         // (the buildAR Menu, bottom right: up to the last cards)
-        Focus::Settings if nav.up => Focus::Item(items.len() - 1, Part::Main),
+        Focus::Settings if nav.up => Focus::Item(items.len() - 1),
         Focus::Settings => focus,
-        Focus::Engine if nav.left => Focus::Tab(last_tab),
-        Focus::Engine if nav.right => Focus::EngineGear,
-        Focus::EngineGear if nav.left => Focus::Engine,
-        Focus::EngineGear if nav.down => Focus::Item(0, Part::Main),
-        Focus::EngineGear => focus,
-        Focus::Engine if nav.down => Focus::Item(0, Part::Main),
+        Focus::Engine if nav.up => Focus::Item(0),
+        Focus::Engine if nav.right && items.len() > 1 => Focus::Item(1),
+        Focus::Engine if nav.down => moved(Focus::Item(0), &Nav { down: true, ..Nav::default() }, items, lines, false),
         Focus::Engine => focus,
-        Focus::Item(i, part) => {
+        Focus::Item(0) if nav.down && new_card && engine => Focus::Engine,
+        Focus::Item(i) => {
             if nav.right {
-                return match part {
-                    Part::Edit => Focus::Item(i, Part::Main),
-                    Part::Main if i + 1 < items.len() => Focus::Item(i + 1, if parts(i + 1) { Part::Edit } else { Part::Main }),
-                    Part::Main => focus,
-                };
+                return if i + 1 < items.len() { Focus::Item(i + 1) } else { focus };
             }
             if nav.left {
-                return match part {
-                    Part::Main if parts(i) => Focus::Item(i, Part::Edit),
-                    _ if i > 0 => Focus::Item(i - 1, Part::Main),
-                    _ => focus,
-                };
+                return if i > 0 { Focus::Item(i - 1) } else { focus };
             }
             if !(nav.up || nav.down) {
                 return focus;
@@ -441,8 +421,7 @@ fn moved(focus: Focus, nav: &Nav, items: &[Item], lines: &[Line]) -> Focus {
             let mut l = line as isize + step;
             while let Some(next) = usize::try_from(l).ok().and_then(|l| lines.get(l)) {
                 if let Line::Cards(c) = next {
-                    let j = c[col.min(c.len() - 1)];
-                    return Focus::Item(j, if parts(j) { part } else { Part::Main });
+                    return Focus::Item(c[col.min(c.len() - 1)]);
                 }
                 l += step;
             }
@@ -836,25 +815,18 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
         outcome = course::frame(world, nav, point);
     } else {
         let mut focus = world.resource::<ParksScreen>().focus;
-        if let Focus::Item(i, _) = focus {
-            if i >= items.len() {
-                focus = Focus::Item(items.len() - 1, Part::Main);
-            }
+        if let Focus::Item(i) = focus
+            && i >= items.len()
+        {
+            focus = Focus::Item(items.len() - 1);
         }
-        focus = moved(focus, &nav, &items, &lines);
-        // (no gear without engine settings: the stick passes it)
-        let gear = rows.as_ref().and_then(|r| r.iter().find(|e| e.running)).is_some_and(|e| !EngineToggles::of(world, e.engine).is_empty());
-        if focus == Focus::EngineGear && !gear {
-            focus = if nav.down { Focus::Item(0, Part::Main) } else { Focus::Engine };
-        }
+        focus = moved(focus, &nav, &items, &lines, rows.is_some());
         // The laser chooses what it is on.
         match hovered {
             Some(Hit::Tab(t)) => focus = Focus::Tab(t),
             Some(Hit::Settings) => focus = Focus::Settings,
             Some(Hit::Engine) => focus = Focus::Engine,
-            Some(Hit::EngineGear) => focus = Focus::EngineGear,
-            Some(Hit::Item(i) | Hit::Play(i) | Hit::More(i)) => focus = Focus::Item(i, Part::Main),
-            Some(Hit::Edit(i)) => focus = Focus::Item(i, Part::Edit),
+            Some(Hit::Item(i)) => focus = Focus::Item(i),
             _ => {}
         }
         world.resource_mut::<ParksScreen>().focus = focus;
@@ -864,13 +836,12 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 Focus::Tab(t) => Hit::Tab(t),
                 Focus::Settings => Hit::Settings,
                 Focus::Engine => Hit::Engine,
-                Focus::EngineGear => Hit::EngineGear,
-                Focus::Item(i, Part::Main) => Hit::Item(i),
-                Focus::Item(i, Part::Edit) => Hit::Edit(i),
+                Focus::Item(i) => Hit::Item(i),
             }),
+            // (the grip on a course's card: its menu)
             None if nav.more => match focus {
-                Focus::Item(i, _) => Some(Hit::More(i)),
-                Focus::Tab(_) | Focus::Settings | Focus::Engine | Focus::EngineGear => None,
+                Focus::Item(i) => Some(Hit::More(i)),
+                Focus::Tab(_) | Focus::Settings | Focus::Engine => None,
             },
             None => None,
         };
@@ -884,25 +855,18 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 Outcome::Stay
             }
             Some(Hit::Settings) => Outcome::Open(pages::START),
-            Some(Hit::EngineGear) => {
-                let engine = rows.as_ref().and_then(|r| r.iter().find(|e| e.running)).map(|e| e.engine);
-                if let Some(engine) = engine.filter(|&e| !EngineToggles::of(world, e).is_empty()) {
-                    world.resource_mut::<ParksScreen>().engine_settings = Some((engine, 0));
-                }
-                Outcome::Stay
-            }
-            Some(Hit::Engine) => {
-                let running = rows.as_ref().and_then(|r| r.iter().position(|e| e.running)).unwrap_or(0);
-                world.resource_mut::<ParksScreen>().engines = Some(running);
-                Outcome::Stay
-            }
             Some(Hit::Item(0)) if matches!(items.first(), Some(Item::New(_))) => {
                 park::new_park(world, mode);
                 world.resource_mut::<BuildMode>().active = true;
                 Outcome::Close
             }
-            Some(Hit::Item(i) | Hit::Play(i)) => park_id(i).map_or(Outcome::Stay, |id| open_with_engine(world, &id, Then::Open(false))),
-            Some(Hit::Edit(i)) => park_id(i).map_or(Outcome::Stay, |id| open_with_engine(world, &id, Then::Open(true))),
+            // (a course's card: its details, where it's played, built and set)
+            Some(Hit::Item(i)) => {
+                if let Some(id) = park_id(i) {
+                    world.resource_mut::<ParksScreen>().details = Some(course::Details::new(id));
+                }
+                Outcome::Stay
+            }
             Some(Hit::More(i)) => {
                 if let Some(id) = park_id(i) {
                     world.resource_mut::<ParksScreen>().menu = Some((id, 0));
@@ -920,11 +884,12 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
         (screen.focus, screen.first, screen.menu.clone(), screen.confirm.clone(), screen.warning.clone(), screen.engines)
     };
     let focus_line = match focus {
-        Focus::Item(i, _) => line_of(&lines, i).map_or(0, |(l, _)| l),
-        Focus::Tab(_) | Focus::Settings | Focus::Engine | Focus::EngineGear => 0,
+        Focus::Item(i) => line_of(&lines, i).map_or(0, |(l, _)| l),
+        Focus::Tab(_) | Focus::Engine => 0,
+        // (the menu button isn't in the list: it stays as it is)
+        Focus::Settings => first,
     };
     let rows = engine_rows(world, mode);
-    let engine_gear = rows.as_ref().and_then(|r| r.iter().find(|e| e.running)).is_some_and(|e| !EngineToggles::of(world, e.engine).is_empty());
     let engine = rows.map(|rows| {
         let running = rows.iter().find(|r| r.running).map_or_else(|| "…".to_string(), |r| r.name.clone());
         (running, dropdown.map(|row| (rows, row)))
@@ -970,7 +935,7 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
         row,
     });
     let details = course::view(world, settings.is_some() || confirm.is_some() || engine_settings.is_some());
-    let model = Model { tab, items, lines, first, focus: Some(focus), menu, confirm, settings, engine_settings, engine_gear, details, engine, warning, status };
+    let model = Model { tab, items, lines, first, focus: Some(focus), menu, confirm, settings, engine_settings, details, engine, warning, status };
     let mut screen = world.resource_mut::<ParksScreen>();
     screen.first = first;
     screen.model = model;
@@ -1077,7 +1042,7 @@ fn thumbnail(file: &ParkFile, w: u32, h: u32) -> Vec<u8> {
 
 /// The icons, white on clear (tinted where they are drawn): play, a pencil,
 /// three dots, a gear.
-fn icons() -> [Vec<u8>; 9] {
+fn icons() -> [Vec<u8>; 8] {
     let n = ICON as f32;
     let shape = |inside: &dyn Fn(Vec2) -> bool| -> Vec<u8> {
         let mut out = vec![0u8; (ICON * ICON * 4) as usize];
@@ -1105,7 +1070,6 @@ fn icons() -> [Vec<u8>; 9] {
         let (t, across, length) = ((p - from).dot(along), (p - from).perp_dot(along).abs(), from.distance(to));
         (t >= 0.0 && t <= length && across <= 0.1) || (t > length && t <= length + 0.16 && across <= 0.1 * (1.0 - (t - length) / 0.16))
     });
-    let more = shape(&|p| [0.25, 0.5, 0.75].iter().any(|&x| p.distance(Vec2::new(x, 0.5)) <= 0.075));
     let gear = shape(&|p| {
         let d = p - Vec2::splat(0.5);
         let (r, a) = (d.length(), d.y.atan2(d.x));
@@ -1137,15 +1101,15 @@ fn icons() -> [Vec<u8>; 9] {
         bars || p.distance(Vec2::new(0.64, 0.32)) <= 0.11 || p.distance(Vec2::new(0.38, 0.68)) <= 0.11
     });
     let check = shape(&|p| stroke(p, Vec2::new(0.2, 0.52), Vec2::new(0.42, 0.74), 0.08) || stroke(p, Vec2::new(0.42, 0.74), Vec2::new(0.82, 0.3), 0.08));
-    [play, pencil, more, gear, back, trash, chevron, sliders, check]
+    [play, pencil, gear, back, trash, chevron, sliders, check]
 }
 
 // ---------------------------------------------------------------- view
 
 pub(super) fn spawn(mut commands: Commands, panel: Res<XrPanel>, assets: Res<AssetServer>, mut images: ResMut<Assets<Image>>, mut screen: ResMut<ParksScreen>) {
     screen.fonts = Some(Fonts { display: assets.load(UI_FONT), body: assets.load(UI_BODY_FONT) });
-    let [play, pencil, more, gear, back, trash, chevron, sliders, check] = icons().map(|pixels| images.add(image_of(pixels, ICON, ICON)));
-    screen.icons = Some(Icons { play, pencil, more, gear, back, trash, chevron, sliders, check });
+    let [play, pencil, gear, back, trash, chevron, sliders, check] = icons().map(|pixels| images.add(image_of(pixels, ICON, ICON)));
+    screen.icons = Some(Icons { play, pencil, gear, back, trash, chevron, sliders, check });
     let root = commands
         .spawn((
             ParksRoot,
@@ -1242,14 +1206,6 @@ pub(super) fn draw(world: &mut World) {
                         tab.spawn((Text::new(park::courses_name(mode)), fonts.display(40.0, 800), TextColor(if on { Color::WHITE } else { OFF })));
                     });
                 }
-                bar.spawn(Node { flex_grow: 1.0, ..default() });
-                // The engine: a dropdown that switches it (none for a mode with no engine in this app).
-                if let Some((running, dropdown)) = &model.engine {
-                    engine_pill(bar, running, dropdown.is_some(), focus == Some(Focus::Engine), &fonts, &icons);
-                    if model.engine_gear {
-                        engine_gear(bar, Hit::EngineGear, focus == Some(Focus::EngineGear), &icons);
-                    }
-                }
             });
             // The cards, and how far down them it is.
             panel.spawn(Node { width: percent(100), flex_grow: 1.0, flex_direction: FlexDirection::Column, row_gap: px(GAP_PX), ..default() }).with_children(|cards| {
@@ -1264,8 +1220,11 @@ pub(super) fn draw(world: &mut World) {
                         }
                         Line::Cards(items) => {
                             cards.spawn(Node { width: percent(100), flex_shrink: 0.0, column_gap: px(GAP_PX), ..default() }).with_children(|row| {
+                                // (the engine: a dropdown on the new-course card - none for a mode with no engine in
+                                // this app)
+                                let engine = model.engine.as_ref().map(|(running, dropdown)| (running.as_str(), dropdown.is_some()));
                                 for &i in items {
-                                    card(row, i, &model.items[i], focus, &icons, &fonts);
+                                    card(row, i, &model.items[i], focus, engine, &icons, &fonts);
                                 }
                             });
                         }
@@ -1296,7 +1255,7 @@ pub(super) fn draw(world: &mut World) {
                 ))
                 .with_children(|foot| {
                     foot.spawn(Node { flex_grow: 1.0, flex_shrink: 1.0, column_gap: px(30), row_gap: px(12), flex_wrap: FlexWrap::Wrap, align_items: AlignItems::Center, ..default() }).with_children(|legend| {
-                        for (control, what) in [("Trigger", "play · pencil builds"), ("Grip", "more"), ("B / Menu", "back to playing"), ("Stick", "move")] {
+                        for (control, what) in [("Trigger", "open"), ("Grip", "more"), ("B / Menu", "back to playing"), ("Stick", "move")] {
                             legend.spawn(Node { column_gap: px(7), ..default() }).with_children(|l| {
                                 l.spawn((Text::new(control), fonts.body(17.5, 600), TextColor(DIM)));
                                 l.spawn((Text::new(what), fonts.body(17.5, 400), TextColor(OFF)));
@@ -1323,7 +1282,7 @@ pub(super) fn draw(world: &mut World) {
                     });
                 });
         });
-        // The engine dropdown's list, over the cards under its pill.
+        // The engine dropdown's list, over the cards under the new-course card.
         if let Some((_, Some((rows, chosen)))) = &model.engine {
             engine_list(root, rows, *chosen, &fonts);
         }
@@ -1421,35 +1380,40 @@ pub(super) fn draw(world: &mut World) {
 
 /// Where the engine dropdown's list is on the panel: under its pill, beside the gear (px from the panel's right and
 /// top: its padding, the gear and the gap between them).
-const ENGINE_LIST_AT: (f32, f32) = (40.0 + 64.0 + 20.0, 100.0);
+/// Where the engine list opens: under the new-course card's dropdown (the panel's padding; under the top bar and the
+/// card - the first line, shown whenever the dropdown is open).
+const ENGINE_LIST_AT: (f32, f32) = (40.0, 36.0 + 64.0 + 26.0 + CARD_H - 10.0);
 
 /// The engine's pill beside the title: the running engine's name and an arrow; pressed, it opens the list.
-fn engine_pill(bar: &mut Spawner, running: &str, open: bool, focused: bool, fonts: &Fonts, icons: &Icons) {
-    bar.spawn((
-        Hit::Engine,
-        Node {
-            height: px(48),
-            flex_shrink: 0.0,
-            padding: UiRect::axes(px(18), px(0)),
-            column_gap: px(10),
-            align_items: AlignItems::Center,
-            border: UiRect::all(px(1)),
-            border_radius: BorderRadius::all(px(99)),
-            ..default()
-        },
-        BackgroundColor(if open { SELECTED } else { Color::NONE }),
-        BorderColor::all(LINE),
-        ring(focused, 3.5, 4.0),
-    ))
-    .with_children(|pill| {
-        pill.spawn((Text::new("Engine"), fonts.body(18.0, 500), TextColor(OFF)));
-        pill.spawn((Text::new(running), fonts.display(22.0, 700), TextColor(Color::WHITE), TextLayout::new_with_no_wrap()));
-        // (the play triangle turned to point down)
-        pill.spawn((
-            ImageNode { color: DIM, ..ImageNode::new(icons.play.clone()) },
-            Node { width: px(14), height: px(14), flex_shrink: 0.0, ..default() },
-            UiTransform::from_rotation(Rot2::degrees(90.0)),
-        ));
+/// The engine dropdown on the new-course card: the engine picked and an arrow, under its label; pressed, its list.
+fn card_engine_pill(card: &mut Spawner, running: &str, open: bool, focused: bool, fonts: &Fonts, icons: &Icons) {
+    card.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(5), margin: UiRect::top(px(6)), ..default() }).with_children(|c| {
+        c.spawn((Text::new("ENGINE"), fonts.body(13.0, 700), TextColor(OFF)));
+        c.spawn((
+            Hit::Engine,
+            Node {
+                height: px(44),
+                flex_shrink: 0.0,
+                padding: UiRect::axes(px(16), px(0)),
+                column_gap: px(10),
+                align_items: AlignItems::Center,
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::all(px(99)),
+                ..default()
+            },
+            BackgroundColor(if open { SELECTED } else { CARD }),
+            BorderColor::all(LINE),
+            ring(focused, 3.5, 4.0),
+        ))
+        .with_children(|pill| {
+            pill.spawn((Text::new(running), fonts.display(19.0, 700), TextColor(Color::WHITE), TextLayout::new_with_no_wrap()));
+            // (the play triangle turned to point down)
+            pill.spawn((
+                ImageNode { color: DIM, ..ImageNode::new(icons.play.clone()) },
+                Node { width: px(12), height: px(12), flex_shrink: 0.0, ..default() },
+                UiTransform::from_rotation(Rot2::degrees(90.0)),
+            ));
+        });
     });
 }
 
@@ -1458,7 +1422,7 @@ fn engine_list(root: &mut Spawner, rows: &[EngineRow], chosen: usize, fonts: &Fo
     root.spawn((
         Node {
             position_type: PositionType::Absolute,
-            right: px(ENGINE_LIST_AT.0),
+            left: px(ENGINE_LIST_AT.0),
             top: px(ENGINE_LIST_AT.1),
             width: px(440),
             padding: UiRect::all(px(8)),
@@ -1568,7 +1532,7 @@ fn engine_settings_box(root: &mut Spawner, view: &EngineSettingsView, fonts: &Fo
     modal_box(root, 680.0, |b| {
         b.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::new(px(18), px(18), px(14), px(14)), ..default() }).with_children(|words| {
             words.spawn((Text::new("Engine settings"), fonts.display(28.0, 800), TextColor(Color::WHITE)));
-            words.spawn((Text::new(format!("{}: yours, on every course", view.name)), fonts.body(19.0, 500), TextColor(DIM)));
+            words.spawn((Text::new(view.name.clone()), fonts.body(19.0, 500), TextColor(DIM)));
         });
         for (i, (label, help, value)) in view.toggles.iter().enumerate() {
             let on = view.row == i;
@@ -1678,29 +1642,6 @@ fn step_button(parent: &mut Spawner, hit: Hit, bigger: bool, can: bool, fonts: &
         });
 }
 
-/// A round button on a card: play (filled) or the pencil.
-fn round_button(parent: &mut Spawner, hit: Hit, image: &Handle<Image>, filled: bool, focused: bool) {
-    parent
-        .spawn((
-            hit,
-            Node {
-                width: px(54),
-                height: px(54),
-                flex_shrink: 0.0,
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::all(px(27)),
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::Center,
-                // (a play triangle looks centred a little right of the middle)
-                padding: UiRect::left(px(if filled { 3.0 } else { 0.0 })),
-                ..default()
-            },
-            BackgroundColor(if filled { TEAL } else { Color::NONE }),
-            BorderColor::all(if filled { TEAL } else { LINE }),
-            ring(focused, 3.5, 4.0),
-        ))
-        .with_children(|b| icon(b, image, if filled { 25.0 } else { 24.0 }, if filled { INK } else { DIM }));
-}
 
 /// A pill over a card's picture.
 fn tag(parent: &mut Spawner, fonts: &Fonts, side: (Option<f32>, Option<f32>), label: &str, fg: Color, bg: Color) {
@@ -1724,15 +1665,19 @@ fn tag(parent: &mut Spawner, fonts: &Fonts, side: (Option<f32>, Option<f32>), la
         });
 }
 
-fn card(row: &mut Spawner, i: usize, item: &Item, focus: Option<Focus>, icons: &Icons, fonts: &Fonts) {
+/// A card: the new-course card (a new course, and under it the engine dropdown: `engine` is the engine picked, and
+/// whether its list is open), or a course's (pressed: its details) - lighter and ringed under the laser or the stick.
+fn card(row: &mut Spawner, i: usize, item: &Item, focus: Option<Focus>, engine: Option<(&str, bool)>, icons: &Icons, fonts: &Fonts) {
     let base = Node { width: px(CARD_W), height: px(CARD_H), flex_shrink: 0.0, flex_direction: FlexDirection::Column, border_radius: BorderRadius::all(px(18)), ..default() };
+    let on = focus == Some(Focus::Item(i));
     match item {
         Item::New(mode) => {
             row.spawn((
                 Hit::Item(i),
                 Node { border: UiRect::all(px(3)), align_items: AlignItems::Center, justify_content: JustifyContent::Center, row_gap: px(14), ..base },
+                BackgroundColor(if on { HOVER } else { Color::NONE }),
                 BorderColor::all(LINE),
-                ring(focus == Some(Focus::Item(i, Part::Main)), 3.5, 5.0),
+                ring(on, 3.5, 5.0),
             ))
             .with_children(|c| {
                 c.spawn((
@@ -1751,6 +1696,9 @@ fn card(row: &mut Spawner, i: usize, item: &Item, focus: Option<Focus>, icons: &
                     plus.spawn((Text::new("+"), fonts.body(50.0, 300), TextColor(TEAL)));
                 });
                 c.spawn((Text::new(format!("New {}", park::course_name(*mode).to_lowercase())), fonts.display(24.0, 700), TextColor(TEAL)));
+                if let Some((running, open)) = engine {
+                    card_engine_pill(c, running, open, focus == Some(Focus::Engine), fonts, icons);
+                }
             });
         }
         Item::Park(view) => {
@@ -1758,13 +1706,19 @@ fn card(row: &mut Spawner, i: usize, item: &Item, focus: Option<Focus>, icons: &
             row.spawn((
                 Hit::Item(i),
                 Node { border: UiRect::all(px(1)), overflow: Overflow::clip(), ..base },
-                BackgroundColor(CARD),
-                BorderColor::all(LINE),
-                // The open park is ringed.
-                if view.current { Outline { width: px(5), offset: px(0), color: TEAL } } else { ring(false, 0.0, 0.0) },
+                BackgroundColor(if on { HOVER } else { CARD }),
+                BorderColor::all(if on { TEAL } else { LINE }),
+                // The open park is ringed (and the one chosen, more so).
+                if on {
+                    ring(true, 3.5, 5.0)
+                } else if view.current {
+                    Outline { width: px(5), offset: px(0), color: TEAL }
+                } else {
+                    ring(false, 0.0, 0.0)
+                },
             ))
             .with_children(|c| {
-                // Its picture (dimmed where it has to be put down), its badge, and its menu.
+                // Its picture (dimmed where it has to be put down), its badges.
                 // (rounded as the card is: a clip is square)
                 let corners = BorderRadius::top(px(17));
                 c.spawn((Node { width: percent(100), height: px(THUMB_H), flex_shrink: 0.0, border_radius: corners, align_items: AlignItems::Center, justify_content: JustifyContent::Center, ..default() }, BackgroundColor(THUMB_BG))).with_children(|top| {
@@ -1786,31 +1740,11 @@ fn card(row: &mut Spawner, i: usize, item: &Item, focus: Option<Focus>, icons: &
                     if view.current {
                         tag(top, fonts, (None, Some(12.0)), "Skating", INK, TEAL);
                     }
-                    top.spawn((
-                        Hit::More(i),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            right: px(14),
-                            bottom: px(14),
-                            width: px(40),
-                            height: px(40),
-                            border_radius: BorderRadius::all(px(10)),
-                            align_items: AlignItems::Center,
-                            justify_content: JustifyContent::Center,
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.35)),
-                    ))
-                    .with_children(|m| icon(m, &icons.more, 26.0, DIM));
                 });
-                // Its name across the card; under it, how big and when, and the buttons.
+                // Its name across the card; under it, how big and when.
                 c.spawn(Node { width: percent(100), flex_grow: 1.0, padding: UiRect::new(px(16), px(16), px(13), px(14)), flex_direction: FlexDirection::Column, row_gap: px(4), ..default() }).with_children(|meta| {
                     meta.spawn((Text::new(fitted(&view.name)), fonts.display(23.5, 700), TextColor(Color::WHITE), TextLayout::new_with_no_wrap()));
-                    meta.spawn(Node { width: percent(100), align_items: AlignItems::Center, column_gap: px(10), ..default() }).with_children(|under| {
-                        under.spawn((Text::new(view.sub.clone()), fonts.body(17.5, 400), TextColor(OFF), TextLayout::new_with_no_wrap(), Node { flex_grow: 1.0, flex_shrink: 1.0, min_width: px(0), ..default() }));
-                        round_button(under, Hit::Edit(i), &icons.pencil, false, focus == Some(Focus::Item(i, Part::Edit)));
-                        round_button(under, Hit::Play(i), &icons.play, true, focus == Some(Focus::Item(i, Part::Main)));
-                    });
+                    meta.spawn((Text::new(view.sub.clone()), fonts.body(17.5, 400), TextColor(OFF), TextLayout::new_with_no_wrap()));
                 });
             });
         }
@@ -1839,35 +1773,37 @@ mod tests {
     }
 
     #[test]
-    fn the_stick_walks_the_cards_and_their_pencils() {
+    fn the_stick_walks_the_cards() {
         let items = vec![Item::New(Mode::Skate), view("a", Here::Found), view("b", Here::Found), view("c", Here::Away)];
         let l = lines(&items);
         let go = |focus, f: fn(&mut Nav)| {
             let mut nav = Nav::default();
             f(&mut nav);
-            moved(focus, &nav, &items, &l)
+            moved(focus, &nav, &items, &l, true)
         };
-        // Right from the new-park card: the next park's pencil, then the park.
-        assert_eq!(go(Focus::Item(0, Part::Main), |n| n.right = true), Focus::Item(1, Part::Edit));
-        assert_eq!(go(Focus::Item(1, Part::Edit), |n| n.right = true), Focus::Item(1, Part::Main));
-        assert_eq!(go(Focus::Item(1, Part::Edit), |n| n.left = true), Focus::Item(0, Part::Main));
+        // Along a line, a card at a time.
+        assert_eq!(go(Focus::Item(0), |n| n.right = true), Focus::Item(1));
+        assert_eq!(go(Focus::Item(2), |n| n.left = true), Focus::Item(1));
+        assert_eq!(go(Focus::Item(2), |n| n.right = true), Focus::Item(3));
         // Down past the divider keeps the column it can; up from the top line is the first tab.
-        assert_eq!(go(Focus::Item(2, Part::Edit), |n| n.down = true), Focus::Item(3, Part::Edit));
-        assert_eq!(go(Focus::Item(1, Part::Main), |n| n.up = true), Focus::Tab(0));
-        assert_eq!(go(Focus::Settings, |n| n.down = true), Focus::Settings, "the bottom");
-        // Along the top: the tabs, the engine, its gear (passed over where it isn't shown: `frame`), and back.
+        assert_eq!(go(Focus::Item(2), |n| n.down = true), Focus::Item(3));
+        assert_eq!(go(Focus::Item(1), |n| n.up = true), Focus::Tab(0));
+        // The new-course card's engine dropdown: down from it, up back, down on to the next line.
+        assert_eq!(go(Focus::Item(0), |n| n.down = true), Focus::Engine);
+        assert_eq!(go(Focus::Engine, |n| n.up = true), Focus::Item(0));
+        assert_eq!(go(Focus::Engine, |n| n.down = true), Focus::Item(3));
+        assert_eq!(go(Focus::Engine, |n| n.right = true), Focus::Item(1));
+        // (with no engine to pick, straight down the cards)
+        assert_eq!(moved(Focus::Item(0), &Nav { down: true, ..Nav::default() }, &items, &l, false), Focus::Item(3));
+        // Along the top: the tabs only.
         assert_eq!(go(Focus::Tab(0), |n| n.right = true), Focus::Tab(1));
-        assert_eq!(go(Focus::Tab(1), |n| n.right = true), Focus::Engine);
-        assert_eq!(go(Focus::Engine, |n| n.right = true), Focus::EngineGear);
-        assert_eq!(go(Focus::EngineGear, |n| n.right = true), Focus::EngineGear, "the last along the top");
-        assert_eq!(go(Focus::EngineGear, |n| n.left = true), Focus::Engine);
-        // The buildAR Menu, bottom right: down from the last cards, up back to them.
-        assert_eq!(go(Focus::Item(3, Part::Main), |n| n.down = true), Focus::Settings);
-        assert_eq!(go(Focus::Settings, |n| n.up = true), Focus::Item(3, Part::Main));
-        assert_eq!(go(Focus::Engine, |n| n.left = true), Focus::Tab(1));
+        assert_eq!(go(Focus::Tab(1), |n| n.right = true), Focus::Tab(1));
         assert_eq!(go(Focus::Tab(1), |n| n.left = true), Focus::Tab(0));
-        assert_eq!(go(Focus::Tab(0), |n| n.left = true), Focus::Tab(0));
-        assert_eq!(go(Focus::Tab(1), |n| n.down = true), Focus::Item(0, Part::Main));
+        assert_eq!(go(Focus::Tab(1), |n| n.down = true), Focus::Item(0));
+        // The buildAR Menu, bottom right: down from the last cards, up back to them; the bottom.
+        assert_eq!(go(Focus::Item(3), |n| n.down = true), Focus::Settings);
+        assert_eq!(go(Focus::Settings, |n| n.up = true), Focus::Item(3));
+        assert_eq!(go(Focus::Settings, |n| n.down = true), Focus::Settings);
     }
 
     /// The parks screen as the headset draws it, saved as a picture to look at:
@@ -2002,7 +1938,7 @@ mod tests {
                 move |world: &mut World| {
                     {
                         let mut screen = world.resource_mut::<ParksScreen>();
-                        screen.focus = Focus::Item(if tracks { 0 } else { 2 }, Part::Main);
+                        screen.focus = Focus::Item(if tracks { 0 } else { 2 });
                         if tracks {
                             screen.tab = 1;
                         }

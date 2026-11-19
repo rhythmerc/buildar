@@ -11,7 +11,6 @@ use super::{
 use crate::engines::{Engine, Engines, Mode};
 use crate::xr::build::anchor::Anchors;
 use crate::xr::build::parks::{self as park, Here, Parks};
-use crate::xr::build::BuildMode;
 use crate::xr::ui::pointer::UiPointer;
 use crate::xr::ui::{Nav, Outcome};
 use bevy::prelude::*;
@@ -123,6 +122,8 @@ pub(crate) struct RowView {
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct View {
     tab: String,
+    /// What the course is ("Park", "Track").
+    course: String,
     title: String,
     mode: String,
     engine: String,
@@ -353,11 +354,10 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                     world.resource_mut::<ParksScreen>().engine_settings = Some((engine, 0));
                 }
             }
-            Some(Spot::Play) => outcome = Outcome::Close,
-            Some(Spot::Edit) => {
-                world.resource_mut::<BuildMode>().active = true;
-                outcome = Outcome::Close;
-            }
+            // (played or built as a card's buttons did: the open course goes on, another is opened - its engine
+            // first)
+            Some(Spot::Play) => outcome = super::open_with_engine(world, &details.id, super::Then::Open(false)),
+            Some(Spot::Edit) => outcome = super::open_with_engine(world, &details.id, super::Then::Open(true)),
             Some(Spot::Delete) => world.resource_mut::<ParksScreen>().confirm = Some((details.id.clone(), false)),
             None if nav.back => {
                 // (B: to the parks)
@@ -446,6 +446,7 @@ pub(super) fn view(world: &World, modal: bool) -> Option<View> {
     let now = park::now();
     Some(View {
         tab: park::courses_name(mode).to_string(),
+        course: park::course_name(mode).to_string(),
         title: file.name.clone(),
         mode: mode.name().to_string(),
         engine: engine.map_or_else(|| "None".to_string(), |e| e.name().to_string()),
@@ -543,7 +544,7 @@ pub(super) fn panel(root: &mut Spawner, view: &View, fonts: &Fonts, icons: &Icon
             ))
             .with_children(|b| {
                 icon(b, &icons.sliders, 26.0, DIM);
-                b.spawn((Text::new("Settings"), fonts.body(19.0, 600), TextColor(DIM)));
+                b.spawn((Text::new(format!("{} Settings", view.course)), fonts.body(19.0, 600), TextColor(DIM)));
             });
         });
         // The name (pressed: renamed), then its mode and engine.

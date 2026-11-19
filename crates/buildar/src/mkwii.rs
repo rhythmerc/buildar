@@ -165,8 +165,8 @@ impl Default for TrackSettings {
 
 /// The track's settings in the course settings dialog.
 const TRACK_STEPPERS: [engines::CourseStepper; 2] = [
-    engines::CourseStepper { key: "speed", label: "Top speed", help: "100% is the kart's own", range: (0.5, 2.0, 0.05), default: 1.0, percent: true },
-    engines::CourseStepper { key: "acceleration", label: "Acceleration", help: "100% is the kart's own", range: (0.5, 3.0, 0.1), default: 1.0, percent: true },
+    engines::CourseStepper { key: "speed", label: "Top speed", help: "100% is the kart's own", range: (0.1, 2.0, 0.01), default: 1.0, percent: true },
+    engines::CourseStepper { key: "acceleration", label: "Acceleration", help: "100% is the kart's own", range: (0.1, 3.0, 0.01), default: 1.0, percent: true },
 ];
 
 impl TrackSettings {
