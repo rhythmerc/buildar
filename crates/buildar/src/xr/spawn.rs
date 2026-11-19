@@ -1,9 +1,8 @@
-//! Drop the player anywhere, with either hand: hold its grip and trigger, push
+//! Drop the player anywhere, with either hand: hold its grip and trigger and
 //! its stick down, and point that controller at a surface (real or course); a
-//! ray and target ring show where. Let go of the grip or trigger to put the
-//! player there, facing the pointing direction. The stick only starts it (it can
-//! come back up while aiming); the pad is neutral while aiming so the chord
-//! doesn't also reach the game.
+//! ray and target ring show where. Let go of any of the three to put the player
+//! there, facing the pointing direction. The pad is neutral while aiming so the
+//! chord doesn't also reach the game.
 //!
 //! The menu's "Place the skater" is the same with the right controller and
 //! no chord to know ([`PlaceSkater`]): point, and A or the trigger puts the
@@ -198,17 +197,15 @@ fn show_aim(
     }
 }
 
-/// The hand aiming to place, given the one that was and each hand's grip, trigger and stick (up and down): one
-/// already aiming keeps it while its grip and trigger are held; else a hand starts with its grip and trigger held
-/// and its stick pushed down.
+/// The hand aiming to place, given the one that was and each hand's grip, trigger and stick (up and down): a hand
+/// aims while its grip, its trigger and its stick down are all held (one already aiming keeps it).
 fn aiming_with(was: Option<Hand>, left: (f32, f32, f32), right: (f32, f32, f32)) -> Option<Hand> {
-    let held = |(grip, trigger, _): (f32, f32, f32)| grip >= SQUEEZE && trigger >= SQUEEZE;
-    let starts = |hand: (f32, f32, f32)| held(hand) && hand.2 <= -STICK_DOWN;
+    let held = |(grip, trigger, stick): (f32, f32, f32)| grip >= SQUEEZE && trigger >= SQUEEZE && stick <= -STICK_DOWN;
     match was {
         Some(Hand::Left) if held(left) => Some(Hand::Left),
         Some(Hand::Right) if held(right) => Some(Hand::Right),
-        _ if starts(right) => Some(Hand::Right),
-        _ if starts(left) => Some(Hand::Left),
+        _ if held(right) => Some(Hand::Right),
+        _ if held(left) => Some(Hand::Left),
         _ => None,
     }
 }
@@ -256,18 +253,18 @@ pub(crate) fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: V
 mod tests {
     use super::*;
 
-    /// Grip and trigger and the stick down start it, on either hand; the stick can come back while the chord is
-    /// held; letting go ends it. Grip and trigger alone don't.
+    /// Grip, trigger and the stick down, on either hand, aim; letting go of any one ends it. Grip and trigger
+    /// alone don't.
     #[test]
     fn grip_trigger_and_stick_down_aim_with_that_hand() {
         let (idle, chord, chord_down) = ((0.0, 0.0, 0.0), (1.0, 1.0, 0.0), (1.0, 1.0, -1.0));
         assert!(aiming_with(None, chord, chord).is_none());
         assert!(aiming_with(None, chord_down, idle) == Some(Hand::Left));
         assert!(aiming_with(None, idle, chord_down) == Some(Hand::Right));
-        assert!(aiming_with(Some(Hand::Left), chord, idle) == Some(Hand::Left));
-        assert!(aiming_with(Some(Hand::Right), idle, chord) == Some(Hand::Right));
-        assert!(aiming_with(Some(Hand::Left), (1.0, 0.0, -1.0), chord_down) == Some(Hand::Right));
-        assert!(aiming_with(Some(Hand::Right), idle, (0.0, 1.0, 0.0)).is_none());
+        assert!(aiming_with(Some(Hand::Left), chord_down, chord_down) == Some(Hand::Left));
+        assert!(aiming_with(Some(Hand::Left), chord, idle).is_none(), "the stick let go");
+        assert!(aiming_with(Some(Hand::Right), idle, (1.0, 0.0, -1.0)).is_none(), "the trigger let go");
+        assert!(aiming_with(Some(Hand::Left), (0.0, 1.0, -1.0), chord_down) == Some(Hand::Right));
     }
 
     #[test]

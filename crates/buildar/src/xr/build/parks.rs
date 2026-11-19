@@ -599,7 +599,7 @@ pub(crate) fn use_its_engine(world: &mut World, id: &str) {
     if world.get_resource::<Engines>().is_none_or(|e| !e.listed(engine, world) || e.available(engine, world).is_err()) {
         return;
     }
-    if world.resource::<Engines>().current() != Some(engine) {
+    if world.resource::<Engines>().chosen() != Some(engine) {
         world.resource_mut::<Engines>().request(engine);
         info!("PARKS {id} was built for {}: switching to it", engine.name());
     }
@@ -612,8 +612,8 @@ pub(crate) fn use_its_engine(world: &mut World, id: &str) {
 /// that can run.
 pub(crate) fn engine_of_mode(world: &World, mode: Mode) -> Option<Engine> {
     let engines = world.get_resource::<Engines>()?;
-    if engines.current().is_some_and(|e| e.mode() == mode) {
-        return engines.current();
+    if engines.chosen().is_some_and(|e| e.mode() == mode) {
+        return engines.chosen();
     }
     Engine::ALL.into_iter().find(|&e| e.mode() == mode && engines.listed(e, world) && engines.available(e, world).is_ok())
 }
@@ -794,7 +794,7 @@ pub(crate) fn set_mode(world: &mut World, id: &str, mode: Mode) {
     }
     if world.resource::<Parks>().is_current(id)
         && let Some(engine) = engine_of_mode(world, mode)
-        && world.get_resource::<Engines>().and_then(|e| e.current()) != Some(engine)
+        && world.get_resource::<Engines>().and_then(|e| e.chosen()) != Some(engine)
     {
         world.resource_mut::<Engines>().request(engine);
     }

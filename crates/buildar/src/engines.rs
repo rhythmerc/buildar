@@ -57,6 +57,9 @@ pub(crate) struct Engines {
     /// The systems made an engine's through its set (each once), and the schedules its set is gated in.
     wrapped: HashSet<(InternedScheduleLabel, SystemKey)>,
     gated_sets: HashSet<(InternedScheduleLabel, Engine)>,
+    /// While this says so, a switch asked for waits (the editor and the menus: the engine picked starts when the
+    /// player goes to play): [`Engines::hold_while`].
+    hold_while: Option<fn(&World) -> bool>,
 }
 
 impl Engines {
@@ -75,12 +78,25 @@ impl Engines {
             launched: false,
             wrapped: HashSet::new(),
             gated_sets: HashSet::new(),
+            hold_while: None,
         }
     }
 
     /// The running engine (none before the first frame).
     pub(crate) fn current(&self) -> Option<Engine> {
         self.current
+    }
+
+    /// The engine picked: the one a switch asked for waits to start, else the running one. What the menus show,
+    /// and what a course is opened or made for.
+    pub(crate) fn chosen(&self) -> Option<Engine> {
+        self.wanted.or(self.current)
+    }
+
+    /// Switches asked for wait while `hold` says so (the first frame's start doesn't).
+    #[cfg_attr(not(feature = "xr"), allow(dead_code))]
+    pub(crate) fn hold_while(&mut self, hold: fn(&World) -> bool) {
+        self.hold_while = Some(hold);
     }
 
     /// The running engine, once any switch asked for has happened (none while one is pending).
@@ -454,6 +470,10 @@ fn switch(world: &mut World) {
         wanted => wanted,
     };
     let Some(wanted) = wanted.filter(|w| Some(*w) != current) else { return };
+    let hold = world.resource::<Engines>().hold_while;
+    if !first && hold.is_some_and(|hold| hold(world)) {
+        return;
+    }
     // (an engine that can't run now - its data gone - leaves things as they are; at the start, the first that can)
     let check = world.resource::<Engines>().available(wanted, world);
     if let Err(why) = check {
@@ -654,6 +674,27 @@ mod tests {
         app.world_mut().resource_mut::<Engines>().request(Engine::Sk8);
         let back = sorted(frame(&mut app));
         assert_eq!(back, vec!["a", "helper", "shared"], "no second start");
+    }
+
+    #[derive(Resource)]
+    struct Editing(bool);
+
+    /// An engine picked while switches are held waits, picked, until they aren't: then it starts.
+    #[test]
+    fn a_switch_waits_while_held() {
+        let mut app = app();
+        app.insert_resource(Editing(true));
+        app.world_mut().resource_mut::<Engines>().hold_while(|w| w.resource::<Editing>().0);
+        frame(&mut app);
+        assert_eq!(app.world().resource::<Engines>().current(), Some(Engine::Sk8), "the first start isn't held");
+        app.world_mut().resource_mut::<Engines>().request(Engine::Thug2);
+        let held = frame(&mut app);
+        assert!(!held.contains(&"b start"), "{held:?}");
+        let engines = app.world().resource::<Engines>();
+        assert_eq!((engines.current(), engines.chosen(), engines.settled()), (Some(Engine::Sk8), Some(Engine::Thug2), None));
+        app.world_mut().resource_mut::<Editing>().0 = false;
+        assert!(frame(&mut app).contains(&"b start"));
+        assert_eq!(app.world().resource::<Engines>().current(), Some(Engine::Thug2));
     }
 
     /// A system put in an engine's set after the engine was added (a plugin's `finish`, a later `add_systems`) is

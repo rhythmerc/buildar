@@ -573,6 +573,17 @@ struct Buttons {
 
 pub(crate) struct BuildPlugin;
 
+/// An engine picked while building or in a menu starts when the player goes to play, not before: the editor needs
+/// none ready.
+fn hold_engine_switches(engines: Option<ResMut<crate::engines::Engines>>) {
+    if let Some(mut engines) = engines {
+        engines.hold_while(|world| {
+            world.get_resource::<BuildMode>().is_some_and(|b| b.active)
+                || world.get_resource::<super::panel::XrPanel>().is_some_and(|p| p.visible)
+        });
+    }
+}
+
 impl Plugin for BuildPlugin {
     fn build(&self, app: &mut App) {
         bevy::asset::embedded_asset!(app, "occluder.wgsl");
@@ -580,6 +591,7 @@ impl Plugin for BuildPlugin {
             .add_plugins(pool_shadow::PoolShadowPlugin)
             .init_resource::<pool::PoolAssets>()
             .init_resource::<BuildMode>()
+            .add_systems(Startup, hold_engine_switches)
             .init_resource::<size::Rescale>()
             .add_systems(First, size::apply_rescale)
             .init_resource::<PlacedPieces>()

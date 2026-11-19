@@ -52,7 +52,7 @@ pub(crate) fn engine_of(world: &World, file: &ParkFile) -> Option<Engine> {
         .as_deref()
         .and_then(Engine::from_key)
         .or_else(|| file.mode().and_then(|m| parks::engine_of_mode(world, m)))
-        .or_else(|| world.get_resource::<Engines>().and_then(|e| e.current()))
+        .or_else(|| world.get_resource::<Engines>().and_then(|e| e.chosen()))
 }
 
 /// The world scale a course's x1.0 is.
@@ -65,7 +65,7 @@ pub(crate) fn current_default(world: &World) -> f32 {
     let parks = world.resource::<Parks>();
     match parks.current.as_ref().and_then(|c| parks.get(&c.id)) {
         Some(entry) => default_of(world, &entry.file),
-        None => world.get_resource::<Engines>().and_then(|e| e.current()).map_or(Engine::Skate3.default_scale(), Engine::default_scale),
+        None => world.get_resource::<Engines>().and_then(|e| e.chosen()).map_or(Engine::Skate3.default_scale(), Engine::default_scale),
     }
 }
 

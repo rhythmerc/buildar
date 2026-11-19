@@ -142,7 +142,7 @@ fn mode_rows() -> Vec<(Mode, &'static str, &'static str)> {
 
 /// The engine the course plays on: the running one if it's of the course's mode, else the one it was built for.
 fn engine_of(world: &World, mode: Mode, built_for: Option<Engine>) -> Option<Engine> {
-    let running = world.get_resource::<Engines>().and_then(|e| e.current()).filter(|e| e.mode() == mode);
+    let running = world.get_resource::<Engines>().and_then(|e| e.chosen()).filter(|e| e.mode() == mode);
     running.or(built_for)
 }
 

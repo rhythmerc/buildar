@@ -2,7 +2,7 @@
 //! what it is doing, a bar sweeping); once its player can be put in the room, it teaches the chord that places it
 //! (`xr::spawn`: grip, trigger and stick down, on either hand), so the first placing is the lesson. Loading is done
 //! when the player can place, not when the engine is made: a game can load for seconds after
-//! (`engine_driver::Ready`). Gone once the player is placed, and while a menu is open.
+//! (`engine_driver::Ready`). Gone once the player is placed, and while a menu or the editor is open.
 //!
 //! In the menu's look (`super::spawn_ui`): a dark rounded card, the title heavy, the line under it in the menu's
 //! teal. It floats over the right controller, turned to the head (ahead of the head, a little below the eyes, while
@@ -71,7 +71,7 @@ fn says(engine: crate::engines::Engine, ready: Ready, placing: bool) -> Option<(
         }
         Ready::ToPlace => Some((
             format!("Place your {noun}"),
-            "Hold grip + trigger, push the stick down.\nPoint, then let go".into(),
+            "Hold grip + trigger + stick down.\nPoint, then let go".into(),
             false,
         )),
         Ready::Placed => None,
@@ -207,6 +207,7 @@ fn draw(
 fn place(
     rig: Res<Rig>,
     panel: Res<XrPanel>,
+    build: Res<crate::xr::build::BuildMode>,
     readiness: Res<Readiness>,
     engines: Option<Res<crate::engines::Engines>>,
     placing: Res<crate::xr::spawn::PlaceSkater>,
@@ -225,7 +226,8 @@ fn place(
         n += 1.0;
     }
     let shows = current(&readiness, engines.as_deref()).and_then(|(e, r)| says(e, r, placing.0)).is_some();
-    let show = shows && !panel.visible && rotation.is_some();
+    // (not while building: the engine waits for play, and the player isn't placed in the editor)
+    let show = shows && !panel.visible && !build.active && rotation.is_some();
     if cam.is_active != show {
         cam.is_active = show;
     }

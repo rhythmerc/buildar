@@ -108,6 +108,8 @@ struct CardView {
     thumb: Option<Handle<Image>>,
     /// It has no pieces yet.
     empty: bool,
+    /// The engine it plays on (its own, whichever engine is picked); none: it plays on the one picked.
+    engine: Option<&'static str>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -435,7 +437,7 @@ fn engine_rows(world: &World, mode: Mode) -> Option<Vec<EngineRow>> {
             .filter(|&&e| e.mode() == mode && engines.listed(e, world))
             .map(|&e| {
                 let why = engines.available(e, world).err().unwrap_or_default();
-                EngineRow { engine: e, name: e.name().to_string(), installed: why.is_empty(), why, running: engines.current() == Some(e) }
+                EngineRow { engine: e, name: e.name().to_string(), installed: why.is_empty(), why, running: engines.chosen() == Some(e) }
             })
             .collect();
     (!rows.is_empty()).then_some(rows)
@@ -521,6 +523,7 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                     current,
                     thumb: screen.thumbs.get(&p.id).map(|(_, h)| h.clone()),
                     empty: p.file.pieces.is_empty(),
+                    engine: p.file.engine().map(Engine::name),
                 })
             }))
             .collect()
@@ -1536,7 +1539,10 @@ fn card(row: &mut Spawner, i: usize, item: &Item, focus: Option<Focus>, icons: &
                             top.spawn((Text::new("Empty"), fonts.display(20.0, 600), TextColor(LINE)));
                         }
                     }
-                    // (whether it is here, the divider says)
+                    // (whether it is here, the divider says; the engine it plays on, whichever is picked)
+                    if let Some(engine) = view.engine {
+                        tag(top, fonts, (Some(12.0), None), engine, Color::WHITE, Color::srgba(0.0, 0.0, 0.0, 0.6));
+                    }
                     if view.current {
                         tag(top, fonts, (None, Some(12.0)), "Skating", INK, TEAL);
                     }
@@ -1576,7 +1582,7 @@ mod tests {
     use super::*;
 
     fn view(id: &str, here: Here) -> Item {
-        Item::Park(CardView { id: id.into(), name: id.into(), sub: String::new(), here, current: false, thumb: None, empty: false })
+        Item::Park(CardView { id: id.into(), name: id.into(), sub: String::new(), here, current: false, thumb: None, empty: false, engine: None })
     }
 
     #[test]

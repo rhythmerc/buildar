@@ -252,7 +252,7 @@ fn offered_engines(world: &World) -> Vec<Engine> {
 
 fn engine_widgets(world: &World) -> Vec<Widget> {
     let Some(engines) = world.get_resource::<Engines>() else { return vec![Widget::info("One engine in this app.")] };
-    let current = engines.current();
+    let current = engines.chosen();
     let offered = offered_engines(world);
     let mut w = Vec::new();
     for (id, engine) in ENGINE_IDS.into_iter().filter(|(_, e)| offered.contains(e)) {
@@ -280,7 +280,7 @@ fn engine_act(widget: &str, world: &mut World) -> Outcome {
     }
     let Some(&(_, engine)) = ENGINE_IDS.iter().find(|(id, _)| *id == widget) else { return Outcome::Stay };
     let Some(engines) = world.get_resource::<Engines>() else { return Outcome::Stay };
-    if engines.current() == Some(engine) {
+    if engines.chosen() == Some(engine) {
         return Outcome::Say(format!("{} is running", engine.name()));
     }
     match engines.available(engine, world) {
@@ -740,7 +740,7 @@ fn files_widgets(world: &World, engine: Engine) -> Vec<Widget> {
         Some(_) if !installed => "Your files aren't here yet.",
         Some(state) => state,
     })];
-    if engines.available(engine, world).is_ok() && engines.current() != Some(engine) {
+    if engines.available(engine, world).is_ok() && engines.chosen() != Some(engine) {
         w.push(Widget::button("play", format!("Play {} now", engine.name())));
     }
     if installed && !engines.carries(engine) {

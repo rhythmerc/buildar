@@ -390,8 +390,25 @@ fn input<M: Hosted>(
     core.set_view(view);
 }
 
-fn place<M: Hosted>(mut requests: MessageReader<PlacePlayer>, mut driver: ResMut<Driver<M>>) {
+fn place<M: Hosted>(
+    mut requests: MessageReader<PlacePlayer>,
+    parks: Option<Res<crate::xr::build::parks::Parks>>,
+    mut driver: ResMut<Driver<M>>,
+    mut played: Local<Option<String>>,
+) {
     let driver = &mut *driver;
+    // (another course opened: the player is put in it afresh, not carried over from the last; a place asked for
+    // with it is read after)
+    let open = parks.and_then(|p| p.current.as_ref().map(|c| c.id.clone()));
+    if let Some(open) = open
+        && played.as_ref() != Some(&open)
+    {
+        if played.is_some() {
+            info!("{}: another course open: to be placed again", M::ENGINE.name());
+        }
+        driver.placed = false;
+        *played = Some(open);
+    }
     for r in requests.read() {
         driver.placed = true;
         match running::<M>(&mut driver.phase) {
