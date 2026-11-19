@@ -71,6 +71,8 @@ pub(crate) struct Driver<M: Hosted> {
     scratch: Vec<Pose>,
     heard: Heard,
     voices: Voices,
+    /// Where its sounds are heard from: its player (`aim`).
+    emitter: std::sync::Arc<crate::binaural::Emitter>,
     heard_now: Vec<Voice>,
     /// Where the player was after the last two steps.
     focus: [Option<Focus>; 2],
@@ -104,6 +106,7 @@ impl<M: Hosted> Driver<M> {
             scratch: Vec::new(),
             heard: Heard::default(),
             voices: Voices::default(),
+            emitter: Default::default(),
             heard_now: Vec::new(),
             focus: [None; 2],
             pending: None,
@@ -223,6 +226,7 @@ pub(crate) fn install<M: Hosted>(app: &mut App, factory: EngineFactory, marker: 
                 want_hud::<M>,
                 step::<M>,
                 publish::<M>.before(crate::skate_audio::clean::SkaterSoundSet),
+                aim::<M>,
                 play::<M>,
                 play_stream::<M>,
                 draw_hud::<M>,
@@ -521,14 +525,25 @@ fn publish<M: Hosted>(
     }
 }
 
-/// The engine's voices from where they are, at its level and pitch. While the player is busy elsewhere its loops wait
+/// Its sounds' emitter at its player (its feet, after its last step), as the head hears it - every engine's sound,
+/// voices and mix alike, comes from where its player is.
+fn aim<M: Hosted>(
+    driver: Res<Driver<M>>,
+    listener: Query<&Transform, With<bevy::audio::SpatialListener>>,
+    scale: Res<bevy::audio::DefaultSpatialScale>,
+) {
+    if let (Some(focus), Ok(head)) = (driver.focus[1], listener.single()) {
+        crate::binaural::place(&driver.emitter, focus.feet, head, scale.0.0.x);
+    }
+}
+
+/// The engine's voices, from its player at its level and pitch. While the player is busy elsewhere its loops wait
 /// too.
-#[allow(clippy::type_complexity)]
 fn play<M: Hosted>(
     mut commands: Commands,
     held: Res<engine_api::PadHeld>,
     mut assets: ResMut<Assets<VoicePcm>>,
-    mut emitters: Query<(Entity, &VoiceEmitter, &mut Transform, Option<&mut bevy::audio::SpatialAudioSink>)>,
+    mut playing: Query<(Entity, &VoiceEmitter, Option<&mut bevy::audio::AudioSink>)>,
     mut driver: ResMut<Driver<M>>,
 ) {
     let d = &mut *driver;
@@ -540,7 +555,7 @@ fn play<M: Hosted>(
         d.heard.forget_started();
         return;
     }
-    d.voices.play(&mut d.heard, held.pause, d.volume, &mut commands, &mut assets, &mut emitters);
+    d.voices.play(&mut d.heard, held.pause, d.volume, &d.emitter, &mut commands, &mut assets, &mut playing);
 }
 
 fn draw_hud<M: Hosted>(mut driver: ResMut<Driver<M>>, mut renderer: crate::engine_hud::HudRenderer) {
@@ -661,19 +676,16 @@ fn pose_models<M: Hosted>(
     }
 }
 
-/// The engine's own mix, from where the player is (in AR a spatial emitter there); held with the engine.
+/// The engine's own mix, from its player; held with the engine.
 fn play_stream<M: Hosted>(
     mut commands: Commands,
     held: Res<engine_api::PadHeld>,
-    spatial: Option<Res<crate::skate_audio::clean::SpatialSkateAudio>>,
-    mut assets: ResMut<Assets<crate::live_pcm::LivePcm>>,
-    mut transforms: Query<&mut Transform>,
+    mut assets: ResMut<Assets<crate::engine_audio::EngineMix>>,
     mut driver: ResMut<Driver<M>>,
 ) {
     let d = &mut *driver;
-    let at = d.focus[1].map(|f| f.feet);
     if let Some(stream) = &mut d.stream {
-        stream.update(&mut commands, &mut assets, held.pause || !d.placed, at, spatial.is_some(), &mut transforms);
+        stream.update(&mut commands, &mut assets, held.pause || !d.placed, &d.emitter);
     }
 }
 

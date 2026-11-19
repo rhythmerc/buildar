@@ -231,6 +231,15 @@ impl Emitter {
     }
 }
 
+/// `emitter` set for a sound at `source` heard from `head` (both in the game world): its direction in the head's own
+/// frame, and its level for its distance - full within one spatial unit (`units`: spatial units a world unit, Bevy's
+/// `DefaultSpatialScale`), the inverse square beyond it.
+pub(crate) fn place(emitter: &Emitter, source: Vec3, head: &Transform, units: f32) {
+    let to_source = source - head.translation;
+    let distance = (to_source * units).length();
+    emitter.set(head.rotation.inverse() * to_source, (1.0 / (distance * distance).max(1e-6)).min(1.0));
+}
+
 /// One sound's place in the room and its pitch.
 pub(crate) struct Voice {
     pub emitter: Arc<Emitter>,
@@ -386,24 +395,7 @@ impl CleanPlayback {
             self.ready.extend(&mono[..count]);
             return true;
         };
-        let (mut left, mut right) = ([0.0f32; FRAME], [0.0f32; FRAME]);
-        let mut input = [mono.as_mut_ptr()];
-        let mut output = [left.as_mut_ptr(), right.as_mut_ptr()];
-        let mut from = AudioBuffer { channels: 1, samples: FRAME as i32, data: input.as_mut_ptr() };
-        let mut to = AudioBuffer { channels: 2, samples: FRAME as i32, data: output.as_mut_ptr() };
-        let mut params = BinauralEffectParams {
-            direction: voice.emitter.direction.each_ref().map(load),
-            interpolation: BILINEAR,
-            spatial_blend: 1.0,
-            hrtf: effect.hrtf,
-            peak_delays: std::ptr::null_mut(),
-        };
-        // SAFETY: the effect and HRTF are live, and both buffers are FRAME samples a channel.
-        {
-            let _call = effect.phonon.call();
-            unsafe { (effect.phonon.effect_apply)(effect.effect, &mut params, &mut from, &mut to) };
-        }
-        self.ready.extend(left.iter().zip(&right).flat_map(|(l, r)| [*l, *r]));
+        effect.apply(&mut mono, voice.emitter.direction.each_ref().map(load), &mut self.ready);
         true
     }
 }
@@ -434,24 +426,45 @@ impl Source for CleanPlayback {
     }
 }
 
+impl Effect {
+    /// A binaural effect at `rate`, if Steam Audio is loaded.
+    fn new(rate: u32) -> Option<Self> {
+        let phonon = phonon()?;
+        let hrtf = phonon.hrtf(rate)?;
+        let mut audio = AudioSettings { sampling_rate: rate as i32, frame_size: FRAME as i32 };
+        let mut settings = BinauralEffectSettings { hrtf };
+        let mut effect: Handle = std::ptr::null_mut();
+        // SAFETY: the context and HRTF are live and the settings are as phonon.h lays them out.
+        let status = {
+            let _call = phonon.call();
+            unsafe { (phonon.effect_create)(phonon.context, &mut audio, &mut settings, &mut effect) }
+        };
+        (status == 0 && !effect.is_null()).then_some(Effect { phonon, effect, hrtf })
+    }
+
+    /// One frame of `mono` toward `direction` (the head's own frame), into `out` as interleaved stereo.
+    fn apply(&self, mono: &mut [f32; FRAME], direction: [f32; 3], out: &mut VecDeque<f32>) {
+        let (mut left, mut right) = ([0.0f32; FRAME], [0.0f32; FRAME]);
+        let mut input = [mono.as_mut_ptr()];
+        let mut output = [left.as_mut_ptr(), right.as_mut_ptr()];
+        let mut from = AudioBuffer { channels: 1, samples: FRAME as i32, data: input.as_mut_ptr() };
+        let mut to = AudioBuffer { channels: 2, samples: FRAME as i32, data: output.as_mut_ptr() };
+        let mut params = BinauralEffectParams { direction, interpolation: BILINEAR, spatial_blend: 1.0, hrtf: self.hrtf, peak_delays: std::ptr::null_mut() };
+        // SAFETY: the effect and HRTF are live, and both buffers are FRAME samples a channel.
+        {
+            let _call = self.phonon.call();
+            unsafe { (self.phonon.effect_apply)(self.effect, &mut params, &mut from, &mut to) };
+        }
+        out.extend(left.iter().zip(&right).flat_map(|(l, r)| [*l, *r]));
+    }
+}
+
 impl Decodable for CleanPcm {
     type DecoderItem = f32;
     type Decoder = CleanPlayback;
 
     fn decoder(&self) -> CleanPlayback {
-        let spatial = self.voice.as_ref().and_then(|voice| {
-            let phonon = phonon()?;
-            let hrtf = phonon.hrtf(self.rate)?;
-            let mut audio = AudioSettings { sampling_rate: self.rate as i32, frame_size: FRAME as i32 };
-            let mut settings = BinauralEffectSettings { hrtf };
-            let mut effect: Handle = std::ptr::null_mut();
-            // SAFETY: the context and HRTF are live and the settings are as phonon.h lays them out.
-            let status = {
-                let _call = phonon.call();
-                unsafe { (phonon.effect_create)(phonon.context, &mut audio, &mut settings, &mut effect) }
-            };
-            (status == 0 && !effect.is_null()).then(|| (Effect { phonon, effect, hrtf }, voice.clone()))
-        });
+        let spatial = self.voice.as_ref().and_then(|voice| Some((Effect::new(self.rate)?, voice.clone())));
         let mut seen = 0;
         let samples = self.buffer.newer(&mut seen).unwrap_or_else(|| self.buffer.get());
         CleanPlayback {
@@ -470,6 +483,137 @@ impl Decodable for CleanPcm {
             ready: VecDeque::with_capacity(2 * FRAME),
             tail: 2,
         }
+    }
+}
+
+// ---------------------------------------------------------------- any source, from an emitter
+
+/// Any sound (an engine's own mix, its clips) heard from `emitter` through the HRTF: folded to mono, at the
+/// emitter's level for its distance, toward its direction from the head - in stereo. Steam Audio's HRTF is at 44.1 or
+/// 48 kHz only: a sound at another rate (an engine's own: Mario Kart Wii's 32 kHz) is resampled to 48 kHz first.
+/// Without Steam Audio, mono as it is (a development build's).
+pub(crate) struct Spatialised<S> {
+    inner: S,
+    channels: u16,
+    /// The rate it plays at (the HRTF's), and the inner's frames a frame of it (1: as it is).
+    rate: u32,
+    step: f64,
+    /// The inner's two mono frames about the next one out, and how far between them it is.
+    around: (f32, f32),
+    phase: f64,
+    effect: Option<Effect>,
+    emitter: Arc<Emitter>,
+    /// The emitter's level as the last frame ended (levels ramp over a frame).
+    gain: f32,
+    ready: VecDeque<f32>,
+    /// The inner source has ended; frames of silence still to go through the effect (the HRTF's tail).
+    ended: bool,
+    tail: u32,
+}
+
+/// The rates Steam Audio's HRTF is at; the one others are resampled to.
+const HRTF_RATES: [u32; 2] = [44_100, 48_000];
+const HRTF_RATE: u32 = 48_000;
+
+impl<S: Source<Item = f32>> Spatialised<S> {
+    pub(crate) fn new(inner: S, emitter: Arc<Emitter>) -> Self {
+        let (channels, own) = (inner.channels().max(1), inner.sample_rate().max(1));
+        let effect = if HRTF_RATES.contains(&own) { Effect::new(own) } else { Effect::new(HRTF_RATE) };
+        let rate = if effect.is_some() && !HRTF_RATES.contains(&own) { HRTF_RATE } else { own };
+        let mut out = Self {
+            channels,
+            rate,
+            step: f64::from(own) / f64::from(rate),
+            around: (0.0, 0.0),
+            phase: 0.0,
+            effect,
+            gain: load(&emitter.gain),
+            emitter,
+            inner,
+            ready: VecDeque::with_capacity(2 * FRAME),
+            ended: false,
+            tail: 2,
+        };
+        out.around = (out.mono().unwrap_or(0.0), out.mono().unwrap_or(0.0));
+        out
+    }
+
+    /// The inner's next frame, its channels folded into one.
+    fn mono(&mut self) -> Option<f32> {
+        let mut sum = 0.0;
+        for _ in 0..self.channels {
+            sum += self.inner.next()?;
+        }
+        Some(sum / f32::from(self.channels))
+    }
+
+    /// One frame into `ready`; false once the sound (and its tail) is done.
+    fn render(&mut self) -> bool {
+        if self.ended {
+            if self.effect.is_none() || self.tail == 0 {
+                return false;
+            }
+            self.tail -= 1;
+        }
+        let mut mono = [0.0f32; FRAME];
+        let mut count = 0;
+        if !self.ended {
+            for out in mono.iter_mut() {
+                // (between the two inner frames about it, read on at the inner's pace)
+                while self.phase >= 1.0 {
+                    let Some(next) = self.mono() else {
+                        self.ended = true;
+                        break;
+                    };
+                    self.around = (self.around.1, next);
+                    self.phase -= 1.0;
+                }
+                if self.ended {
+                    break;
+                }
+                let (a, b) = self.around;
+                *out = a + (b - a) * self.phase as f32;
+                self.phase += self.step;
+                count += 1;
+            }
+        }
+        let target = load(&self.emitter.gain);
+        for (i, out) in mono.iter_mut().enumerate() {
+            *out *= self.gain + (target - self.gain) * (i as f32 / FRAME as f32);
+        }
+        self.gain = target;
+        match &self.effect {
+            Some(effect) => effect.apply(&mut mono, self.emitter.direction.each_ref().map(load), &mut self.ready),
+            None if count == 0 => return false,
+            None => self.ready.extend(&mono[..count]),
+        }
+        true
+    }
+}
+
+impl<S: Source<Item = f32>> Iterator for Spatialised<S> {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<f32> {
+        if self.ready.is_empty() && !self.render() {
+            return None;
+        }
+        self.ready.pop_front()
+    }
+}
+
+impl<S: Source<Item = f32>> Source for Spatialised<S> {
+    fn current_frame_len(&self) -> Option<usize> {
+        None
+    }
+    fn channels(&self) -> u16 {
+        if self.effect.is_some() { 2 } else { 1 }
+    }
+    fn sample_rate(&self) -> u32 {
+        self.rate
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        None
     }
 }
 
@@ -531,6 +675,73 @@ mod tests {
         let (near, _, _) = levels(Vec3::NEG_Z, 1.0);
         let (far, _, _) = levels(Vec3::NEG_Z, 0.25);
         assert!((far / near - 0.25).abs() < 0.05, "a quarter of the level: {far} of {near}");
+    }
+
+    /// Any source, stereo or not: from the emitter's side, at its level; to its end and the HRTF's tail.
+    #[test]
+    fn any_source_is_heard_from_its_emitter() {
+        if !available() {
+            eprintln!("Steam Audio not found: skipped");
+            return;
+        }
+        // (a stereo clip, as an engine's: the same noise in both channels)
+        let mono = tone(0.5);
+        let stereo: Vec<i16> = mono.iter().flat_map(|&s| [s, s]).collect();
+        let heard = |direction: Vec3, gain: f32| {
+            let emitter = Arc::new(Emitter::default());
+            emitter.set(direction, gain);
+            let clip = crate::stream_pcm::StreamPcm::from_i16(Arc::new(stereo.clone()), 2, 48_000, false);
+            let playback = Spatialised::new(Decodable::decoder(&clip), emitter);
+            assert_eq!((playback.channels(), playback.sample_rate()), (2, 48_000));
+            let samples: Vec<f32> = playback.collect();
+            let power = |skip: usize| samples.iter().skip(skip).step_by(2).map(|s| s * s).sum::<f32>().sqrt();
+            (power(0), power(1), samples.len() / 2)
+        };
+        let (left, right, frames) = heard(Vec3::X, 1.0);
+        assert!(right > 1.6 * left, "to the right: left {left}, right {right}");
+        assert!(frames >= 24_000, "the whole clip and its tail: {frames}");
+        let (left, right, _) = heard(Vec3::NEG_X, 1.0);
+        assert!(left > 1.6 * right, "to the left: left {left}, right {right}");
+        let (near, _, _) = heard(Vec3::NEG_Z, 1.0);
+        let (far, _, _) = heard(Vec3::NEG_Z, 0.25);
+        assert!((far / near - 0.25).abs() < 0.05, "a quarter of the level: {far} of {near}");
+    }
+
+    /// A sound at a rate the HRTF isn't at (Mario Kart Wii's 32 kHz): resampled to 48 kHz, as long as it was, and
+    /// still from its emitter's side.
+    #[test]
+    fn a_sound_at_another_rate_is_resampled_for_the_hrtf() {
+        if !available() {
+            eprintln!("Steam Audio not found: skipped");
+            return;
+        }
+        let emitter = Arc::new(Emitter::default());
+        emitter.set(Vec3::X, 1.0);
+        let thirty_two: Vec<i16> = tone(0.5).iter().step_by(3).copied().collect();
+        let clip = crate::stream_pcm::StreamPcm::from_i16(Arc::new(thirty_two.clone()), 1, 16_000, false);
+        let playback = Spatialised::new(Decodable::decoder(&clip), emitter.clone());
+        assert_eq!((playback.channels(), playback.sample_rate()), (2, 48_000));
+        let samples: Vec<f32> = playback.collect();
+        let frames = samples.len() / 2;
+        assert!((thirty_two.len() * 3..thirty_two.len() * 3 + 3 * FRAME).contains(&frames), "its length at 48 kHz: {frames}");
+        let power = |skip: usize| samples.iter().skip(skip).step_by(2).map(|s| s * s).sum::<f32>();
+        assert!(power(1) > 2.0 * power(0), "to the right");
+        let clip = crate::stream_pcm::StreamPcm::from_i16(Arc::new(vec![1000; 32_000]), 1, 32_000, false);
+        assert_eq!(Spatialised::new(Decodable::decoder(&clip), emitter).sample_rate(), 48_000, "32 kHz too");
+    }
+
+    /// Placed from the head: a sound to the head's right, turned or not, is heard to its right; twice the spatial
+    /// unit away, at a quarter.
+    #[test]
+    fn an_emitter_is_placed_from_the_head() {
+        let emitter = Emitter::default();
+        let direction = |e: &Emitter| Vec3::from_array(e.direction.each_ref().map(load));
+        place(&emitter, Vec3::new(2.0, 1.0, 0.0), &Transform::from_xyz(0.0, 1.0, 0.0), 1.0);
+        assert!(direction(&emitter).distance(Vec3::X) < 1e-5 && (load(&emitter.gain) - 0.25).abs() < 1e-5);
+        // (the head turned to face +x: the sound is ahead, -z in its frame)
+        let facing_x = Transform::from_xyz(0.0, 1.0, 0.0).looking_to(Vec3::X, Vec3::Y);
+        place(&emitter, Vec3::new(0.5, 1.0, 0.0), &facing_x, 1.0);
+        assert!(direction(&emitter).distance(Vec3::NEG_Z) < 1e-5 && load(&emitter.gain) == 1.0);
     }
 
     #[test]

@@ -813,9 +813,7 @@ fn mix(
     // Through the HRTF: where the skater is from the head, and as loud as the panned sounds were
     // at that distance (full level within one spatial unit, the inverse square beyond it).
     if let (Some(emitter), Ok(head)) = (&audio.emitter, listener.single()) {
-        let to_source = audio.source - head.translation;
-        let units = (to_source * scale.0.0).length();
-        emitter.set(head.rotation.inverse() * to_source, (1.0 / (units * units).max(1e-6)).min(1.0));
+        crate::binaural::place(emitter, audio.source, head, scale.0.0.x);
     }
     let voices = audio.voices.clone();
     let blend = (time.delta_secs() / FADE_S).min(1.0);

@@ -1,15 +1,20 @@
-//! An engine's sound in the room, whichever engine it is (`engine_core::audio`):
+//! An engine's sound in the room, whichever engine it is (`engine_core::audio`): all of it heard from where its player
+//! is, through Steam Audio's HRTF (`binaural::Spatialised`, from the engine's one [`binaural::Emitter`] - the driver
+//! puts it at the player each frame: `engine_driver`), as the clean engine's sounds are.
 //!
 //! - [`EngineStream`]: an engine's own mix, made and rendered on a thread of its own and paced to the output; the mixer
-//!   pulls it from a [`LivePcm`] queue. Played from where the engine says (in AR, a spatial emitter there).
-//! - [`Voices`]: the clips an engine plays, each voice an emitter at its place at the engine's level and speed. A voice
-//!   played again from its start is a new emitter; a looping one goes when the engine stops it, one played once when
-//!   it has run out. While the engine is held its loops wait too.
+//!   pulls it from a [`LivePcm`] queue.
+//! - [`Voices`]: the clips an engine plays, each at the engine's level and speed. A voice played again from its start
+//!   plays anew; a looping one goes when the engine stops it, one played once when it has run out. While the engine is
+//!   held its loops wait too.
 //!
-//! Each engine's adapter feeds them (Skate 3's stream: `skate_audio::player`; THUG2's voices: `thug2`).
+//! The driver feeds them for every engine it hosts (`engine_driver`).
+//!
+//! [`binaural::Emitter`]: crate::binaural::Emitter
 use crate::live_pcm::LivePcm;
 use crate::stream_pcm::StreamPcm;
-use bevy::audio::{AudioPlayer, AudioSinkPlayback, PlaybackSettings, SpatialAudioSink, Volume};
+use crate::binaural::{Emitter, Spatialised};
+use bevy::audio::{AudioPlayer, AudioSink, AudioSinkPlayback, PlaybackSettings, Volume};
 use bevy::prelude::*;
 use engine_core::audio::{Clip, StreamFactory, Voice};
 use std::collections::{HashMap, HashSet};
@@ -18,11 +23,27 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+/// An engine's mix as an audio source: heard from its emitter.
+#[derive(Asset, TypePath, Clone)]
+pub(crate) struct EngineMix {
+    live: LivePcm,
+    emitter: Arc<Emitter>,
+}
+
+impl bevy::audio::Decodable for EngineMix {
+    type DecoderItem = f32;
+    type Decoder = Spatialised<crate::live_pcm::LivePlayback>;
+
+    fn decoder(&self) -> Self::Decoder {
+        Spatialised::new(bevy::audio::Decodable::decoder(&self.live), self.emitter.clone())
+    }
+}
+
 /// The streams' audio source, once for every engine (a second copy would start each sound twice).
 pub(crate) fn add_stream_source(app: &mut App) {
     use bevy::audio::AddAudioSource;
-    if !app.world().contains_resource::<Assets<LivePcm>>() {
-        app.add_audio_source::<LivePcm>();
+    if !app.world().contains_resource::<Assets<EngineMix>>() {
+        app.add_audio_source::<EngineMix>();
     }
 }
 
@@ -62,25 +83,22 @@ impl EngineStream {
         Self { name, paused, status: Mutex::new(status), live: None, output: None, last_report: Instant::now() }
     }
 
-    /// Each frame: whether the engine is held, and where the sound is from (in AR the output is a spatial emitter
-    /// there, panned and faded by where it is from the head; its channels folded into one). The output appears once
-    /// the stream is made.
-    pub(crate) fn update(&mut self, commands: &mut Commands, assets: &mut Assets<LivePcm>, paused: bool, at: Option<Vec3>, spatial: bool, transforms: &mut Query<&mut Transform>) {
+    /// Each frame: whether the engine is held. The output appears once the stream is made, heard from `emitter`.
+    pub(crate) fn update(&mut self, commands: &mut Commands, assets: &mut Assets<EngineMix>, paused: bool, emitter: &Arc<Emitter>) {
         self.paused.store(paused, Ordering::Relaxed);
         let statuses: Vec<_> = self.status.lock().unwrap_or_else(|p| p.into_inner()).try_iter().collect();
         for status in statuses {
             match status {
                 Status::Ready(live) => {
                     info!("{}: stream ready", self.name);
-                    let handle = assets.add(live.clone());
+                    let handle = assets.add(EngineMix { live: live.clone(), emitter: emitter.clone() });
                     self.output = Some(
                         commands
                             .spawn((
                                 AudioPlayer(handle),
                                 // LivePcm never ends. Loop mode would wrap it in Rodio's buffering repeater, which
                                 // eagerly captures startup silence and retains every streamed sample.
-                                PlaybackSettings::ONCE.with_volume(Volume::Linear(1.0)).with_spatial(spatial),
-                                Transform::from_translation(at.unwrap_or_default()),
+                                PlaybackSettings::ONCE.with_volume(Volume::Linear(1.0)),
                                 Name::new(self.name),
                             ))
                             .id(),
@@ -89,12 +107,6 @@ impl EngineStream {
                 }
                 Status::Failed(error) => error!("{}: stream stopped: {error}", self.name),
             }
-        }
-        if let (Some(at), Some(output)) = (at, self.output)
-            && let Ok(mut transform) = transforms.get_mut(output)
-            && transform.translation != at
-        {
-            transform.translation = at;
         }
         if let Some(live) = &self.live
             && self.last_report.elapsed() >= Duration::from_secs(2)
@@ -171,16 +183,16 @@ impl Heard {
     }
 }
 
-/// Clips as an audio source of their own: the voices' (`StreamPcm` plays them).
+/// Clips as an audio source of their own: the voices' (`StreamPcm` plays them), heard from their engine's emitter.
 #[derive(Asset, TypePath, Clone)]
-pub(crate) struct VoicePcm(StreamPcm);
+pub(crate) struct VoicePcm(StreamPcm, Arc<Emitter>);
 
 impl bevy::audio::Decodable for VoicePcm {
     type DecoderItem = f32;
-    type Decoder = crate::stream_pcm::PcmPlayback;
+    type Decoder = Spatialised<crate::stream_pcm::PcmPlayback>;
 
     fn decoder(&self) -> Self::Decoder {
-        bevy::audio::Decodable::decoder(&self.0)
+        Spatialised::new(bevy::audio::Decodable::decoder(&self.0), self.1.clone())
     }
 }
 
@@ -213,31 +225,32 @@ impl Voices {
         self.clips.len()
     }
 
-    /// The voices heard since the last frame, played: `held` the engine waits (a menu), `level` the player's volume.
-    #[allow(clippy::type_complexity)]
+    /// The voices heard since the last frame, played from `emitter`: `held` the engine waits (a menu), `level` the
+    /// player's volume.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn play(
         &mut self,
         heard: &mut Heard,
         held: bool,
         level: f32,
+        emitter: &Arc<Emitter>,
         commands: &mut Commands,
         assets: &mut Assets<VoicePcm>,
-        emitters: &mut Query<(Entity, &VoiceEmitter, &mut Transform, Option<&mut SpatialAudioSink>)>,
+        playing_now: &mut Query<(Entity, &VoiceEmitter, Option<&mut AudioSink>)>,
     ) {
         for (id, clip) in heard.new_clips.drain(..) {
             self.clips.insert(id, (Arc::new(clip.samples), clip.channels, clip.rate));
         }
         let started = std::mem::take(&mut heard.started);
         let playing = &heard.playing;
-        for (entity, emitter, mut transform, sink) in emitters.iter_mut() {
-            let now = playing.iter().find(|v| v.id == emitter.voice);
-            let replaced = started.iter().any(|v| v.id == emitter.voice);
-            if replaced || (emitter.looping && now.is_none()) {
+        for (entity, voice, sink) in playing_now.iter_mut() {
+            let now = playing.iter().find(|v| v.id == voice.voice);
+            let replaced = started.iter().any(|v| v.id == voice.voice);
+            if replaced || (voice.looping && now.is_none()) {
                 commands.entity(entity).despawn();
                 continue;
             }
             let Some(v) = now else { continue };
-            transform.translation = v.at;
             if let Some(mut sink) = sink {
                 sink.set_volume(Volume::Linear(v.gain * level));
                 sink.set_speed(v.speed);
@@ -256,16 +269,13 @@ impl Voices {
             let source = self
                 .sources
                 .entry((v.clip, v.looping))
-                .or_insert_with(|| assets.add(VoicePcm(StreamPcm::from_i16(samples, channels, rate, v.looping))))
+                .or_insert_with(|| assets.add(VoicePcm(StreamPcm::from_i16(samples, channels, rate, v.looping), emitter.clone())))
                 .clone();
-            // (where it is now, if it still plays)
-            let at = playing.iter().find(|p| p.id == v.id).map_or(v.at, |p| p.at);
             let settings = if v.looping { PlaybackSettings::ONCE } else { PlaybackSettings::DESPAWN };
             commands.spawn((
                 VoiceEmitter { voice: v.id, looping: v.looping },
                 AudioPlayer(source),
-                settings.with_spatial(true).with_volume(Volume::Linear(v.gain * level)).with_speed(v.speed),
-                Transform::from_translation(at),
+                settings.with_volume(Volume::Linear(v.gain * level)).with_speed(v.speed),
                 Name::new("engine voice"),
             ));
         }
