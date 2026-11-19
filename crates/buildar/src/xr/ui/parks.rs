@@ -855,6 +855,13 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 Outcome::Stay
             }
             Some(Hit::Settings) => Outcome::Open(pages::START),
+            Some(Hit::Engine) => {
+                // (on the engine it shows: the one a new course gets)
+                let shown = park::engine_of_mode(world, mode);
+                let at = rows.as_ref().and_then(|r| r.iter().position(|e| Some(e.engine) == shown)).unwrap_or(0);
+                world.resource_mut::<ParksScreen>().engines = Some(at);
+                Outcome::Stay
+            }
             Some(Hit::Item(0)) if matches!(items.first(), Some(Item::New(_))) => {
                 park::new_park(world, mode);
                 world.resource_mut::<BuildMode>().active = true;
@@ -891,7 +898,10 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
     };
     let rows = engine_rows(world, mode);
     let engine = rows.map(|rows| {
-        let running = rows.iter().find(|r| r.running).map_or_else(|| "…".to_string(), |r| r.name.clone());
+        // (the engine a new course gets: the one picked if it's of this mode, else the first of it that can run - else
+        // the first of it, not installed)
+        let shown = park::engine_of_mode(world, mode).map(|e| e.name().to_string());
+        let running = shown.or_else(|| rows.first().map(|r| r.name.clone())).unwrap_or_default();
         (running, dropdown.map(|row| (rows, row)))
     });
     let warning = warning.and_then(|(id, _, play)| match park::engine_fit(world, &id) {
@@ -1382,12 +1392,12 @@ pub(super) fn draw(world: &mut World) {
 /// top: its padding, the gear and the gap between them).
 /// Where the engine list opens: under the new-course card's dropdown (the panel's padding; under the top bar and the
 /// card - the first line, shown whenever the dropdown is open).
-const ENGINE_LIST_AT: (f32, f32) = (40.0, 36.0 + 64.0 + 26.0 + CARD_H - 10.0);
+const ENGINE_LIST_AT: (f32, f32) = (40.0, 36.0 + 64.0 + 26.0 + CARD_H - 12.0);
 
 /// The engine's pill beside the title: the running engine's name and an arrow; pressed, it opens the list.
 /// The engine dropdown on the new-course card: the engine picked and an arrow, under its label; pressed, its list.
 fn card_engine_pill(card: &mut Spawner, running: &str, open: bool, focused: bool, fonts: &Fonts, icons: &Icons) {
-    card.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(5), margin: UiRect::top(px(6)), ..default() }).with_children(|c| {
+    card.spawn(Node { flex_direction: FlexDirection::Column, align_items: AlignItems::Center, row_gap: px(5), flex_shrink: 0.0, ..default() }).with_children(|c| {
         c.spawn((Text::new("ENGINE"), fonts.body(13.0, 700), TextColor(OFF)));
         c.spawn((
             Hit::Engine,
@@ -1674,12 +1684,14 @@ fn card(row: &mut Spawner, i: usize, item: &Item, focus: Option<Focus>, engine: 
         Item::New(mode) => {
             row.spawn((
                 Hit::Item(i),
-                Node { border: UiRect::all(px(3)), align_items: AlignItems::Center, justify_content: JustifyContent::Center, row_gap: px(14), ..base },
+                Node { border: UiRect::all(px(3)), align_items: AlignItems::Center, padding: UiRect::bottom(px(20)), ..base },
                 BackgroundColor(if on { HOVER } else { Color::NONE }),
                 BorderColor::all(LINE),
                 ring(on, 3.5, 5.0),
             ))
-            .with_children(|c| {
+            .with_children(|card| {
+                // (the new course in the middle of what's above; the engine at the bottom)
+                card.spawn(Node { flex_grow: 1.0, flex_direction: FlexDirection::Column, align_items: AlignItems::Center, justify_content: JustifyContent::Center, row_gap: px(14), ..default() }).with_children(|c| {
                 c.spawn((
                     Node {
                         width: px(80),
@@ -1696,8 +1708,9 @@ fn card(row: &mut Spawner, i: usize, item: &Item, focus: Option<Focus>, engine: 
                     plus.spawn((Text::new("+"), fonts.body(50.0, 300), TextColor(TEAL)));
                 });
                 c.spawn((Text::new(format!("New {}", park::course_name(*mode).to_lowercase())), fonts.display(24.0, 700), TextColor(TEAL)));
+                });
                 if let Some((running, open)) = engine {
-                    card_engine_pill(c, running, open, focus == Some(Focus::Engine), fonts, icons);
+                    card_engine_pill(card, running, open, focus == Some(Focus::Engine), fonts, icons);
                 }
             });
         }
@@ -2057,8 +2070,14 @@ mod tests {
         assert_eq!(world.resource::<ParksScreen>().warning, None);
         app.update();
         assert_eq!(app.world().resource::<Engines>().settled(), Some(Engine::Skate3));
-        // The dropdown: THUG2 greyed (picking it says why), SK8 switches.
+        // The dropdown: pressed (the stick down from the new-park card, A), it opens on the engine it shows; THUG2
+        // greyed (picking it says why), SK8 switches.
         let world = app.world_mut();
+        world.resource_mut::<ParksScreen>().focus = Focus::Item(0);
+        frame(world, Nav { down: true, ..default() }, &UiPointer::default());
+        assert_eq!(world.resource::<ParksScreen>().focus, Focus::Engine);
+        frame(world, Nav { select: true, ..default() }, &UiPointer::default());
+        assert_eq!(world.resource::<ParksScreen>().engines, Some(1), "open, on Skate 3 (running)");
         world.resource_mut::<ParksScreen>().engines = Some(0);
         frame(world, Nav::default(), &UiPointer::default());
         let (running, open) = world.resource::<ParksScreen>().model.engine.clone().unwrap();
