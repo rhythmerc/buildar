@@ -32,6 +32,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 pub(crate) use engine_api::{Availability, BeforeSwitch, Engine, EngineOwned, EngineSet, EngineSwitched};
 #[cfg(feature = "xr")]
+#[cfg_attr(not(feature = "mkwii"), allow(unused_imports))]
 pub(crate) use engine_api::{CourseSettings, CourseStepper, CourseSteppers, EngineToggle, EngineToggles, Mode};
 
 /// The engines the app carries and which one runs.

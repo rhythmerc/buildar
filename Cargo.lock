@@ -1864,6 +1864,7 @@ dependencies = [
 [[package]]
 name = "brres-sys"
 version = "0.1.12"
+source = "git+https://github.com/rhythmerc/mkw-headless?rev=204ae079484bac442d196c1b0850bd5373307a55#204ae079484bac442d196c1b0850bd5373307a55"
 dependencies = [
  "anyhow",
  "cc",
@@ -2518,6 +2519,7 @@ dependencies = [
 [[package]]
 name = "engine-core"
 version = "0.1.0"
+source = "git+https://github.com/rhythmerc/buildar-engine-core?rev=1d66ba37ca305a637ba547fb77aa389539bee9c8#1d66ba37ca305a637ba547fb77aa389539bee9c8"
 dependencies = [
  "glam",
  "serde",
@@ -3560,6 +3562,7 @@ checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 [[package]]
 name = "mkw-engine"
 version = "0.1.0"
+source = "git+https://github.com/rhythmerc/mkw-headless?rev=204ae079484bac442d196c1b0850bd5373307a55#204ae079484bac442d196c1b0850bd5373307a55"
 dependencies = [
  "brres",
  "engine-core",
@@ -4762,22 +4765,22 @@ checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 [[package]]
 name = "skate-audio-core"
 version = "0.1.0"
-source = "git+https://github.com/rhythmerc/skate3-headless?rev=a4128a036414a1116246c69c56c8ac163f5d9ec9#a4128a036414a1116246c69c56c8ac163f5d9ec9"
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=66de7f1bdf7d9709188503eef6ce34e2694250c0#66de7f1bdf7d9709188503eef6ce34e2694250c0"
 
 [[package]]
 name = "skate-audio-formats"
 version = "0.1.0"
-source = "git+https://github.com/rhythmerc/skate3-headless?rev=a4128a036414a1116246c69c56c8ac163f5d9ec9#a4128a036414a1116246c69c56c8ac163f5d9ec9"
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=66de7f1bdf7d9709188503eef6ce34e2694250c0#66de7f1bdf7d9709188503eef6ce34e2694250c0"
 
 [[package]]
 name = "skate-core"
 version = "0.1.0"
-source = "git+https://github.com/rhythmerc/skate3-headless?rev=a4128a036414a1116246c69c56c8ac163f5d9ec9#a4128a036414a1116246c69c56c8ac163f5d9ec9"
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=66de7f1bdf7d9709188503eef6ce34e2694250c0#66de7f1bdf7d9709188503eef6ce34e2694250c0"
 
 [[package]]
 name = "skate-data"
 version = "0.1.0"
-source = "git+https://github.com/rhythmerc/skate3-headless?rev=a4128a036414a1116246c69c56c8ac163f5d9ec9#a4128a036414a1116246c69c56c8ac163f5d9ec9"
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=66de7f1bdf7d9709188503eef6ce34e2694250c0#66de7f1bdf7d9709188503eef6ce34e2694250c0"
 dependencies = [
  "flate2",
  "serde",
@@ -4798,7 +4801,7 @@ dependencies = [
 [[package]]
 name = "skate3-engine"
 version = "0.1.0"
-source = "git+https://github.com/rhythmerc/skate3-headless?rev=a4128a036414a1116246c69c56c8ac163f5d9ec9#a4128a036414a1116246c69c56c8ac163f5d9ec9"
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=66de7f1bdf7d9709188503eef6ce34e2694250c0#66de7f1bdf7d9709188503eef6ce34e2694250c0"
 dependencies = [
  "engine-core",
  "serde_json",
@@ -4809,7 +4812,7 @@ dependencies = [
 [[package]]
 name = "skate3-sim"
 version = "0.1.0"
-source = "git+https://github.com/rhythmerc/skate3-headless?rev=a4128a036414a1116246c69c56c8ac163f5d9ec9#a4128a036414a1116246c69c56c8ac163f5d9ec9"
+source = "git+https://github.com/rhythmerc/skate3-headless?rev=66de7f1bdf7d9709188503eef6ce34e2694250c0#66de7f1bdf7d9709188503eef6ce34e2694250c0"
 dependencies = [
  "glam",
  "serde",
@@ -5091,7 +5094,7 @@ dependencies = [
 [[package]]
 name = "thug2-engine"
 version = "0.1.0"
-source = "git+https://github.com/rhythmerc/thug2-headless?rev=1a59863c362c2b5fa2b9aefedaaf32c56651693c#1a59863c362c2b5fa2b9aefedaaf32c56651693c"
+source = "git+https://github.com/rhythmerc/thug2-headless?rev=215c0be18c9eed0e4c563a8eb0eb0631ff78900d#215c0be18c9eed0e4c563a8eb0eb0631ff78900d"
 dependencies = [
  "engine-core",
  "thug2-sys",
@@ -5100,7 +5103,7 @@ dependencies = [
 [[package]]
 name = "thug2-sys"
 version = "0.1.0"
-source = "git+https://github.com/rhythmerc/thug2-headless?rev=1a59863c362c2b5fa2b9aefedaaf32c56651693c#1a59863c362c2b5fa2b9aefedaaf32c56651693c"
+source = "git+https://github.com/rhythmerc/thug2-headless?rev=215c0be18c9eed0e4c563a8eb0eb0631ff78900d#215c0be18c9eed0e4c563a8eb0eb0631ff78900d"
 
 [[package]]
 name = "tiny-skia"

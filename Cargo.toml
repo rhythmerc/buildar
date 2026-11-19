@@ -20,20 +20,24 @@ bevy = { version = "=0.18.1", default-features = false, features = [
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 # The engine contract: https://github.com/rhythmerc/buildar-engine-core (Bevy-free; engine-api wraps it for Bevy).
-engine-core = { git = "https://github.com/rhythmerc/buildar-engine-core", rev = "1da95abb6dc14ea3d6cc72f8964014f8a1d24678" }
+engine-core = { git = "https://github.com/rhythmerc/buildar-engine-core", rev = "1d66ba37ca305a637ba547fb77aa389539bee9c8" }
 # The Skate 3 engine's simulation: https://github.com/rhythmerc/skate3-headless (Bevy-free; the app renders).
 # Bump all four revs together; its engine-core rev must be the one above. To build against a local checkout instead,
 # uncomment the [patch] block below.
-skate3-sim = { git = "https://github.com/rhythmerc/skate3-headless", rev = "a4128a036414a1116246c69c56c8ac163f5d9ec9" }
-skate-core = { git = "https://github.com/rhythmerc/skate3-headless", rev = "a4128a036414a1116246c69c56c8ac163f5d9ec9" }
-skate-data = { git = "https://github.com/rhythmerc/skate3-headless", rev = "a4128a036414a1116246c69c56c8ac163f5d9ec9" }
+skate3-sim = { git = "https://github.com/rhythmerc/skate3-headless", rev = "66de7f1bdf7d9709188503eef6ce34e2694250c0" }
+skate-core = { git = "https://github.com/rhythmerc/skate3-headless", rev = "66de7f1bdf7d9709188503eef6ce34e2694250c0" }
+skate-data = { git = "https://github.com/rhythmerc/skate3-headless", rev = "66de7f1bdf7d9709188503eef6ce34e2694250c0" }
 # Skate 3 as the engine contract, over the sim.
-skate3-engine = { git = "https://github.com/rhythmerc/skate3-headless", rev = "a4128a036414a1116246c69c56c8ac163f5d9ec9" }
+skate3-engine = { git = "https://github.com/rhythmerc/skate3-headless", rev = "66de7f1bdf7d9709188503eef6ce34e2694250c0" }
 # The THUG2 engine: https://github.com/rhythmerc/thug2-headless (thug2-decomp run headless, its C API and THUG2 as the
 # engine contract; built with CMake, its decomp a pinned submodule). Bump both revs together; its engine-core rev must
 # be the one above.
-thug2-sys = { git = "https://github.com/rhythmerc/thug2-headless", rev = "1a59863c362c2b5fa2b9aefedaaf32c56651693c" }
-thug2-engine = { git = "https://github.com/rhythmerc/thug2-headless", rev = "1a59863c362c2b5fa2b9aefedaaf32c56651693c" }
+thug2-sys = { git = "https://github.com/rhythmerc/thug2-headless", rev = "215c0be18c9eed0e4c563a8eb0eb0631ff78900d" }
+thug2-engine = { git = "https://github.com/rhythmerc/thug2-headless", rev = "215c0be18c9eed0e4c563a8eb0eb0631ff78900d" }
+# The Mario Kart Wii engine: https://github.com/rhythmerc/mkw-headless (the game as the engine contract, over the
+# player's own disc recompiled by WiiCompiled; no game data). Its engine-core rev must be the one above; its brres-sys,
+# patched below, at the same rev.
+mkw-engine = { git = "https://github.com/rhythmerc/mkw-headless", rev = "204ae079484bac442d196c1b0850bd5373307a55" }
 
 [profile.dev]
 opt-level = 3
@@ -46,8 +50,12 @@ strip = false
 opt-level = 3
 
 # Local buildar-engine-core checkout (a sibling of this repo):
-[patch."https://github.com/rhythmerc/buildar-engine-core"]
-engine-core = { path = "../buildar-engine-core" }
+# [patch."https://github.com/rhythmerc/buildar-engine-core"]
+# engine-core = { path = "../buildar-engine-core" }
+
+# Local mkw-headless checkout (a sibling of this repo; and brres-sys from it, below):
+# [patch."https://github.com/rhythmerc/mkw-headless"]
+# mkw-engine = { path = "../mkw-headless/rust/mkw-engine" }
 
 # Local thug2-headless checkout (a sibling of this repo; its decomp: a thug2-decomp checkout beside it, or its submodule):
 # [patch."https://github.com/rhythmerc/thug2-headless"]
@@ -64,8 +72,8 @@ engine-core = { path = "../buildar-engine-core" }
 # skate-audio-core = { path = "../skate3-headless/skate-audio-core" }
 
 [patch.crates-io]
-# (MKWii's model reader, with its C strings typed for arm64: ../mkw-headless/third_party/brres-sys/BUILDAR.md)
-brres-sys = { path = "../mkw-headless/third_party/brres-sys" }
+# (MKWii's model reader, with its C strings typed for arm64: mkw-headless's third_party/brres-sys/BUILDAR.md)
+brres-sys = { git = "https://github.com/rhythmerc/mkw-headless", rev = "204ae079484bac442d196c1b0850bd5373307a55" }
 bevy_pbr = { path = "vendor/bevy_pbr" }
 bevy_core_pipeline = { path = "vendor/bevy_core_pipeline" }
 winit = { path = "vendor/winit" }

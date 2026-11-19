@@ -54,8 +54,8 @@ skate-lite-sys = { path = "../skate-lite-sys" }
 thug2-sys = { workspace = true, optional = true }
 # THUG2's side of the engine contract, Bevy-free (thug2-headless's).
 thug2-engine = { workspace = true, optional = true }
-# Mario Kart Wii's side of the engine contract (mkw-headless, local for now).
-mkw-engine = { path = "../../../mkw-headless/rust/mkw-engine", optional = true }
+# Mario Kart Wii's side of the engine contract (mkw-headless's).
+mkw-engine = { workspace = true, optional = true }
 # Room light estimation for the passthrough mode (xr::room_light).
 roomtone-sys = { path = "../roomtone-sys", optional = true }
 
