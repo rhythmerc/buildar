@@ -52,12 +52,31 @@ impl Plugin for LinkPlugin {
     }
 }
 
-/// The running skate engine's focus: its skater (the rider, else the board), as the link has it now. (An engine of
-/// another mode gives its own: `engine_driver`.)
-fn focus_from_link(engines: Option<Res<Engines>>, link: Res<SkaterLink>, mut focus: ResMut<PlayerFocus>) {
+/// The running skate engine's focus: its skater (the rider, else the board), as the link has it now; none while
+/// it isn't placed on the open course (the link keeps where it was before). (An engine of another mode gives its
+/// own: `engine_driver`.)
+fn focus_from_link(
+    engines: Option<Res<Engines>>,
+    readiness: Option<Res<crate::engine_driver::Readiness>>,
+    link: Res<SkaterLink>,
+    mut focus: ResMut<PlayerFocus>,
+) {
     if let Some(running) = engines.and_then(|e| e.current()).filter(|e| e.mode() == crate::engines::Mode::Skate) {
-        focus.set(running, link.focus());
+        focus.set(running, link.focus().filter(|_| placed(readiness.as_deref(), running)));
     }
+}
+
+/// Whether `running`'s player is in the room: placed, if the driver hosts it (one it doesn't host says nothing).
+fn placed(readiness: Option<&crate::engine_driver::Readiness>, running: Engine) -> bool {
+    match readiness.and_then(|r| r.0) {
+        Some((engine, ready)) if engine == running => ready == crate::engine_driver::Ready::Placed,
+        _ => true,
+    }
+}
+
+/// The open course's id.
+fn open_course(parks: Option<&super::build::parks::Parks>) -> Option<String> {
+    parks.and_then(|p| p.current.as_ref().map(|c| c.id.clone()))
 }
 
 /// How long the world scale is left alone before the player is put back: one placement for a whole slider drag.
@@ -71,7 +90,8 @@ const STILL_THERE_M: f32 = 0.02;
 #[derive(Default)]
 struct Rescale {
     seen: Option<(f32, Transform)>,
-    spot: Option<(Vec3, Vec3)>,
+    /// (and the course it was on: another opened since, it isn't put back)
+    spot: Option<(Vec3, Vec3, Option<String>)>,
     changed_at: f32,
 }
 
@@ -85,6 +105,7 @@ fn keep_spot_on_rescale(
     engines: Option<Res<Engines>>,
     focus: Res<PlayerFocus>,
     time: Res<Time<Real>>,
+    parks: Option<Res<super::build::parks::Parks>>,
     mut state: Local<Rescale>,
     mut place: MessageWriter<PlacePlayer>,
 ) {
@@ -100,13 +121,14 @@ fn keep_spot_on_rescale(
                 state.spot = engines
                     .and_then(|e| e.current())
                     .and_then(|e| focus.of(e))
-                    .map(|f| (to_room.transform_point3(f.feet), to_room.transform_vector3(f.forward)));
+                    .map(|f| (to_room.transform_point3(f.feet), to_room.transform_vector3(f.forward), open_course(parks.as_deref())));
             }
             state.changed_at = now;
         }
         _ => {
             if now - state.changed_at >= RESCALE_SETTLE_S
-                && let Some((spot, forward)) = state.spot.take()
+                && let Some((spot, forward, course)) = state.spot.take()
+                && course == open_course(parks.as_deref())
             {
                 // (still there: left alone - putting it down again would stop it)
                 let to_room = root.compute_affine().inverse();
