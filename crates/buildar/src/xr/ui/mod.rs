@@ -196,7 +196,7 @@ impl UiProviders {
 
 /// The shared layer's own controls, listed after an engine's.
 pub(crate) const HOST_CONTROLS: &[Control] = &[
-    Control::new("Left grip + trigger", "aim, let go to put the skater there"),
+    Control::new("Grip + trigger + stick down", "aim (either hand), let go to put the player there"),
     Control::new("Left menu (tap)", "this menu"),
     Control::new("Left menu (hold 1 s)", "build mode"),
 ];

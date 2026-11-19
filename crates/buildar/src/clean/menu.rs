@@ -364,7 +364,7 @@ pub(crate) const XR_CONTROLS: [(&str, &str); 26] = [
     ("Grab + R down + left stick", "shifty"),
     ("B in a nose/tail / double grab", "airwalk / superman"),
     ("Right stick (plain air)", "board adjust"),
-    ("Left grip + trigger", "aim, let go to put the skater there"),
+    ("Grip + trigger + stick down", "aim (either hand), let go to put the player there"),
     ("Left menu (tap)", "this menu"),
     ("Left menu (hold 1 s)", "build mode"),
     ("Left menu + both grips", "SK8 menu"),

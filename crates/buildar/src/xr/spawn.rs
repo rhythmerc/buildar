@@ -1,7 +1,9 @@
-//! Drop the skater anywhere: hold the left grip and left trigger together and
-//! point the left controller at a surface (real or course); a ray and target
-//! ring show where. Release to spawn there, facing the pointing direction.
-//! The pad is neutral while aiming so the squeeze doesn't also grab/bump.
+//! Drop the player anywhere, with either hand: hold its grip and trigger, push
+//! its stick down, and point that controller at a surface (real or course); a
+//! ray and target ring show where. Let go of the grip or trigger to put the
+//! player there, facing the pointing direction. The stick only starts it (it can
+//! come back up while aiming); the pad is neutral while aiming so the chord
+//! doesn't also reach the game.
 //!
 //! The menu's "Place the skater" is the same with the right controller and
 //! no chord to know ([`PlaceSkater`]): point, and A or the trigger puts the
@@ -13,6 +15,8 @@ use bevy::prelude::*;
 use bevy_mod_openxr::openxr_session_running;
 
 const SQUEEZE: f32 = 0.7;
+/// How far down the stick goes to start aiming (of its full travel).
+const STICK_DOWN: f32 = 0.6;
 /// Game-world units (metres at skater scale).
 const MAX_RANGE: f32 = 2000.0;
 const MISS_LENGTH: f32 = 40.0;
@@ -96,6 +100,7 @@ fn aim_and_spawn(
     mut place: ResMut<PlaceSkater>,
     panel: Res<super::panel::XrPanel>,
     mut was: Local<(bool, bool)>,
+    mut aiming: Local<Option<Hand>>,
 ) {
     let touch = &touch.0;
     if build.active {
@@ -130,8 +135,10 @@ fn aim_and_spawn(
         return;
     }
     *was = (true, true);
-    let held = touch.left_grip >= SQUEEZE && touch.left_trigger >= SQUEEZE && !build.active;
-    if !held {
+    let left = (touch.left_grip, touch.left_trigger, touch.left_stick[1]);
+    let right = (touch.right_grip, touch.right_trigger, touch.right_stick[1]);
+    *aiming = if build.active { None } else { aiming_with(*aiming, left, right) };
+    if aiming.is_none() {
         aim.ray = None;
         if let Some((point, forward)) = aim.target.take() {
             info!("XR spawn at {point:?}");
@@ -143,7 +150,7 @@ fn aim_and_spawn(
     let Some(root) = rig.root_transform() else {
         return;
     };
-    let Some((_, controller)) = hands.iter().find(|(hand, _)| matches!(hand, Hand::Left)) else {
+    let Some((_, controller)) = hands.iter().find(|(hand, _)| Some(**hand) == *aiming) else {
         return;
     };
     let origin = root.transform_point(controller.translation);
@@ -191,6 +198,21 @@ fn show_aim(
     }
 }
 
+/// The hand aiming to place, given the one that was and each hand's grip, trigger and stick (up and down): one
+/// already aiming keeps it while its grip and trigger are held; else a hand starts with its grip and trigger held
+/// and its stick pushed down.
+fn aiming_with(was: Option<Hand>, left: (f32, f32, f32), right: (f32, f32, f32)) -> Option<Hand> {
+    let held = |(grip, trigger, _): (f32, f32, f32)| grip >= SQUEEZE && trigger >= SQUEEZE;
+    let starts = |hand: (f32, f32, f32)| held(hand) && hand.2 <= -STICK_DOWN;
+    match was {
+        Some(Hand::Left) if held(left) => Some(Hand::Left),
+        Some(Hand::Right) if held(right) => Some(Hand::Right),
+        _ if starts(right) => Some(Hand::Right),
+        _ if starts(left) => Some(Hand::Left),
+        _ => None,
+    }
+}
+
 /// Nearest ground-like collision face along the ray.
 fn raycast(stage: &engine_core::Stage, origin: Vec3, direction: Vec3) -> Option<Vec3> {
     stage
@@ -233,6 +255,20 @@ pub(crate) fn ray_triangle(origin: Vec3, direction: Vec3, a: Vec3, b: Vec3, c: V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Grip and trigger and the stick down start it, on either hand; the stick can come back while the chord is
+    /// held; letting go ends it. Grip and trigger alone don't.
+    #[test]
+    fn grip_trigger_and_stick_down_aim_with_that_hand() {
+        let (idle, chord, chord_down) = ((0.0, 0.0, 0.0), (1.0, 1.0, 0.0), (1.0, 1.0, -1.0));
+        assert!(aiming_with(None, chord, chord).is_none());
+        assert!(aiming_with(None, chord_down, idle) == Some(Hand::Left));
+        assert!(aiming_with(None, idle, chord_down) == Some(Hand::Right));
+        assert!(aiming_with(Some(Hand::Left), chord, idle) == Some(Hand::Left));
+        assert!(aiming_with(Some(Hand::Right), idle, chord) == Some(Hand::Right));
+        assert!(aiming_with(Some(Hand::Left), (1.0, 0.0, -1.0), chord_down) == Some(Hand::Right));
+        assert!(aiming_with(Some(Hand::Right), idle, (0.0, 1.0, 0.0)).is_none());
+    }
 
     #[test]
     fn ray_hits_the_floor_below() {

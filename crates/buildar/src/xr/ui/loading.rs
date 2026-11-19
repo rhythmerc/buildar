@@ -1,11 +1,12 @@
-//! The loading card: while the running engine gets ready, a small card ahead of the player says so (its name, what
-//! it is doing, a bar sweeping); once its player can be put in the room, it says how, and the right controller aims
-//! to place it (`xr::spawn::PlaceSkater`). Loading is done when the player can place, not when the engine is made:
-//! a game can load for seconds after (`engine_driver::Ready`). Gone once the player is placed, and while a menu is
-//! open.
+//! The loading card: while the running engine gets ready, a small card over the right controller says so (its name,
+//! what it is doing, a bar sweeping); once its player can be put in the room, it teaches the chord that places it
+//! (`xr::spawn`: grip, trigger and stick down, on either hand), so the first placing is the lesson. Loading is done
+//! when the player can place, not when the engine is made: a game can load for seconds after
+//! (`engine_driver::Ready`). Gone once the player is placed, and while a menu is open.
 //!
 //! In the menu's look (`super::spawn_ui`): a dark rounded card, the title heavy, the line under it in the menu's
-//! teal. It follows the head lazily, a little below the eyes.
+//! teal. It floats over the right controller, turned to the head (ahead of the head, a little below the eyes, while
+//! that controller isn't tracked).
 use super::{DIM, TEAL, UI_BODY_FONT, UI_FONT};
 use crate::engine_driver::{Readiness, Ready};
 use crate::xr::panel::{XrPanel, XrPanelCamera};
@@ -18,11 +19,13 @@ use bevy_mod_xr::camera::XrCamera;
 
 const WIDTH_PX: u32 = 800;
 const HEIGHT_PX: u32 = 260;
-const WIDTH_M: f32 = 0.32;
-/// Where it sits in head space, metres: right, down, ahead.
+const WIDTH_M: f32 = 0.2;
+/// How far over the right controller its middle floats, metres (up, in the room).
+const OVER_HAND_M: f32 = 0.11;
+/// Where it sits in head space when that controller isn't tracked, metres: right, down, ahead.
 const OFFSET: Vec3 = Vec3::new(0.0, -0.1, -0.8);
-/// How quickly it catches up with the head, per second.
-const FOLLOW: f32 = 4.0;
+/// How quickly it catches up with where it goes, per second.
+const FOLLOW: f32 = 14.0;
 /// The bar's sweep: the moving part's share of the track, and its period, seconds.
 const SWEEP_PART: f32 = 0.3;
 const SWEEP_S: f32 = 1.6;
@@ -46,7 +49,7 @@ impl Plugin for LoadingCardPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Readiness>()
             .add_systems(Startup, setup)
-            .add_systems(Update, (arm_placing, draw).chain().after(super::UiSet))
+            .add_systems(Update, draw.after(super::UiSet))
             .add_systems(PostUpdate, place.before(bevy::transform::TransformSystems::Propagate));
     }
 }
@@ -68,7 +71,7 @@ fn says(engine: crate::engines::Engine, ready: Ready, placing: bool) -> Option<(
         }
         Ready::ToPlace => Some((
             format!("Place your {noun}"),
-            format!("From the menu: Place the {noun}. Or hold the left grip and trigger, and point"),
+            "Hold grip + trigger, push the stick down.\nPoint, then let go".into(),
             false,
         )),
         Ready::Placed => None,
@@ -161,22 +164,6 @@ fn spawn_card(commands: &mut Commands, camera: Entity, assets: &AssetServer) {
         });
 }
 
-/// Once the engine can take its player (and no menu is up): the right controller aims to place it, once.
-fn arm_placing(
-    readiness: Res<Readiness>,
-    engines: Option<Res<crate::engines::Engines>>,
-    panel: Res<XrPanel>,
-    build: Res<crate::xr::build::BuildMode>,
-    mut placing: ResMut<crate::xr::spawn::PlaceSkater>,
-    mut armed: Local<Option<crate::engines::Engine>>,
-) {
-    let Some((engine, Ready::ToPlace)) = current(&readiness, engines.as_deref()) else { return };
-    if *armed != Some(engine) && !panel.visible && !build.active {
-        *armed = Some(engine);
-        placing.0 = true;
-    }
-}
-
 #[allow(clippy::type_complexity)]
 fn draw(
     readiness: Res<Readiness>,
@@ -225,6 +212,7 @@ fn place(
     placing: Res<crate::xr::spawn::PlaceSkater>,
     time: Res<Time<Real>>,
     eyes: Query<&Transform, (With<XrCamera>, Without<CardQuad>)>,
+    hands: Query<(&crate::xr::actions::Hand, &Transform), Without<CardQuad>>,
     mut quad: Query<(&mut Transform, &mut Visibility), With<CardQuad>>,
     mut camera: Query<&mut Camera, With<CardCamera>>,
     mut pose: Local<Option<Transform>>,
@@ -247,11 +235,18 @@ fn place(
         return;
     };
     let head = head / n;
-    // (level with the horizon: turned with the head's yaw only, so it doesn't swing as the head tilts)
-    let forward = (rotation * Vec3::NEG_Z).with_y(0.0).normalize_or(Vec3::NEG_Z);
-    let level = Transform::default().looking_to(forward, Vec3::Y).rotation;
-    let at = head + level * OFFSET;
-    let target = Transform::from_translation(at).looking_to(at - head, Vec3::Y);
+    let hand = hands.iter().find(|(h, _)| matches!(h, crate::xr::actions::Hand::Right)).map(|(_, t)| t.translation);
+    let at = match hand.filter(|h| *h != Vec3::ZERO) {
+        Some(hand) => hand + Vec3::Y * OVER_HAND_M,
+        None => {
+            // (level with the horizon: turned with the head's yaw only, so it doesn't swing as the head tilts)
+            let forward = (rotation * Vec3::NEG_Z).with_y(0.0).normalize_or(Vec3::NEG_Z);
+            head + Transform::default().looking_to(forward, Vec3::Y).rotation * OFFSET
+        }
+    };
+    // (its face to the head, upright)
+    let away = (at - head).with_y(0.0).normalize_or(Vec3::NEG_Z);
+    let target = Transform::from_translation(at).looking_to(away, Vec3::Y);
     let k = 1.0 - (-FOLLOW * time.delta_secs()).exp();
     let current = pose.get_or_insert(target);
     current.translation = current.translation.lerp(target.translation, k);
@@ -272,7 +267,10 @@ mod tests {
         let (title, line, sweeping) = says(Engine::Mkwii, Ready::ToPlace, true).unwrap();
         assert_eq!((title.as_str(), sweeping), ("Place your kart", false));
         assert!(line.contains("trigger"), "{line}");
-        assert!(says(Engine::Thug2, Ready::ToPlace, false).unwrap().1.contains("Place the skater"));
+        // (unasked, it teaches the chord)
+        let (title, line, _) = says(Engine::Thug2, Ready::ToPlace, false).unwrap();
+        assert_eq!(title, "Place your skater");
+        assert!(line.contains("grip + trigger") && line.contains("stick down"), "{line}");
         assert!(says(Engine::Mkwii, Ready::Placed, false).is_none());
     }
 
@@ -285,7 +283,7 @@ mod tests {
         use bevy::render::view::screenshot::{Screenshot, save_to_disk};
         let Some(path) = std::env::var_os("SK8_CARD_SHOT") else { return };
         let (title, line, sweeping) =
-            says(Engine::Mkwii, if std::env::var_os("SK8_CARD_PLACE").is_some() { Ready::ToPlace } else { Ready::Preparing }, true).unwrap();
+            says(Engine::Mkwii, if std::env::var_os("SK8_CARD_PLACE").is_some() { Ready::ToPlace } else { Ready::Preparing }, false).unwrap();
         let mut app = App::new();
         app.add_plugins(
             DefaultPlugins
