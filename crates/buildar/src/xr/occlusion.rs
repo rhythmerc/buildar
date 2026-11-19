@@ -110,10 +110,15 @@ pub(crate) struct OcclusionPlugin;
 
 impl Plugin for OcclusionPlugin {
     fn build(&self, app: &mut App) {
+        if let Some(size) = app.world().get_resource::<super::dev_flags::DevFlags>().and_then(|f| f.number("matte")) {
+            MATTE_SIZE.store((size as u32).clamp(64, 2048), std::sync::atomic::Ordering::Relaxed);
+            info!("Occlusion: the matte at {size} (dev flag)");
+        }
         bevy::asset::embedded_asset!(app, "occlusion.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_filter.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_copy.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_sure.wgsl");
+        bevy::asset::embedded_asset!(app, "occlusion_steps.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_texels.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_matte.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_advance.wgsl");
@@ -263,6 +268,8 @@ struct Made {
     /// eye's two mattes (`occlusion_matte.wgsl`): one is written each frame
     /// from the other, the kept one, turn about.
     sure: (Texture, [TextureView; 2]),
+    /// Each eye's texels' largest steps in depth to their neighbours (`occlusion_steps.wgsl`), for `sure`.
+    steps: (Texture, [TextureView; 2]),
     texels: (Texture, [TextureView; 2]),
     /// The depth image with the hands moved on (`occlusion_advance.wgsl`),
     /// each eye's.
@@ -313,6 +320,8 @@ const DEPTH_AGO_NS: i64 = 84_000_000;
 
 /// The mattes' size each way: over twice the depth image's.
 const MATTE: u32 = 768;
+/// The matte's size this launch: [`MATTE`], unless the dev flag `matte=N` says (`xr::dev_flags`).
+static MATTE_SIZE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(MATTE);
 /// How much of a pixel's kept evidence stays each frame, and the most
 /// there can be (log-odds: at 4 it takes a few frames against to turn it).
 const KEEP: f32 = 0.8;
@@ -532,11 +541,16 @@ fn make(session: &OxrSession, device: &RenderDevice) -> Result<Made, &'static st
             (texture, each)
         };
         let sure = layered("room depth, sure", TextureFormat::R16Float);
+        let steps = layered("room depth, steps", TextureFormat::R16Float);
         let texels = layered("room depth, colours", TextureFormat::Rgba16Float);
         let matte = || {
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("occlusion matte"),
-                size: wgpu::Extent3d { width: MATTE, height: MATTE, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: MATTE_SIZE.load(std::sync::atomic::Ordering::Relaxed),
+                    height: MATTE_SIZE.load(std::sync::atomic::Ordering::Relaxed),
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -564,6 +578,7 @@ fn make(session: &OxrSession, device: &RenderDevice) -> Result<Made, &'static st
             copied: (copy, copy_each),
             size: (state.width, state.height),
             sure,
+            steps,
             texels,
             advanced,
             mattes,
@@ -677,6 +692,8 @@ struct OcclusionPipeline {
     look_layout: BindGroupLayoutDescriptor,
     texels_layout: BindGroupLayoutDescriptor,
     matte_layout: BindGroupLayoutDescriptor,
+    sure_layout: BindGroupLayoutDescriptor,
+    steps: CachedRenderPipelineId,
     sure: CachedRenderPipelineId,
     texels: CachedRenderPipelineId,
     matte: CachedRenderPipelineId,
@@ -755,7 +772,12 @@ fn init_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>, asse
             ..default()
         })
     };
-    let sure = edge_pass("occlusion sure", &filter_layout, "embedded://buildar/xr/occlusion_sure.wgsl", TextureFormat::R16Float);
+    let sure_layout = BindGroupLayoutDescriptor::new(
+        "occlusion sure",
+        &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, (texture_depth_2d(), float())),
+    );
+    let steps = edge_pass("occlusion steps", &filter_layout, "embedded://buildar/xr/occlusion_steps.wgsl", TextureFormat::R16Float);
+    let sure = edge_pass("occlusion sure", &sure_layout, "embedded://buildar/xr/occlusion_sure.wgsl", TextureFormat::R16Float);
     let texels = edge_pass("occlusion texels", &texels_layout, "embedded://buildar/xr/occlusion_texels.wgsl", TextureFormat::Rgba16Float);
     let matte = edge_pass("occlusion matte", &matte_layout, "embedded://buildar/xr/occlusion_matte.wgsl", TextureFormat::Rgba16Float);
     let advance_layout = BindGroupLayoutDescriptor::new(
@@ -801,6 +823,8 @@ fn init_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>, asse
         advance_mesh,
         look_layout,
         texels_layout,
+        sure_layout,
+        steps,
         matte_layout,
         sure,
         texels,
@@ -1021,6 +1045,8 @@ impl ViewNode for OcclusionNode {
             &BindGroupEntries::single(&layers[layer]),
         );
         let mut room = raw.clone();
+        // (the depth image `room` reads: the headset's, or the one with the hands moved on)
+        let mut room_view = &layers[layer];
         if let (true, Some(advance), Some(advance_mesh), Some(moves)) = (
             depth.moving,
             cache.get_render_pipeline(pipeline.advance),
@@ -1049,6 +1075,7 @@ impl ViewNode for OcclusionNode {
             pass.set_pipeline(advance_mesh);
             pass.draw(0..ADVANCE_SQUARES * ADVANCE_SQUARES * 6, 0..1);
             drop(pass);
+            room_view = &made.advanced.1[layer];
             room = device.create_bind_group(
                 "occlusion room, hands moved on",
                 &cache.get_bind_group_layout(&pipeline.filter_layout),
@@ -1090,8 +1117,9 @@ impl ViewNode for OcclusionNode {
         draw_room(context, "occlusion filter", &made.filtered.2[layer], filter);
         // Edges from the camera: the sure texels (of a new depth image), their
         // colours in the camera's newest frame, and from those the matte.
-        if let (true, Some(sure), Some(texels), Some(matte_pass), Some(look), Some((_, guide, _))) = (
+        if let (true, Some(steps), Some(sure), Some(texels), Some(matte_pass), Some(look), Some((_, guide, _))) = (
             depth.edging,
+            cache.get_render_pipeline(pipeline.steps),
             cache.get_render_pipeline(pipeline.sure),
             cache.get_render_pipeline(pipeline.texels),
             cache.get_render_pipeline(pipeline.matte),
@@ -1100,7 +1128,13 @@ impl ViewNode for OcclusionNode {
         ) {
             let look = device.create_bind_group("occlusion look", &cache.get_bind_group_layout(&pipeline.look_layout), &BindGroupEntries::single(look));
             if depth.find_sure {
-                draw(context, "occlusion sure", &made.sure.1[layer], sure, &[&room, &look]);
+                draw(context, "occlusion steps", &made.steps.1[layer], steps, &[&room, &look]);
+                let reads = device.create_bind_group(
+                    "occlusion sure",
+                    &cache.get_bind_group_layout(&pipeline.sure_layout),
+                    &BindGroupEntries::sequential((room_view, &made.steps.1[layer])),
+                );
+                draw(context, "occlusion sure", &made.sure.1[layer], sure, &[&reads, &look]);
             }
             let reads = device.create_bind_group(
                 "occlusion texels",
@@ -1201,12 +1235,69 @@ mod tests {
         assert_eq!(serde_json::to_string(&Occlusion::On).unwrap(), "\"On\"");
     }
 
+    /// The sure texels found in two passes (each texel's largest step, then the most of those about it) are the ones
+    /// the single 7x7 pass found: the two shaders' logic, modelled here on depth images with steps, slopes and unknown
+    /// texels.
+    #[test]
+    fn sure_texels_in_two_passes_are_the_one_pass_ones() {
+        let (w, h) = (40i32, 30i32);
+        let step = 1.08f32.ln();
+        let mut seed = 7u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / 16_777_216.0
+        };
+        for _ in 0..20 {
+            // Surfaces at a few distances, sloping, with holes (unknown) and a little noise.
+            let walls: Vec<(f32, f32)> = (0..4).map(|_| (0.5 + 3.0 * next(), 0.02 * (next() - 0.5))).collect();
+            let z: Vec<f32> = (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    if next() < 0.03 {
+                        return 0.0;
+                    }
+                    let (base, slope) = walls[((x / 10 + y / 15) % 4) as usize];
+                    base + slope * x as f32 + 0.004 * next()
+                })
+                .collect();
+            let log_at = |x: i32, y: i32| {
+                let v = z[(y.clamp(0, h - 1) * w + x.clamp(0, w - 1)) as usize];
+                (if v <= 0.0 { 1000.0 } else { v }).ln()
+            };
+            let one_pass = |cx: i32, cy: i32| {
+                (-2..=2).all(|dy| {
+                    (-2..=2).all(|dx| {
+                        let (x, y) = (cx + dx, cy + dy);
+                        let here = log_at(x, y);
+                        [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().all(|(ox, oy)| (here - log_at(x + ox, y + oy)).abs() <= step)
+                    })
+                })
+            };
+            let steps = |x: i32, y: i32| {
+                let (x, y) = (x.clamp(0, w - 1), y.clamp(0, h - 1));
+                let here = log_at(x, y);
+                [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().map(|(ox, oy)| (here - log_at(x + ox, y + oy)).abs()).fold(0.0f32, f32::max)
+            };
+            for cy in 0..h {
+                for cx in 0..w {
+                    let most = (-2..=2).flat_map(|dy| (-2..=2).map(move |dx| (dx, dy))).map(|(dx, dy)| steps(cx + dx, cy + dy)).fold(0.0f32, f32::max);
+                    assert_eq!(most <= step, one_pass(cx, cy), "texel {cx},{cy}");
+                }
+            }
+        }
+    }
+
     /// The passes that find edges in the camera's image are valid WGSL, with
     /// what they share put in as Bevy's imports would.
     #[test]
     fn the_shaders_for_edges_from_the_camera_are_valid() {
         let look: String = include_str!("occlusion_look.wgsl").lines().filter(|l| !l.starts_with("#define_import_path")).collect::<Vec<_>>().join("\n");
-        for source in [include_str!("occlusion_sure.wgsl"), include_str!("occlusion_texels.wgsl"), include_str!("occlusion_matte.wgsl")] {
+        for source in [
+            include_str!("occlusion_steps.wgsl"),
+            include_str!("occlusion_sure.wgsl"),
+            include_str!("occlusion_texels.wgsl"),
+            include_str!("occlusion_matte.wgsl"),
+        ] {
             let body: String = source.lines().filter(|l| !l.starts_with("#import")).collect::<Vec<_>>().join("\n");
             let text = format!("{look}\n{body}\n");
             let module = wgpu::naga::front::wgsl::parse_str(&text).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&text)));

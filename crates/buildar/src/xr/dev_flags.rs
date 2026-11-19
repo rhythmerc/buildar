@@ -7,6 +7,7 @@
 //! - `course=<id, name or busiest>`: that course opened in front of the head in a debug box, the room ignored
 //!   (`xr::debug_course`; implies `menu_closed`).
 //! - `cluster_single`: one light cluster for the eyes, not Bevy's grid of them (a handful of lights).
+//! - `matte=N`: occlusion's edge matte N x N (`xr::occlusion`; 768 by default).
 //! - `menu_closed`: the menu doesn't open itself at launch (an engine measured as it plays).
 //! Read where the plugins are made (`clean::dev_plugins`):
 //! - `compute=N`: at least N threads in Bevy's compute pool; `compute=0`, none (the schedules' own threads run
