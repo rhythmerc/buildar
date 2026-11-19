@@ -81,6 +81,10 @@ fn open(world: &mut World, mut state: Local<(u32, bool)>) {
     let shapes = room_box(&placed, target, floor);
     info!("DEBUG COURSE {id} open at {target:.2?}; the room is a debug box of {} surfaces", shapes.len());
     world.resource_mut::<DebugRoom>().0 = Some(shapes);
+    // (the player put down at the course's middle: no one is there to place it)
+    if let Some(root) = world.resource::<super::rig::Rig>().root_transform() {
+        world.write_message(super::link::PlacePlayer::new(root.transform_point(target), root.rotation * forward));
+    }
 }
 
 /// A floor and four inward-facing walls about `points` (and `middle`), `MARGIN_M` out, the floor at `floor`.

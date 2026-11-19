@@ -65,6 +65,14 @@ impl Engine {
         Engine::ALL.into_iter().find(|e| e.key() == key.trim())
     }
 
+    /// What the player puts down in it, in the app's words ("Place your kart").
+    pub fn player_noun(self) -> &'static str {
+        match self {
+            Engine::Sk8 | Engine::Skate3 | Engine::Thug2 => "skater",
+            Engine::Mkwii => "kart",
+        }
+    }
+
     /// The mode it implements.
     pub fn mode(self) -> Mode {
         match self {

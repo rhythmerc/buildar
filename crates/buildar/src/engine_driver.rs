@@ -2,8 +2,10 @@
 //!
 //! - **Start:** picked the first time, the engine is made on a thread of its own from its factory (the game's files
 //!   loaded there). A marker file is there while it starts: still there at the next launch, the start crashed the app
-//!   (the engine's adapter says so). Once made, its models are spawned and the player is put in front of the player's
-//!   eyes, or where a placement asked while it started.
+//!   (the engine's adapter says so). Once made, its models are spawned. How far along it is: [`Readiness`].
+//! - **Placed:** its player isn't in the room until the player puts it there (a placement: the menu's, the aiming
+//!   chord, carried over from the last engine). Until then it runs unseen and unheard: its model and stand-in hidden,
+//!   its sounds held, where it is not given out.
 //! - **Frames:** the controllers and the player's eyes in, placements, the stage and park offered (the engine takes the
 //!   latest when it can); then the engine stepped a whole number of its periods behind real time (several a frame at
 //!   most; its clock scaled by its speed), not while the player is busy elsewhere (`PadHeld::pause`) or while the
@@ -74,6 +76,8 @@ pub(crate) struct Driver<M: Hosted> {
     focus: [Option<Focus>; 2],
     /// A placement asked before the engine ran.
     pending: Option<PlacePlayer>,
+    /// Its player has been put in the room (once, ever: it stays there after).
+    placed: bool,
     model: Option<Drawn>,
     /// Where its glTF models load from (an asset source the host registered for its data).
     assets: Option<&'static str>,
@@ -103,6 +107,7 @@ impl<M: Hosted> Driver<M> {
             heard_now: Vec::new(),
             focus: [None; 2],
             pending: None,
+            placed: false,
             model: None,
             assets,
             settings: BTreeMap::new(),
@@ -176,6 +181,23 @@ impl<M: Hosted> Driver<M> {
     }
 }
 
+/// How far the running engine's player is from being in the room (the loading card's: `xr::loading_card`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ready {
+    /// Being made (its files loaded).
+    Starting,
+    /// Made, its game not stepping yet (loading inside it).
+    Preparing,
+    /// Running, its player not put in the room yet.
+    ToPlace,
+    /// In the room.
+    Placed,
+}
+
+/// The running engine and how ready it is (none while no hosted engine runs, or after it failed).
+#[derive(Resource, Default, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Readiness(pub Option<(Engine, Ready)>);
+
 /// A model spawned: given as meshes, or a glTF scene (its skins bound to the pose's joints by name once loaded).
 enum Drawn {
     Flat(FlatModel, Vec<BodyGroup>),
@@ -188,6 +210,7 @@ pub(crate) fn install<M: Hosted>(app: &mut App, factory: EngineFactory, marker: 
     crate::engine_audio::add_voice_source(app);
     crate::engine_audio::add_stream_source(app);
     app.insert_resource(Driver::<M>::new(factory, marker, assets))
+        .init_resource::<Readiness>()
         .add_systems(Startup, (boot::<M>, spawn_stand_in::<M>))
         .add_systems(
             Update,
@@ -203,6 +226,7 @@ pub(crate) fn install<M: Hosted>(app: &mut App, factory: EngineFactory, marker: 
                 play::<M>,
                 play_stream::<M>,
                 draw_hud::<M>,
+                report::<M>,
             )
                 .chain()
                 .after(crate::xr::ui::UiSet)
@@ -221,8 +245,21 @@ pub(crate) fn install<M: Hosted>(app: &mut App, factory: EngineFactory, marker: 
 /// a skater (a skate engine's is the skater link's: `xr::link`): its focus after its last step.
 fn publish_focus<M: Hosted>(driver: Res<Driver<M>>, mut focus: ResMut<crate::xr::link::PlayerFocus>) {
     if M::ENGINE.mode() != engine_api::Mode::Skate {
-        focus.set(M::ENGINE, driver.focus[1]);
+        focus.set(M::ENGINE, driver.focus[1].filter(|_| driver.placed));
     }
+}
+
+/// How ready it is, for the loading card.
+fn report<M: Hosted>(mut driver: ResMut<Driver<M>>, mut readiness: ResMut<Readiness>) {
+    let d = &mut *driver;
+    let ready = match d.phase.get_mut().unwrap_or_else(|p| p.into_inner()) {
+        Phase::Idle(_) | Phase::Booting(_) => Some(Ready::Starting),
+        Phase::Failed(_) => None,
+        Phase::Running(_) if d.steps == 0 => Some(Ready::Preparing),
+        Phase::Running(_) if !d.placed => Some(Ready::ToPlace),
+        Phase::Running(_) => Some(Ready::Placed),
+    };
+    readiness.set_if_neq(Readiness(ready.map(|r| (M::ENGINE, r))));
 }
 
 fn boot<M: Hosted>(mut driver: ResMut<Driver<M>>) {
@@ -262,10 +299,6 @@ fn finish_boot<M: Hosted>(world: &mut World) {
         }
     };
     if !finished {
-        let mut hud = world.resource_mut::<crate::xr::ui::hud::TrickHud>();
-        if hud.name.is_empty() {
-            hud.name = format!("Starting {name}...");
-        }
         return;
     }
     let handle = {
@@ -275,7 +308,6 @@ fn finish_boot<M: Hosted>(world: &mut World) {
         handle
     };
     let made = handle.join().unwrap_or_else(|_| Err(format!("{name} stopped while it started")));
-    world.resource_mut::<crate::xr::ui::hud::TrickHud>().name.clear();
     match made {
         Ok(mut core) => {
             let mut spawned = None;
@@ -303,7 +335,7 @@ fn finish_boot<M: Hosted>(world: &mut World) {
                 };
             }
             let stream = core.stream().map(|factory| crate::engine_audio::EngineStream::start(name, factory));
-            let pending = {
+            {
                 let mut driver = world.resource_mut::<Driver<M>>();
                 driver.model = spawned;
                 driver.stream = stream;
@@ -312,15 +344,11 @@ fn finish_boot<M: Hosted>(world: &mut World) {
                     core.set_setting(key, *value);
                 }
                 driver.unsaid.clear();
-                let pending = driver.pending.take();
-                if let Some(place) = pending {
+                // (a placement asked while it started; else none: its player waits to be put down)
+                if let Some(place) = driver.pending.take() {
                     core.place_player(place.0);
                 }
                 *driver.phase.get_mut().unwrap_or_else(|p| p.into_inner()) = Phase::Running(core);
-                pending
-            };
-            if pending.is_none() {
-                crate::xr::ui::pages::put_skater_ahead(world);
             }
         }
         Err(why) => {
@@ -365,6 +393,7 @@ fn input<M: Hosted>(
 fn place<M: Hosted>(mut requests: MessageReader<PlacePlayer>, mut driver: ResMut<Driver<M>>) {
     let driver = &mut *driver;
     for r in requests.read() {
+        driver.placed = true;
         match running::<M>(&mut driver.phase) {
             Some(core) => core.place_player(r.0),
             None => driver.pending = Some(*r),
@@ -388,7 +417,7 @@ fn want_hud<M: Hosted>(
     huds: Option<Res<crate::engine_hud::EngineHuds>>,
     mut driver: ResMut<Driver<M>>,
 ) {
-    let wanted = huds.is_some() && settings.is_some_and(|s| s.hud) && !panel.is_some_and(|p| p.visible);
+    let wanted = huds.is_some() && settings.is_some_and(|s| s.hud) && !panel.is_some_and(|p| p.visible) && driver.placed;
     if let Some(core) = running::<M>(&mut driver.phase) {
         core.want_hud(wanted);
     }
@@ -451,6 +480,9 @@ fn publish<M: Hosted>(
     sounds: Option<ResMut<crate::skate_audio::clean::SkaterSounds>>,
     mut driver: ResMut<Driver<M>>,
 ) {
+    if !driver.placed {
+        return;
+    }
     let Some(skate) = running::<M>(&mut driver.phase).and_then(|core| core.skate()) else { return };
     if let Some(now) = skate.link() {
         **link = now;
@@ -480,7 +512,7 @@ fn play<M: Hosted>(
         return;
     }
     // (not in our world yet: what it started can't be placed)
-    if d.focus[1].is_none() {
+    if d.focus[1].is_none() || !d.placed {
         d.heard.forget_started();
         return;
     }
@@ -557,7 +589,7 @@ fn pose_models<M: Hosted>(
         Drawn::Flat(flat, _) => (flat.root, true),
         Drawn::Gltf { root, bindings, .. } => (*root, bindings.as_ref().is_some_and(|b| !b.is_empty())),
     };
-    let shown = ready && d.focus[1].is_some() && view.is_some();
+    let shown = ready && d.placed && d.focus[1].is_some() && view.is_some();
     if let Ok((_, mut visibility)) = q.get_mut(root) {
         *visibility = if shown { Visibility::Inherited } else { Visibility::Hidden };
     }
@@ -617,7 +649,7 @@ fn play_stream<M: Hosted>(
     let d = &mut *driver;
     let at = d.focus[1].map(|f| f.feet);
     if let Some(stream) = &mut d.stream {
-        stream.update(&mut commands, &mut assets, held.pause, at, spatial.is_some(), &mut transforms);
+        stream.update(&mut commands, &mut assets, held.pause || !d.placed, at, spatial.is_some(), &mut transforms);
     }
 }
 
@@ -644,7 +676,7 @@ fn spawn_stand_in<M: Hosted>(mut commands: Commands, mut meshes: ResMut<Assets<M
 /// The stand-in where the player is, between the engine's last two steps.
 fn place_stand_in<M: Hosted>(driver: Res<Driver<M>>, mut stand_in: Query<(&StandIn, &mut Transform, &mut Visibility)>) {
     let Some((_, mut transform, mut visibility)) = stand_in.iter_mut().find(|(s, ..)| s.0 == M::ENGINE) else { return };
-    let (Some(now), None) = (driver.focus[1], &driver.model) else {
+    let (Some(now), None, true) = (driver.focus[1], &driver.model, driver.placed) else {
         *visibility = Visibility::Hidden;
         return;
     };

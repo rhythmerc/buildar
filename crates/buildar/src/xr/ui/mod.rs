@@ -18,6 +18,7 @@
 pub(crate) mod hud;
 #[cfg(any(feature = "retail", feature = "thug2"))]
 pub(crate) mod import;
+mod loading;
 pub(crate) mod pages;
 pub(crate) mod parks;
 mod sound_lab;
@@ -381,6 +382,7 @@ impl Plugin for XrUiPlugin {
             .init_resource::<UiOwnsControllers>()
             .init_resource::<pointer::UiPointer>()
             .add_plugins(hud::HudPlugin)
+            .add_plugins(loading::LoadingCardPlugin)
             .init_resource::<parks::ParksScreen>()
             .add_systems(Startup, (spawn_ui, parks::spawn, pointer::spawn_beam))
             .add_systems(

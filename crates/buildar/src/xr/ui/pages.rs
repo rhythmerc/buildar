@@ -64,7 +64,7 @@ impl UiProvider for Shared {
                     Widget::link(format!("Engine: {}", engine.map_or("-", Engine::name)), ENGINE),
                     Widget::link("AR settings", AR),
                     Widget::link("Build a park", BUILD),
-                    Widget::button("recenter", "Place the skater: point, then A"),
+                    Widget::button("recenter", format!("Place the {}: point, then A", engine.map_or("skater", Engine::player_noun))),
                     Widget::link("Controls", CONTROLS),
                     #[cfg(any(feature = "retail", feature = "thug2"))]
                     Widget::link("Game data", DATA),
@@ -822,7 +822,8 @@ pub(crate) fn put_skater_ahead(world: &mut World) {
     let forward = (eye.rotation * Vec3::NEG_Z).with_y(0.0).normalize_or(Vec3::NEG_Z);
     let ahead_tracking = eye.translation + forward * AHEAD_M;
     let ahead = root.transform_point(ahead_tracking);
-    let from = ahead + Vec3::Y * root.scale.y * 0.5;
+    // (from the eyes' height down: not from over them, where the room's ceiling is the first face down)
+    let from = ahead;
     let ground = world
         .resource::<CurrentStage>()
         .triangles()
