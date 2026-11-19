@@ -10,6 +10,7 @@
 //! - `matte=N`: occlusion's edge matte N x N (`xr::occlusion`; 768 by default).
 //! - `no_direct_out`: the eyes' pictures go to the headset's image by Bevy's own copy, not by occlusion's last pass
 //!   (`xr::occlusion::DirectOut`).
+//! - `cpu_high`: the CPU's level asked sustained high of the runtime (`xr::perf_level`).
 //! - `menu_closed`: the menu doesn't open itself at launch (an engine measured as it plays).
 //! Read where the plugins are made (`clean::dev_plugins`):
 //! - `compute=N`: at least N threads in Bevy's compute pool; `compute=0`, none (the schedules' own threads run

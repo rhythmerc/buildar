@@ -28,6 +28,7 @@ pub(crate) mod panel_layer;
 mod frame_timing;
 pub(crate) mod dev_flags;
 pub(crate) mod debug_course;
+mod perf_level;
 mod plane_view;
 pub(crate) mod planes;
 mod real_world;
@@ -74,6 +75,7 @@ pub(crate) fn plugins(base: PluginGroupBuilder) -> PluginGroupBuilder {
         virtual_keyboard::enable(raw);
     }
     panel_layer::enable(raw);
+    perf_level::enable(raw);
     // The room's triangle mesh, for objects Scene has no plane or box for.
     raw.meta_spatial_entity_mesh = true;
     // In-app "rescan the room" (runs Space Setup).
@@ -124,7 +126,7 @@ impl Plugin for XrPlugin {
             .add_plugins(occlusion::OcclusionPlugin)
             .add_plugins(controller_shapes::ControllerShapesPlugin)
             .add_plugins((virtual_keyboard::VirtualKeyboardPlugin, panel_layer::PanelLayerPlugin, frame_timing::FrameTimingPlugin))
-            .add_plugins(debug_course::DebugCoursePlugin)
+            .add_plugins((debug_course::DebugCoursePlugin, perf_level::PerfLevelPlugin))
             .insert_resource(OxrSessionConfig {
                 blend_mode_preference: vec![
                     openxr::EnvironmentBlendMode::ALPHA_BLEND,
