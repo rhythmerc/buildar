@@ -186,7 +186,7 @@ impl<M: Hosted> Driver<M> {
 pub(crate) enum Ready {
     /// Being made (its files loaded).
     Starting,
-    /// Made, its game not stepping yet (loading inside it).
+    /// Made, its game still loading inside it: not ready for its player yet (`EngineCore::ready_to_place`).
     Preparing,
     /// Running, its player not put in the room yet.
     ToPlace,
@@ -255,10 +255,8 @@ fn report<M: Hosted>(mut driver: ResMut<Driver<M>>, mut readiness: ResMut<Readin
     let ready = match d.phase.get_mut().unwrap_or_else(|p| p.into_inner()) {
         Phase::Idle(_) | Phase::Booting(_) => Some(Ready::Starting),
         Phase::Failed(_) => None,
-        // (a game still loading after it is made - Mario Kart Wii's race - steps once it's loaded; a skate engine is
-        // ready as soon as it is made, and takes its world with its player's first placement (THUG2 steps only
-        // then))
-        Phase::Running(_) if d.steps == 0 && M::ENGINE.mode() != engine_api::Mode::Skate => Some(Ready::Preparing),
+        // (a game still loading after it is made - Mario Kart Wii's race - says when it can take its player)
+        Phase::Running(core) if !core.ready_to_place() => Some(Ready::Preparing),
         Phase::Running(_) if !d.placed => Some(Ready::ToPlace),
         Phase::Running(_) => Some(Ready::Placed),
     };
