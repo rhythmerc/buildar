@@ -119,12 +119,18 @@ impl Plugin for OcclusionPlugin {
         bevy::asset::embedded_asset!(app, "occlusion_copy.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_sure.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_steps.wgsl");
+        bevy::asset::embedded_asset!(app, "eye_copy.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_texels.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_matte.wgsl");
         bevy::asset::embedded_asset!(app, "occlusion_advance.wgsl");
         bevy::shader::load_shader_library!(app, "occlusion_look.wgsl");
         let problem = OcclusionProblem::default();
         let capture = Capture::default();
+        let direct_out = DirectOut::default();
+        let direct_allowed = !app.world().get_resource::<super::dev_flags::DevFlags>().is_some_and(|f| f.has("no_direct_out"));
+        if direct_allowed {
+            app.insert_resource(direct_out.clone()).add_systems(PostUpdate, skip_bevys_copy);
+        }
         app.init_resource::<Wanted>()
             .insert_resource(problem.clone())
             .insert_resource(capture.clone())
@@ -136,6 +142,7 @@ impl Plugin for OcclusionPlugin {
             .add_observer(readable_eye_depth);
         let Some(render) = app.get_sub_app_mut(RenderApp) else { return };
         render
+            .insert_resource(direct_out)
             .insert_resource(problem)
             .insert_resource(capture)
             .init_resource::<Readbacks>()
@@ -152,6 +159,18 @@ impl Plugin for OcclusionPlugin {
             )
             .add_render_graph_node::<ViewNodeRunner<OcclusionNode>>(Core3d, OcclusionLabel)
             .add_render_graph_edges(Core3d, (Node3d::EndMainPass, OcclusionLabel, Node3d::Tonemapping));
+    }
+}
+
+/// The eyes' cameras skip Bevy's copy to the headset's image once their own last pass writes it ([`DirectOut`]).
+fn skip_bevys_copy(direct_out: Res<DirectOut>, mut eyes: Query<&mut Camera, With<XrCamera>>) {
+    if !direct_out.0.load(std::sync::atomic::Ordering::Acquire) {
+        return;
+    }
+    for mut camera in &mut eyes {
+        if !matches!(camera.output_mode, bevy::camera::CameraOutputMode::Skip) {
+            camera.output_mode = bevy::camera::CameraOutputMode::Skip;
+        }
     }
 }
 
@@ -680,7 +699,10 @@ fn acquire(
 
 #[derive(Resource)]
 struct OcclusionPipeline {
-    layouts: [BindGroupLayoutDescriptor; 2],
+    /// The occlusion pass's, by [multisampled][direct] (`multisampled as usize * 2 + direct as usize`).
+    layouts: [BindGroupLayoutDescriptor; 4],
+    eye_copy_layout: BindGroupLayoutDescriptor,
+    eye_copy_shader: Handle<Shader>,
     fullscreen: FullscreenShader,
     shader: Handle<Shader>,
     /// The pass that filters the room's image, and the one that copies it
@@ -707,23 +729,67 @@ struct OcclusionPipeline {
 struct PipelineKey {
     format: TextureFormat,
     multisampled: bool,
+    kind: PassKind,
+}
+
+/// The occlusion pass blended into the eye's picture, writing the headset's image itself, or the plain copy.
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+enum PassKind {
+    Blend,
+    Direct,
+    Copy,
 }
 
 #[derive(Component)]
-struct OcclusionPipelineId(CachedRenderPipelineId, bool);
+struct OcclusionPipelineId {
+    /// Blended into the eye's picture, and (`direct`) writing the headset's image itself.
+    blend: CachedRenderPipelineId,
+    direct: CachedRenderPipelineId,
+    multisampled: bool,
+}
+
+/// An eye's pass that copies its picture to the headset's image as it is (`eye_copy.wgsl`), for frames occlusion
+/// doesn't run while the eyes' last pass is ours ([`DirectOut`]).
+#[derive(Component)]
+struct EyeCopyPipelineId(CachedRenderPipelineId);
+
+/// The eyes' last pass writes the headset's image (Bevy's own copy, its upscaling pass, skipped for them: the
+/// cameras' output mode is `Skip`): occlusion's pass, reading the picture and writing it with what's hidden taken
+/// out, or (occlusion not running) a plain copy. Set by the render world once every eye's copy pass is ready, so
+/// there is never a frame nothing writes the image; the main world then skips Bevy's copy. Not with the dev flag
+/// `no_direct_out`.
+#[derive(Resource, Clone, Default)]
+pub(crate) struct DirectOut(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
 fn init_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>, assets: Res<AssetServer>, cache: Res<PipelineCache>) {
-    let layout = |multisampled: bool| {
-        let entries = (
-            uniform_buffer::<ViewUniform>(true),
-            if multisampled { texture_depth_2d_multisampled() } else { texture_depth_2d() },
-            uniform_buffer::<Eye>(false),
-            texture_2d_array(TextureSampleType::Float { filterable: true }),
-            sampler(SamplerBindingType::Filtering),
-            texture_2d(TextureSampleType::Float { filterable: true }),
-        );
-        BindGroupLayoutDescriptor::new("occlusion", &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, entries))
+    let layout = |multisampled: bool, direct: bool| {
+        let depth = if multisampled { texture_depth_2d_multisampled() } else { texture_depth_2d() };
+        let float = || texture_2d(TextureSampleType::Float { filterable: true });
+        if direct {
+            let entries = (
+                uniform_buffer::<ViewUniform>(true),
+                depth,
+                uniform_buffer::<Eye>(false),
+                texture_2d_array(TextureSampleType::Float { filterable: true }),
+                sampler(SamplerBindingType::Filtering),
+                float(),
+                float(),
+            );
+            BindGroupLayoutDescriptor::new("occlusion, direct", &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, entries))
+        } else {
+            let entries = (
+                uniform_buffer::<ViewUniform>(true),
+                depth,
+                uniform_buffer::<Eye>(false),
+                texture_2d_array(TextureSampleType::Float { filterable: true }),
+                sampler(SamplerBindingType::Filtering),
+                float(),
+            );
+            BindGroupLayoutDescriptor::new("occlusion", &BindGroupLayoutEntries::sequential(ShaderStages::FRAGMENT, entries))
+        }
     };
+    let eye_copy_layout =
+        BindGroupLayoutDescriptor::new("eye copy", &BindGroupLayoutEntries::single(ShaderStages::FRAGMENT, texture_2d(TextureSampleType::Float { filterable: true })));
     let filter_layout =
         BindGroupLayoutDescriptor::new("occlusion filter", &BindGroupLayoutEntries::single(ShaderStages::FRAGMENT, texture_depth_2d()));
     let filter = cache.queue_render_pipeline(RenderPipelineDescriptor {
@@ -832,7 +898,9 @@ fn init_pipeline(mut commands: Commands, fullscreen: Res<FullscreenShader>, asse
         filter_layout,
         filter,
         copy,
-        layouts: [layout(false), layout(true)],
+        layouts: [layout(false, false), layout(false, true), layout(true, false), layout(true, true)],
+        eye_copy_layout,
+        eye_copy_shader: assets.load("embedded://buildar/xr/eye_copy.wgsl"),
         fullscreen: fullscreen.clone(),
         shader: assets.load("embedded://buildar/xr/occlusion.wgsl"),
     });
@@ -842,19 +910,41 @@ impl SpecializedRenderPipeline for OcclusionPipeline {
     type Key = PipelineKey;
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
-        // What is there is multiplied by what the pass says is seen.
+        if key.kind == PassKind::Copy {
+            return RenderPipelineDescriptor {
+                label: Some("eye copy".into()),
+                layout: vec![self.eye_copy_layout.clone()],
+                vertex: self.fullscreen.to_vertex_state(),
+                fragment: Some(FragmentState {
+                    shader: self.eye_copy_shader.clone(),
+                    targets: vec![Some(ColorTargetState { format: key.format, blend: None, write_mask: ColorWrites::ALL })],
+                    ..default()
+                }),
+                ..default()
+            };
+        }
+        let direct = key.kind == PassKind::Direct;
+        // What is there is multiplied by what the pass says is seen (or, writing the headset's image, the picture
+        // times that is written).
         let keep = BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::Src, operation: BlendOperation::Add };
         let keep_alpha = BlendComponent { src_factor: BlendFactor::Zero, dst_factor: BlendFactor::SrcAlpha, operation: BlendOperation::Add };
+        let mut shader_defs: Vec<bevy::shader::ShaderDefVal> = Vec::new();
+        if key.multisampled {
+            shader_defs.push("MULTISAMPLED".into());
+        }
+        if direct {
+            shader_defs.push("DIRECT".into());
+        }
         RenderPipelineDescriptor {
-            label: Some("occlusion".into()),
-            layout: vec![self.layouts[key.multisampled as usize].clone()],
+            label: Some(if direct { "occlusion, direct" } else { "occlusion" }.into()),
+            layout: vec![self.layouts[key.multisampled as usize * 2 + direct as usize].clone()],
             vertex: self.fullscreen.to_vertex_state(),
             fragment: Some(FragmentState {
                 shader: self.shader.clone(),
-                shader_defs: if key.multisampled { vec!["MULTISAMPLED".into()] } else { vec![] },
+                shader_defs,
                 targets: vec![Some(ColorTargetState {
                     format: key.format,
-                    blend: Some(BlendState { color: keep, alpha: keep_alpha }),
+                    blend: (!direct).then_some(BlendState { color: keep, alpha: keep_alpha }),
                     write_mask: ColorWrites::ALL,
                 })],
                 ..default()
@@ -875,22 +965,37 @@ fn prepare(
     queue: Res<RenderQueue>,
     mut depth: ResMut<RoomDepth>,
     problem: Res<OcclusionProblem>,
-    views: Query<(Entity, &ExtractedView, &Msaa), With<XrCamera>>,
+    views: Query<(Entity, &ExtractedView, &Msaa, &ViewTarget), With<XrCamera>>,
+    direct_out: Res<DirectOut>,
 ) {
+    // Every eye's plain copy to the headset's image, occlusion on or off: once they're all ready the eyes' last
+    // pass can be ours (`DirectOut`).
+    let mut copies_ready = !views.is_empty();
+    for (entity, _, _, target) in &views {
+        let id = pipelines.specialize(&cache, &pipeline, PipelineKey { format: target.out_texture_view_format(), multisampled: false, kind: PassKind::Copy });
+        copies_ready &= cache.get_render_pipeline(id).is_some();
+        commands.entity(entity).insert(EyeCopyPipelineId(id));
+    }
+    if copies_ready && !direct_out.0.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        info!("Occlusion: the eyes' copies to the headset's image are ready: their last pass is ours from now on");
+    }
     let (Some(wanted), Some(latest)) = (wanted.filter(|w| w.mode.on()), depth.latest) else { return };
-    for (entity, view, msaa) in &views {
+    for (entity, view, msaa, target) in &views {
         let multisampled = msaa.samples() > 1;
         let format = if view.hdr { ViewTarget::TEXTURE_FORMAT_HDR } else { TextureFormat::bevy_default() };
-        let id = pipelines.specialize(&cache, &pipeline, PipelineKey { format, multisampled });
+        let blend = pipelines.specialize(&cache, &pipeline, PipelineKey { format, multisampled, kind: PassKind::Blend });
+        let direct = pipelines.specialize(&cache, &pipeline, PipelineKey { format: target.out_texture_view_format(), multisampled, kind: PassKind::Direct });
         // (a pass that can't be made is otherwise only a line in the log)
-        if let bevy::render::render_resource::CachedPipelineState::Err(error) = cache.get_render_pipeline_state(id) {
-            if !depth.broken {
-                depth.broken = true;
-                error!("Occlusion: the pass can't be made: {error}");
-                *problem.0.lock().unwrap() = Some("Occlusion's drawing pass failed to start (see the log).");
+        for id in [blend, direct] {
+            if let bevy::render::render_resource::CachedPipelineState::Err(error) = cache.get_render_pipeline_state(id) {
+                if !depth.broken {
+                    depth.broken = true;
+                    error!("Occlusion: the pass can't be made: {error}");
+                    *problem.0.lock().unwrap() = Some("Occlusion's drawing pass failed to start (see the log).");
+                }
             }
         }
-        commands.entity(entity).insert(OcclusionPipelineId(id, multisampled));
+        commands.entity(entity).insert(OcclusionPipelineId { blend, direct, multisampled });
     }
     // Edges from the camera: its newest frame goes to its texture, and this
     // frame's matte is written from the other one of the eye's two.
@@ -1012,29 +1117,88 @@ struct OcclusionLabel;
 struct OcclusionNode;
 
 impl ViewNode for OcclusionNode {
-    type ViewQuery = (&'static ViewTarget, &'static ViewDepthTexture, &'static ViewUniformOffset, &'static XrCamera, &'static OcclusionPipelineId);
+    type ViewQuery = (
+        &'static ViewTarget,
+        &'static ViewDepthTexture,
+        &'static ViewUniformOffset,
+        &'static XrCamera,
+        Option<&'static OcclusionPipelineId>,
+        &'static bevy::render::camera::ExtractedCamera,
+        Option<&'static EyeCopyPipelineId>,
+    );
 
     fn run(
         &self,
         _graph: &mut RenderGraphContext,
         context: &mut RenderContext,
-        (target, scene_depth, view_offset, camera, pipeline_id): QueryItem<Self::ViewQuery>,
+        (target, scene_depth, view_offset, camera, pipeline_id, extracted, copy_id): QueryItem<Self::ViewQuery>,
         world: &World,
     ) -> Result<(), NodeRunError> {
+        // (the eyes' last pass is ours: `DirectOut`)
+        let direct = matches!(extracted.output_mode, bevy::camera::CameraOutputMode::Skip);
+        if Self::occlude(context, target, scene_depth, view_offset, camera, pipeline_id, direct, world)? || !direct {
+            return Ok(());
+        }
+        // Occlusion didn't write the headset's image this frame: the picture goes there as it is.
+        let cache = world.resource::<PipelineCache>();
+        let pipeline = world.resource::<OcclusionPipeline>();
+        let Some(copy) = copy_id.and_then(|id| cache.get_render_pipeline(id.0)) else {
+            warn_once!("Occlusion: an eye's copy to the headset's image isn't ready on a frame it's wanted");
+            return Ok(());
+        };
+        let reads = context.render_device().create_bind_group(
+            "eye copy",
+            &cache.get_bind_group_layout(&pipeline.eye_copy_layout),
+            &BindGroupEntries::single(target.main_texture_view()),
+        );
+        let mut pass = context.command_encoder().begin_render_pass(&RenderPassDescriptor {
+            label: Some("eye copy"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view: target.out_texture(),
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(copy);
+        pass.set_bind_group(0, &reads, &[]);
+        pass.draw(0..3, 0..1);
+        Ok(())
+    }
+}
+
+impl OcclusionNode {
+    /// Occlusion's passes for an eye; and the last, blended into the eye's picture or (`direct`) writing the
+    /// headset's image with the picture. Whether that last one ran.
+    #[allow(clippy::too_many_arguments)]
+    fn occlude(
+        context: &mut RenderContext,
+        target: &ViewTarget,
+        scene_depth: &ViewDepthTexture,
+        view_offset: &ViewUniformOffset,
+        camera: &XrCamera,
+        pipeline_id: Option<&OcclusionPipelineId>,
+        direct: bool,
+        world: &World,
+    ) -> Result<bool, NodeRunError> {
+        let Some(pipeline_id) = pipeline_id else { return Ok(false) };
         let depth = world.resource::<RoomDepth>();
         let on = world.get_resource::<Wanted>().is_some_and(|w| w.mode.on());
-        let (true, Some(latest), Some(made)) = (on, depth.latest, depth.made.as_ref()) else { return Ok(()) };
+        let (true, Some(latest), Some(made)) = (on, depth.latest, depth.made.as_ref()) else { return Ok(false) };
         let cache = world.resource::<PipelineCache>();
         let pipeline = world.resource::<OcclusionPipeline>();
         let layer = (camera.0 as usize).min(1);
         let (Some(render_pipeline), Some(filter), Some(view_uniforms), Some(layers), Some(eye)) = (
-            cache.get_render_pipeline(pipeline_id.0),
+            cache.get_render_pipeline(if direct { pipeline_id.direct } else { pipeline_id.blend }),
             cache.get_render_pipeline(pipeline.filter),
             world.resource::<ViewUniforms>().uniforms.binding(),
             made.layers.get(latest.image),
             depth.eyes[layer].as_ref().and_then(|e| e.binding()),
         ) else {
-            return Ok(());
+            return Ok(false);
         };
         let device = context.render_device().clone();
         // The room's image as the headset gave it; and, where the hands are
@@ -1083,11 +1247,28 @@ impl ViewNode for OcclusionNode {
             );
         }
         let matte = &made.mattes[layer][depth.turn].1;
-        let bind_group = device.create_bind_group(
-            "occlusion",
-            &cache.get_bind_group_layout(&pipeline.layouts[pipeline_id.1 as usize]),
-            &BindGroupEntries::sequential((view_uniforms, scene_depth.view(), eye, &made.filtered.1, &made.sampler, matte)),
-        );
+        let layout = cache.get_bind_group_layout(&pipeline.layouts[pipeline_id.multisampled as usize * 2 + direct as usize]);
+        let bind_group = if direct {
+            device.create_bind_group(
+                "occlusion, direct",
+                &layout,
+                &BindGroupEntries::sequential((
+                    view_uniforms,
+                    scene_depth.view(),
+                    eye,
+                    &made.filtered.1,
+                    &made.sampler,
+                    matte,
+                    target.main_texture_view(),
+                )),
+            )
+        } else {
+            device.create_bind_group(
+                "occlusion",
+                &layout,
+                &BindGroupEntries::sequential((view_uniforms, scene_depth.view(), eye, &made.filtered.1, &made.sampler, matte)),
+            )
+        };
         // A pass over the whole of `to`.
         let draw = |context: &mut RenderContext, label, to: &TextureView, with: &bevy::render::render_resource::RenderPipeline, reads: &[&BindGroup]| {
             let mut pass = context.command_encoder().begin_render_pass(&RenderPassDescriptor {
@@ -1194,13 +1375,19 @@ impl ViewNode for OcclusionNode {
             });
             world.resource::<Readbacks>().add(buffer, note, layer, width, height);
         }
+        // (writing the headset's image: every pixel is written, nothing to load)
+        let (view, load) = if direct {
+            (target.out_texture(), wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT))
+        } else {
+            (target.main_texture_view(), wgpu::LoadOp::Load)
+        };
         let mut pass = context.command_encoder().begin_render_pass(&RenderPassDescriptor {
-            label: Some("occlusion"),
+            label: Some(if direct { "occlusion, direct" } else { "occlusion" }),
             color_attachments: &[Some(RenderPassColorAttachment {
-                view: target.main_texture_view(),
+                view,
                 depth_slice: None,
                 resolve_target: None,
-                ops: Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                ops: Operations { load, store: wgpu::StoreOp::Store },
             })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
@@ -1209,7 +1396,7 @@ impl ViewNode for OcclusionNode {
         pass.set_pipeline(render_pipeline);
         pass.set_bind_group(0, &bind_group, &[view_offset.offset]);
         pass.draw(0..3, 0..1);
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -1294,6 +1481,7 @@ mod tests {
         let look: String = include_str!("occlusion_look.wgsl").lines().filter(|l| !l.starts_with("#define_import_path")).collect::<Vec<_>>().join("\n");
         for source in [
             include_str!("occlusion_steps.wgsl"),
+            include_str!("eye_copy.wgsl"),
             include_str!("occlusion_sure.wgsl"),
             include_str!("occlusion_texels.wgsl"),
             include_str!("occlusion_matte.wgsl"),
@@ -1509,15 +1697,23 @@ mod tests {
     #[test]
     fn the_shader_is_valid() {
         let source = include_str!("occlusion.wgsl");
-        for multisampled in [false, true] {
-            // What Bevy's preprocessor would do: the import, and the #ifdef.
+        for (multisampled, direct) in [(false, false), (false, true), (true, false), (true, true)] {
+            // What Bevy's preprocessor would do: the import, and the #ifdefs (not nested).
             let mut text = String::from("struct View { world_from_clip: mat4x4<f32>, viewport: vec4<f32>, world_position: vec3<f32> }\n");
             let mut keep = true;
+            let mut defined = true;
             for line in source.lines() {
                 match line.trim() {
                     l if l.starts_with("#import") => {}
-                    "#ifdef MULTISAMPLED" => keep = multisampled,
-                    "#else" => keep = !multisampled,
+                    l if l.starts_with("#ifdef ") => {
+                        defined = match &l["#ifdef ".len()..] {
+                            "MULTISAMPLED" => multisampled,
+                            "DIRECT" => direct,
+                            other => panic!("unknown define {other}"),
+                        };
+                        keep = defined;
+                    }
+                    "#else" => keep = !defined,
                     "#endif" => keep = true,
                     _ if keep => {
                         text.push_str(line);

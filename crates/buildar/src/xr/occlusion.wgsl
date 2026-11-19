@@ -87,8 +87,23 @@ fn seen(real: f32, drawn: f32) -> f32 {
     return 1.0 - smoothstep(real * 1.02, real * 1.08 + 0.01, drawn);
 }
 
+#ifdef DIRECT
+// The eye's picture, read here and written to the headset's image with what is hidden taken out (in place of
+// blending into the picture and Bevy then copying it there: one full-screen pass an eye, not two).
+@group(0) @binding(6) var scene_color: texture_2d<f32>;
+#endif
+
 @fragment
 fn fragment(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
+#ifdef DIRECT
+    return textureLoad(scene_color, vec2<i32>(position.xy), 0) * seen_at(position);
+#else
+    return seen_at(position);
+#endif
+}
+
+// What of the pixel is seen (1) or hidden (0) by the room, colour and alpha alike.
+fn seen_at(position: vec4<f32>) -> vec4<f32> {
 #ifdef MULTISAMPLED
     // The nearest of the pixel's samples. (With only the first looked at, a
     // pixel on a thing's edge whose first sample missed the thing kept its

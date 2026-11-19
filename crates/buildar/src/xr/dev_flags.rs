@@ -8,6 +8,8 @@
 //!   (`xr::debug_course`; implies `menu_closed`).
 //! - `cluster_single`: one light cluster for the eyes, not Bevy's grid of them (a handful of lights).
 //! - `matte=N`: occlusion's edge matte N x N (`xr::occlusion`; 768 by default).
+//! - `no_direct_out`: the eyes' pictures go to the headset's image by Bevy's own copy, not by occlusion's last pass
+//!   (`xr::occlusion::DirectOut`).
 //! - `menu_closed`: the menu doesn't open itself at launch (an engine measured as it plays).
 //! Read where the plugins are made (`clean::dev_plugins`):
 //! - `compute=N`: at least N threads in Bevy's compute pool; `compute=0`, none (the schedules' own threads run
