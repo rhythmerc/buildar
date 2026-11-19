@@ -75,8 +75,10 @@ pub(crate) fn install(app: &mut App, files: &Path) {
     let data = files.join("mkwii-data");
     let factory_disc = disc.clone();
     let factory: engine_core::EngineFactory = Box::new(move || {
-        // (the disc's parts the game never reads gone from the player's copy: their space given back)
-        match mkw_engine::leave_out_unused(&factory_disc) {
+        // (the disc's parts the game never reads gone from the player's copy in the app's files: their space given
+        // back; a disc named elsewhere, MKW_DISC_DIR, is left as it is)
+        let own_copy = std::env::var_os("MKW_DISC_DIR").is_none();
+        match if own_copy { mkw_engine::leave_out_unused(&factory_disc) } else { Ok(0) } {
             Ok(0) => {}
             Ok(freed) => info!("Mario Kart Wii: {} MB of unused disc files removed", freed >> 20),
             Err(e) => warn!("Mario Kart Wii: unused disc files not removed: {e}"),
