@@ -42,6 +42,23 @@ impl ExtractComponent for DiscardMsaaAfterMainPass {
     }
 }
 
+/// On a 3D camera: its main pass is encoded on the render graph's thread, into the graph's own command encoder,
+/// not by a task on the compute pool with an encoder of its own. Where the pool has a thread or none to spare (the
+/// Quest gives an app three cores), the task waited behind other work while the graph waited for it.
+/// (Local patch: see vendor/README.md.)
+#[derive(Component, Clone, Copy, Default, Debug)]
+pub struct EncodeMainPassInline;
+
+impl ExtractComponent for EncodeMainPassInline {
+    type QueryData = &'static Self;
+    type QueryFilter = ();
+    type Out = Self;
+
+    fn extract_component(item: QueryItem<'_, '_, Self::QueryData>) -> Option<Self::Out> {
+        Some(*item)
+    }
+}
+
 /// Whether the view's transparent phase is drawn in its main opaque pass (local patch): when it has no transmissive
 /// items, nothing is drawn between the two, and one render pass saves a tiling GPU storing the colour and depth and
 /// loading them again.
@@ -67,6 +84,7 @@ impl ViewNode for MainOpaquePass3dNode {
         &'static ViewUniformOffset,
         Option<&'static MainPassResolutionOverride>,
         bevy_ecs::query::Has<DiscardMsaaAfterMainPass>,
+        bevy_ecs::query::Has<EncodeMainPassInline>,
     );
 
     fn run<'w>(
@@ -83,6 +101,7 @@ impl ViewNode for MainOpaquePass3dNode {
             view_uniform_offset,
             resolution_override,
             discard_msaa,
+            encode_inline,
         ): QueryItem<'w, '_, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
@@ -119,6 +138,80 @@ impl ViewNode for MainOpaquePass3dNode {
         let depth_stencil_attachment = Some(depth.get_attachment(StoreOp::Store));
 
         let view_entity = graph.view_entity();
+        // The pass's draws, in either encoding.
+        macro_rules! draw_all {
+            ($rp:ident) => {{
+            if let Some(viewport) =
+                Viewport::from_viewport_and_override(camera.viewport.as_ref(), resolution_override)
+            {
+                $rp.set_camera_viewport(&viewport);
+            }
+
+            // Opaque draws
+            if !opaque_phase.is_empty() {
+                #[cfg(feature = "trace")]
+                let _opaque_main_pass_3d_span = info_span!("opaque_main_pass_3d").entered();
+                if let Err(err) = opaque_phase.render(&mut $rp, world, view_entity) {
+                    error!("Error encountered while rendering the opaque phase {err:?}");
+                }
+            }
+
+            // Alpha draws
+            if !alpha_mask_phase.is_empty() {
+                #[cfg(feature = "trace")]
+                let _alpha_mask_main_pass_3d_span = info_span!("alpha_mask_main_pass_3d").entered();
+                if let Err(err) = alpha_mask_phase.render(&mut $rp, world, view_entity) {
+                    error!("Error encountered while rendering the alpha mask phase {err:?}");
+                }
+            }
+
+            // Skybox draw using a fullscreen triangle
+            if let (Some(skybox_pipeline), Some(SkyboxBindGroup(skybox_bind_group))) =
+                (skybox_pipeline, skybox_bind_group)
+            {
+                let pipeline_cache = world.resource::<PipelineCache>();
+                if let Some(pipeline) = pipeline_cache.get_render_pipeline(skybox_pipeline.0) {
+                    $rp.set_render_pipeline(pipeline);
+                    $rp.set_bind_group(
+                        0,
+                        &skybox_bind_group.0,
+                        &[view_uniform_offset.offset, skybox_bind_group.1],
+                    );
+                    $rp.draw(0..3, 0..1);
+                }
+            }
+
+            // Transparent draws, sorted back-to-front (local patch: here, not in a pass of their own, when there is
+            // nothing transmissive between them and the opaque ones)
+            if let Some(transparent_phase) = transparent_phase
+                && !transparent_phase.items.is_empty()
+            {
+                #[cfg(feature = "trace")]
+                let _transparent_main_pass_3d_span = info_span!("transparent_in_main_opaque_pass_3d").entered();
+                if let Err(err) = transparent_phase.render(&mut $rp, world, view_entity) {
+                    error!("Error encountered while rendering the transparent phase {err:?}");
+                }
+            }
+
+            }};
+        }
+        // (local patch: encoded on this thread, into the graph's encoder, where the camera asks - with one compute
+        // thread the parallel task only queued behind other work while this thread waited for it)
+        if encode_inline {
+            #[cfg(feature = "trace")]
+            let _main_opaque_pass_3d_span = info_span!("main_opaque_pass_3d").entered();
+            let mut render_pass = render_context.begin_tracked_render_pass(RenderPassDescriptor {
+                label: Some("main_opaque_pass_3d"),
+                color_attachments: &color_attachments,
+                depth_stencil_attachment,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            let pass_span = diagnostics.pass_span(&mut render_pass, "main_opaque_pass_3d");
+            draw_all!(render_pass);
+            pass_span.end(&mut render_pass);
+            return Ok(());
+        }
         render_context.add_command_buffer_generation_task(move |render_device| {
             #[cfg(feature = "trace")]
             let _main_opaque_pass_3d_span = info_span!("main_opaque_pass_3d").entered();
@@ -139,58 +232,7 @@ impl ViewNode for MainOpaquePass3dNode {
             });
             let mut render_pass = TrackedRenderPass::new(&render_device, render_pass);
             let pass_span = diagnostics.pass_span(&mut render_pass, "main_opaque_pass_3d");
-
-            if let Some(viewport) =
-                Viewport::from_viewport_and_override(camera.viewport.as_ref(), resolution_override)
-            {
-                render_pass.set_camera_viewport(&viewport);
-            }
-
-            // Opaque draws
-            if !opaque_phase.is_empty() {
-                #[cfg(feature = "trace")]
-                let _opaque_main_pass_3d_span = info_span!("opaque_main_pass_3d").entered();
-                if let Err(err) = opaque_phase.render(&mut render_pass, world, view_entity) {
-                    error!("Error encountered while rendering the opaque phase {err:?}");
-                }
-            }
-
-            // Alpha draws
-            if !alpha_mask_phase.is_empty() {
-                #[cfg(feature = "trace")]
-                let _alpha_mask_main_pass_3d_span = info_span!("alpha_mask_main_pass_3d").entered();
-                if let Err(err) = alpha_mask_phase.render(&mut render_pass, world, view_entity) {
-                    error!("Error encountered while rendering the alpha mask phase {err:?}");
-                }
-            }
-
-            // Skybox draw using a fullscreen triangle
-            if let (Some(skybox_pipeline), Some(SkyboxBindGroup(skybox_bind_group))) =
-                (skybox_pipeline, skybox_bind_group)
-            {
-                let pipeline_cache = world.resource::<PipelineCache>();
-                if let Some(pipeline) = pipeline_cache.get_render_pipeline(skybox_pipeline.0) {
-                    render_pass.set_render_pipeline(pipeline);
-                    render_pass.set_bind_group(
-                        0,
-                        &skybox_bind_group.0,
-                        &[view_uniform_offset.offset, skybox_bind_group.1],
-                    );
-                    render_pass.draw(0..3, 0..1);
-                }
-            }
-
-            // Transparent draws, sorted back-to-front (local patch: here, not in a pass of their own, when there is
-            // nothing transmissive between them and the opaque ones)
-            if let Some(transparent_phase) = transparent_phase
-                && !transparent_phase.items.is_empty()
-            {
-                #[cfg(feature = "trace")]
-                let _transparent_main_pass_3d_span = info_span!("transparent_in_main_opaque_pass_3d").entered();
-                if let Err(err) = transparent_phase.render(&mut render_pass, world, view_entity) {
-                    error!("Error encountered while rendering the transparent phase {err:?}");
-                }
-            }
+            draw_all!(render_pass);
 
             pass_span.end(&mut render_pass);
             {

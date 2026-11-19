@@ -101,7 +101,10 @@ fn dev_plugins(mut plugins: bevy::app::PluginGroupBuilder, flags: &crate::xr::de
     if lean {
         plugins = plugins.disable::<bevy::post_process::PostProcessPlugin>().disable::<bevy::anti_alias::AntiAliasPlugin>();
     }
-    if flags.has("quiet_spans") {
+    // The ECS's and the render graph's per-system tracing spans are filtered out of the log in the headset (Bevy's
+    // `trace` feature makes one each system run, each through the Android log layer: ~0.4 ms a frame on the Quest),
+    // unless the dev flag `spans` keeps them (for a profiler that reads them).
+    if !flags.has("spans") {
         plugins = plugins.set(bevy::log::LogPlugin {
             filter: format!("{},bevy_ecs=warn,bevy_app=warn,bevy_render::renderer=warn,bevy_render::render_graph=warn", bevy::log::DEFAULT_FILTER),
             ..default()

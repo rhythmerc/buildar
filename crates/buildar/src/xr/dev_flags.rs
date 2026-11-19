@@ -16,7 +16,7 @@
 //!   their systems).
 //! - `cpu_preprocess`: meshes' instance data built on the CPU, not by GPU preprocessing (six compute passes an eye).
 //! - `lean_plugins`: no post-processing, anti-aliasing or deferred lighting plugins (unused; their systems run).
-//! - `quiet_spans`: the ECS's and the renderer's per-system tracing spans filtered out of the log.
+//! - `spans`: the ECS's and the renderer's per-system tracing spans kept in the log (filtered out by default).
 use bevy::ecs::schedule::{ExecutorKind, Schedules};
 use bevy::prelude::*;
 use bevy::render::RenderApp;

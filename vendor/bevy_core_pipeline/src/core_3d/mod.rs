@@ -151,6 +151,7 @@ impl Plugin for Core3dPlugin {
                 SkyboxPlugin,
                 ExtractComponentPlugin::<Camera3d>::default(),
                 ExtractComponentPlugin::<DiscardMsaaAfterMainPass>::default(),
+                ExtractComponentPlugin::<EncodeMainPassInline>::default(),
             ))
             .add_systems(PostUpdate, check_msaa);
 

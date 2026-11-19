@@ -236,7 +236,12 @@ fn readable_eye_depth(add: On<Add, XrCamera>, mut cameras: Query<&mut Camera3d>,
     }
     // (2x: at 4x the eyes' passes were mostly moving their samples in and out of the GPU's tile memory; and once
     // resolved the samples are dropped - nothing after the main pass reads them: this pass reads the resolved colour)
-    commands.entity(add.entity).insert((Msaa::Sample2, bevy::core_pipeline::core_3d::DiscardMsaaAfterMainPass));
+    commands.entity(add.entity).insert((
+        Msaa::Sample2,
+        bevy::core_pipeline::core_3d::DiscardMsaaAfterMainPass,
+        // (and encoded on the render thread: with one compute thread, a task for it only waited)
+        bevy::core_pipeline::core_3d::EncodeMainPassInline,
+    ));
 }
 
 /// The depth provider and its images, once made, and the latest image.

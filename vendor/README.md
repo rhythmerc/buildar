@@ -152,3 +152,12 @@ where the entity is visible with no entry, and the app panicked at boot on the
 Quest. These now skip the entity for that frame and log it once
 (`warn_missing_specialization_tick`). buildAR also stopped swapping the
 menu quad's material (`xr/panel_layer.rs` keeps a separate hole quad).
+
+## The main pass encoded inline (opt-in)
+
+A camera carrying `EncodeMainPassInline` has its main opaque pass encoded on
+the render graph's thread into the graph's own command encoder, not by
+`add_command_buffer_generation_task` on the compute pool with an encoder of its
+own. On the Quest an app gets three cores and Bevy one compute thread: the task
+waited behind other work while the graph waited for it. buildAR's eye cameras
+use it; other cameras encode as upstream does.

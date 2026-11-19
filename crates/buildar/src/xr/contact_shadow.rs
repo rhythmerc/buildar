@@ -59,7 +59,7 @@ const RING_DARK: f32 = 0.5;
 /// A piece whose base is this far over the room is in the air: no ring, real metres.
 const STANDING_M: f32 = 0.05;
 
-#[derive(Clone, Copy, Debug, Default, ShaderType)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType)]
 struct Caster {
     centre: Vec4,
     nose: Vec4,
@@ -67,7 +67,7 @@ struct Caster {
     shape: Vec4,
 }
 
-#[derive(Clone, Copy, Debug, Default, ShaderType)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType)]
 struct Params {
     casters: [Caster; MAX_CASTERS],
     count: u32,
@@ -211,9 +211,12 @@ fn player_shadow(
     }
     let casters = casters(&shapes, size, |p| surface_under(&patch.triangles, p, size));
     visibility.set_if_neq(if casters.is_empty() { Visibility::Hidden } else { Visibility::Inherited });
-    if let Some(material) = materials.get_mut(&assets.player) {
-        let mut params = Params { mode: 0, opacity: 1.0, count: casters.len() as u32, ..default() };
-        params.casters[..casters.len()].copy_from_slice(&casters);
+    let mut params = Params { mode: 0, opacity: 1.0, count: casters.len() as u32, ..default() };
+    params.casters[..casters.len()].copy_from_slice(&casters);
+    // (only when they change: a material written to is made again on the GPU, its buffer and bind group, each frame)
+    if materials.get(&assets.player).is_some_and(|m| m.params != params)
+        && let Some(material) = materials.get_mut(&assets.player)
+    {
         material.params = params;
     }
 }
