@@ -1257,8 +1257,7 @@ pub(super) fn draw(world: &mut World) {
                     Node {
                         height: px(56),
                         flex_shrink: 0.0,
-                        padding: UiRect::new(px(16), px(20), px(0), px(0)),
-                        column_gap: px(10),
+                        padding: UiRect::axes(px(20), px(0)),
                         border: UiRect::all(px(1)),
                         border_radius: BorderRadius::all(px(16)),
                         align_items: AlignItems::Center,
@@ -1268,7 +1267,6 @@ pub(super) fn draw(world: &mut World) {
                     ring(focus == Some(Focus::Settings), 3.5, 4.0),
                 ))
                 .with_children(|b| {
-                    icon(b, &icons.gear, 26.0, DIM);
                     b.spawn((Text::new("buildAR Menu"), fonts.body(19.0, 600), TextColor(DIM), TextLayout::new_with_no_wrap()));
                 });
             });
