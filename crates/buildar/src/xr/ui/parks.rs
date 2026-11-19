@@ -453,6 +453,11 @@ fn open_with_engine(world: &mut World, id: &str, then: Then) -> Outcome {
     carry_out(world, id, then)
 }
 
+/// A park's Play pressed (`xr::dev_play`: unattended, on the simulator).
+pub(super) fn play(world: &mut World, id: &str) -> Outcome {
+    open_with_engine(world, id, Then::Open(false))
+}
+
 fn carry_out(world: &mut World, id: &str, then: Then) -> Outcome {
     match then {
         Then::Open(edit) => open(world, id, edit),

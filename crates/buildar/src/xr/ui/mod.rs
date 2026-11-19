@@ -514,6 +514,31 @@ fn first_selectable(widgets: &[Widget]) -> usize {
 }
 
 /// Opens, closes and navigates the menu and carries out what was pressed.
+/// The menu opened on the parks, as its button does (`xr::dev_play`).
+pub(crate) fn open_menu_for_dev(world: &mut World) {
+    world.resource_mut::<XrUi>().request = Some(pages::PARKS);
+}
+
+/// Park `id`'s Play pressed on the parks screen (`xr::dev_play`); one not kept in this room put down at `ahead`
+/// (tracking space), as the player's trigger does.
+pub(crate) fn play_for_dev(world: &mut World, id: &str, ahead: Vec3) {
+    let outcome = parks::play(world, id);
+    world.resource_mut::<XrUi>().apply(outcome);
+    let placing = {
+        let mut placing = world.resource_mut::<crate::xr::build::parks::Placing>();
+        match placing.0.as_mut() {
+            Some(job) => {
+                job.at.get_or_insert(ahead);
+                true
+            }
+            None => false,
+        }
+    };
+    if placing && crate::xr::build::parks::finish_placing(world) == Some(true) {
+        world.resource_mut::<BuildMode>().active = true;
+    }
+}
+
 fn frame(world: &mut World) {
     let nav = world.resource::<UiNav>().0;
     let point = world.resource::<pointer::UiPointer>().clone();

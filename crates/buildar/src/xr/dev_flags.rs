@@ -12,6 +12,8 @@
 //!   (`xr::occlusion::DirectOut`).
 //! - `cpu_high`: the CPU's level asked sustained high of the runtime (`xr::perf_level`).
 //! - `menu_closed`: the menu doesn't open itself at launch (an engine measured as it plays).
+//! - `play=<name>;<name>;...`, `play_every=N`: those courses played in turn from the menu, unattended
+//!   (`xr::dev_play`: reproducing on the simulator what the player does).
 //! Read where the plugins are made (`clean::dev_plugins`):
 //! - `compute=N`: at least N threads in Bevy's compute pool; `compute=0`, none (the schedules' own threads run
 //!   their systems).

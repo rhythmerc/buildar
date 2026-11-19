@@ -255,11 +255,18 @@ fn report<M: Hosted>(mut driver: ResMut<Driver<M>>, mut readiness: ResMut<Readin
     let ready = match d.phase.get_mut().unwrap_or_else(|p| p.into_inner()) {
         Phase::Idle(_) | Phase::Booting(_) => Some(Ready::Starting),
         Phase::Failed(_) => None,
-        Phase::Running(_) if d.steps == 0 => Some(Ready::Preparing),
+        // (a game still loading after it is made - Mario Kart Wii's race - steps once it's loaded; a skate engine is
+        // ready as soon as it is made, and takes its world with its player's first placement (THUG2 steps only
+        // then))
+        Phase::Running(_) if d.steps == 0 && M::ENGINE.mode() != engine_api::Mode::Skate => Some(Ready::Preparing),
         Phase::Running(_) if !d.placed => Some(Ready::ToPlace),
         Phase::Running(_) => Some(Ready::Placed),
     };
-    readiness.set_if_neq(Readiness(ready.map(|r| (M::ENGINE, r))));
+    let now = Readiness(ready.map(|r| (M::ENGINE, r)));
+    if *readiness != now {
+        info!("{}: {:?}", M::ENGINE.name(), ready);
+    }
+    readiness.set_if_neq(now);
 }
 
 fn boot<M: Hosted>(mut driver: ResMut<Driver<M>>) {
@@ -407,9 +414,11 @@ fn place<M: Hosted>(
             info!("{}: another course open: to be placed again", M::ENGINE.name());
         }
         driver.placed = false;
+        driver.pending = None;
         *played = Some(open);
     }
     for r in requests.read() {
+        info!("{}: placed at {:.2} (asked)", M::ENGINE.name(), r.0.point);
         driver.placed = true;
         match running::<M>(&mut driver.phase) {
             Some(core) => core.place_player(r.0),

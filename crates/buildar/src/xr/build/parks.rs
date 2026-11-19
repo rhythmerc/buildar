@@ -657,7 +657,6 @@ pub(crate) fn open_for_debug(world: &mut World, id: &str, target: Vec3, yaw: f32
     }
     world.resource_mut::<Parks>().current = Some(Current { id: id.to_string(), pose, anchor: Some(DEBUG_ANCHOR.into()) });
     info!("PARKS opened {id} for measuring ({} pieces, world scale {scale:.2}) at {target:.2?}", file.pieces.len());
-    drop_skater_on(world, target, yaw);
     true
 }
 
@@ -671,10 +670,8 @@ pub(crate) fn open_here(world: &mut World, id: &str) -> bool {
     let found = world.resource::<Parks>().found_by(id, world.resource::<Anchors>());
     let (Some((record, at, yaw)), Some(file)) = (found, world.resource::<Parks>().get(id).map(|p| p.file.clone())) else { return false };
     let pose = ParkPose::by_anchor(at, yaw, &record);
+    // (its player isn't put on it: the player places it - `engine_driver`, the loading card)
     open_as(world, id, &file, pose, record.scale, Some(record.uuid));
-    // (onto the middle of it)
-    let scale = world.resource::<Rig>().scale;
-    drop_skater_on(world, pose.to_room(pivot(&file.pieces), scale), pose.yaw);
     true
 }
 
@@ -710,7 +707,6 @@ pub(crate) fn finish_placing(world: &mut World) -> Option<bool> {
     world.resource_mut::<Placing>().0 = None;
     // (a new anchor is made for it here: `make_anchor`)
     open_as(world, &job.id, &file, pose, job.scale, None);
-    drop_skater_on(world, at, job.yaw);
     info!("PARKS put {} down at {at:.2?}, world scale {:.2}", job.id, job.scale);
     Some(job.edit)
 }
@@ -857,11 +853,6 @@ pub(crate) fn forget_here(world: &mut World, id: &str) {
     parks.save(id);
 }
 
-/// The skater onto the park at `at` (tracking space) once its collision is made.
-fn drop_skater_on(world: &mut World, at: Vec3, yaw: f32) {
-    let revision = world.resource::<PlacedPieces>().revision;
-    super::drop_skater_after_rebuild(world, at, Quat::from_rotation_y(yaw) * Vec3::NEG_Z, revision);
-}
 
 #[cfg(test)]
 mod tests {
