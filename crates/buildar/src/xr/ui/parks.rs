@@ -14,7 +14,7 @@ mod course;
 use super::{pages, Nav, Outcome, XrUi, UI_BODY_FONT, UI_FONT};
 use super::pointer::UiPointer;
 use crate::xr::build::anchor::Anchors;
-use crate::engines::{Engine, Engines, Mode};
+use crate::engines::{Engine, EngineToggles, Engines, Mode};
 use crate::xr::build::parks::{self as park, EngineFit, Here, ParkFile, Parks};
 use crate::xr::build::{BuildMode, size};
 use crate::xr::panel::XrPanel;
@@ -73,6 +73,9 @@ enum Hit {
     /// and Done.
     SizeStep(bool),
     EngineStep(usize, bool),
+    /// The small gear by an engine's dropdown (its engine settings), and in that dialog a toggle (by its place).
+    EngineGear,
+    Toggle(usize),
     SettingsDone,
     /// Around an open menu: closes it.
     Backdrop,
@@ -91,6 +94,7 @@ enum Focus {
     Tab(usize),
     Settings,
     Engine,
+    EngineGear,
     Item(usize, Part),
 }
 
@@ -166,6 +170,10 @@ struct Model {
     confirm: Option<(String, bool)>,
     /// A course's settings open.
     settings: Option<SettingsView>,
+    /// An engine's settings open.
+    engine_settings: Option<EngineSettingsView>,
+    /// The engine in the dropdown has settings of the player's (its gear shown).
+    engine_gear: bool,
     /// A course's details, in place of the cards.
     details: Option<course::View>,
     /// The engine running, and (open) the dropdown's rows and the one chosen.
@@ -198,6 +206,15 @@ struct StepperView {
     value: String,
     down: bool,
     up: bool,
+}
+
+/// An engine's settings as shown (the player's own, `engines::EngineToggles`): its name, each toggle's label, line
+/// and value, and the row chosen (the toggles', then Done).
+#[derive(Clone, PartialEq, Debug)]
+pub(super) struct EngineSettingsView {
+    name: String,
+    toggles: Vec<(String, String, bool)>,
+    row: usize,
 }
 
 /// The dialog's rows: the player scale, the engine's settings (each by its place), Done.
@@ -254,6 +271,8 @@ pub(crate) struct ParksScreen {
     /// The course whose settings are open, the row chosen, and how long the trigger has been held on a stepper
     /// button (it repeats, as a held stick does).
     settings: Option<(String, SettingsRow)>,
+    /// An engine's settings open (the gear by its dropdown), and the row chosen (its toggles', then Done).
+    pub(super) engine_settings: Option<(Engine, usize)>,
     step_held: f32,
     /// The engine dropdown is open: the row chosen.
     engines: Option<usize>,
@@ -389,11 +408,15 @@ fn moved(focus: Focus, nav: &Nav, items: &[Item], lines: &[Line]) -> Focus {
         Focus::Tab(_) if nav.right => Focus::Engine,
         Focus::Tab(_) if nav.down => Focus::Item(0, Part::Main),
         Focus::Tab(_) => focus,
-        Focus::Settings if nav.left => Focus::Engine,
+        Focus::Settings if nav.left => Focus::EngineGear,
         Focus::Settings if nav.down => Focus::Item(0, Part::Main),
         Focus::Settings => focus,
         Focus::Engine if nav.left => Focus::Tab(last_tab),
-        Focus::Engine if nav.right => Focus::Settings,
+        Focus::Engine if nav.right => Focus::EngineGear,
+        Focus::EngineGear if nav.left => Focus::Engine,
+        Focus::EngineGear if nav.right => Focus::Settings,
+        Focus::EngineGear if nav.down => Focus::Item(0, Part::Main),
+        Focus::EngineGear => focus,
         Focus::Engine if nav.down => Focus::Item(0, Part::Main),
         Focus::Engine => focus,
         Focus::Item(i, part) => {
@@ -436,6 +459,7 @@ pub(crate) fn opened_by_menu(world: &mut World) {
     screen.details = current.map(course::Details::new);
     screen.menu = None;
     screen.settings = None;
+    screen.engine_settings = None;
     screen.confirm = None;
 }
 
@@ -639,6 +663,38 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
             Some(None) => None,
             None => Some(row),
         };
+    } else if let Some((engine, row)) = world.resource::<ParksScreen>().engine_settings {
+        // An engine's settings: its toggles (A, or the laser, flips one), Done.
+        let toggles = EngineToggles::of(world, engine);
+        let rows = toggles.len() + 1;
+        let mut row = row.min(rows - 1);
+        if nav.up {
+            row = (row + rows - 1) % rows;
+        }
+        if nav.down {
+            row = (row + 1) % rows;
+        }
+        match hovered {
+            Some(Hit::Toggle(i)) => row = i,
+            Some(Hit::SettingsDone) => row = rows - 1,
+            _ => {}
+        }
+        let flip = match pressed(hovered) {
+            Some(Hit::Toggle(i)) => Some(i),
+            None if nav.select && row < toggles.len() => Some(row),
+            _ => None,
+        };
+        if let Some(i) = flip
+            && let Some((toggle, on)) = toggles.get(i)
+        {
+            EngineToggles::set(world, engine, toggle.key, !on);
+        }
+        let close = match pressed(hovered) {
+            Some(Hit::SettingsDone | Hit::Backdrop) => true,
+            Some(_) => false,
+            None => (nav.select && row == rows - 1) || nav.back || nav.more,
+        };
+        world.resource_mut::<ParksScreen>().engine_settings = if close { None } else { Some((engine, row)) };
     } else if let Some((id, row)) = settings {
         // A course's settings: its size and its engine's settings stepped (left/right on its row, or the laser's -/+,
         // held to repeat), Done.
@@ -787,11 +843,17 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
             }
         }
         focus = moved(focus, &nav, &items, &lines);
+        // (no gear without engine settings: the stick passes it)
+        let gear = rows.as_ref().and_then(|r| r.iter().find(|e| e.running)).is_some_and(|e| !EngineToggles::of(world, e.engine).is_empty());
+        if focus == Focus::EngineGear && !gear {
+            focus = if nav.left { Focus::Engine } else if nav.right { Focus::Settings } else { Focus::Item(0, Part::Main) };
+        }
         // The laser chooses what it is on.
         match hovered {
             Some(Hit::Tab(t)) => focus = Focus::Tab(t),
             Some(Hit::Settings) => focus = Focus::Settings,
             Some(Hit::Engine) => focus = Focus::Engine,
+            Some(Hit::EngineGear) => focus = Focus::EngineGear,
             Some(Hit::Item(i) | Hit::Play(i) | Hit::More(i)) => focus = Focus::Item(i, Part::Main),
             Some(Hit::Edit(i)) => focus = Focus::Item(i, Part::Edit),
             _ => {}
@@ -803,12 +865,13 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 Focus::Tab(t) => Hit::Tab(t),
                 Focus::Settings => Hit::Settings,
                 Focus::Engine => Hit::Engine,
+                Focus::EngineGear => Hit::EngineGear,
                 Focus::Item(i, Part::Main) => Hit::Item(i),
                 Focus::Item(i, Part::Edit) => Hit::Edit(i),
             }),
             None if nav.more => match focus {
                 Focus::Item(i, _) => Some(Hit::More(i)),
-                Focus::Tab(_) | Focus::Settings | Focus::Engine => None,
+                Focus::Tab(_) | Focus::Settings | Focus::Engine | Focus::EngineGear => None,
             },
             None => None,
         };
@@ -822,6 +885,13 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 Outcome::Stay
             }
             Some(Hit::Settings) => Outcome::Open(pages::START),
+            Some(Hit::EngineGear) => {
+                let engine = rows.as_ref().and_then(|r| r.iter().find(|e| e.running)).map(|e| e.engine);
+                if let Some(engine) = engine.filter(|&e| !EngineToggles::of(world, e).is_empty()) {
+                    world.resource_mut::<ParksScreen>().engine_settings = Some((engine, 0));
+                }
+                Outcome::Stay
+            }
             Some(Hit::Engine) => {
                 let running = rows.as_ref().and_then(|r| r.iter().position(|e| e.running)).unwrap_or(0);
                 world.resource_mut::<ParksScreen>().engines = Some(running);
@@ -852,9 +922,10 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
     };
     let focus_line = match focus {
         Focus::Item(i, _) => line_of(&lines, i).map_or(0, |(l, _)| l),
-        Focus::Tab(_) | Focus::Settings | Focus::Engine => 0,
+        Focus::Tab(_) | Focus::Settings | Focus::Engine | Focus::EngineGear => 0,
     };
     let rows = engine_rows(world, mode);
+    let engine_gear = rows.as_ref().and_then(|r| r.iter().find(|e| e.running)).is_some_and(|e| !EngineToggles::of(world, e.engine).is_empty());
     let engine = rows.map(|rows| {
         let running = rows.iter().find(|r| r.running).map_or_else(|| "…".to_string(), |r| r.name.clone());
         (running, dropdown.map(|row| (rows, row)))
@@ -894,8 +965,13 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
         let ui = world.resource::<XrUi>();
         if ui.status.1 > 0.0 { ui.status.0.clone() } else { String::new() }
     };
-    let details = course::view(world, settings.is_some() || confirm.is_some());
-    let model = Model { tab, items, lines, first, focus: Some(focus), menu, confirm, settings, details, engine, warning, status };
+    let engine_settings = world.resource::<ParksScreen>().engine_settings.map(|(engine, row)| EngineSettingsView {
+        name: engine.name().to_string(),
+        toggles: EngineToggles::of(world, engine).into_iter().map(|(t, on)| (t.label.to_string(), t.help.to_string(), on)).collect(),
+        row,
+    });
+    let details = course::view(world, settings.is_some() || confirm.is_some() || engine_settings.is_some());
+    let model = Model { tab, items, lines, first, focus: Some(focus), menu, confirm, settings, engine_settings, engine_gear, details, engine, warning, status };
     let mut screen = world.resource_mut::<ParksScreen>();
     screen.first = first;
     screen.model = model;
@@ -1132,7 +1208,7 @@ pub(super) fn draw(world: &mut World) {
     let (Some(fonts), Some(icons)) = (fonts, icons) else { return };
     world.resource_mut::<ParksScreen>().drawn = Some(model.clone());
     let dropdown_open = model.engine.as_ref().is_some_and(|(_, d)| d.is_some());
-    let modal = model.menu.is_some() || model.confirm.is_some() || model.warning.is_some() || dropdown_open;
+    let modal = model.menu.is_some() || model.confirm.is_some() || model.warning.is_some() || model.engine_settings.is_some() || dropdown_open;
     let focus = model.focus.filter(|_| !modal);
     world.entity_mut(root).despawn_children();
     world.entity_mut(root).with_children(|root| {
@@ -1171,6 +1247,9 @@ pub(super) fn draw(world: &mut World) {
                 // The engine: a dropdown that switches it (none for a mode with no engine in this app).
                 if let Some((running, dropdown)) = &model.engine {
                     engine_pill(bar, running, dropdown.is_some(), focus == Some(Focus::Engine), &fonts, &icons);
+                    if model.engine_gear {
+                        engine_gear(bar, Hit::EngineGear, focus == Some(Focus::EngineGear), &icons);
+                    }
                 }
                 bar.spawn((
                     Hit::Settings,
@@ -1275,6 +1354,9 @@ pub(super) fn draw(world: &mut World) {
                     });
                 }
             });
+        }
+        if let Some(view) = &model.engine_settings {
+            engine_settings_box(root, view, &fonts);
         }
         if let Some(view) = &model.settings {
             settings_box(root, view, &fonts);
@@ -1442,6 +1524,88 @@ fn settings_box(root: &mut Spawner, view: &SettingsView, fonts: &Fonts) {
         }
         b.spawn(Node { padding: UiRect::all(px(18)), justify_content: JustifyContent::FlexEnd, ..default() }).with_children(|buttons| {
             let on = view.row == SettingsRow::Done;
+            buttons
+                .spawn((
+                    Hit::SettingsDone,
+                    Node { padding: UiRect::axes(px(30), px(12)), border_radius: BorderRadius::all(px(99)), border: UiRect::all(px(1)), ..default() },
+                    BackgroundColor(if on { TEAL } else { Color::NONE }),
+                    BorderColor::all(if on { TEAL } else { LINE }),
+                ))
+                .with_children(|b| {
+                    b.spawn((Text::new("Done"), fonts.display(22.0, 700), TextColor(if on { INK } else { DIM })));
+                });
+        });
+    });
+}
+
+/// The small gear by an engine's dropdown: its engine settings.
+fn engine_gear<H: Component>(bar: &mut Spawner, hit: H, focused: bool, icons: &Icons) {
+    bar.spawn((
+        hit,
+        Node {
+            width: px(48),
+            height: px(48),
+            border: UiRect::all(px(1)),
+            border_radius: BorderRadius::all(px(24)),
+            align_items: AlignItems::Center,
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        BorderColor::all(LINE),
+        ring(focused, 3.5, 4.0),
+    ))
+    .with_children(|b| icon(b, &icons.gear, 24.0, DIM));
+}
+
+/// An engine's settings: the player's own for it, each a switch, and Done.
+fn engine_settings_box(root: &mut Spawner, view: &EngineSettingsView, fonts: &Fonts) {
+    modal_box(root, 680.0, |b| {
+        b.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(6), padding: UiRect::new(px(18), px(18), px(14), px(14)), ..default() }).with_children(|words| {
+            words.spawn((Text::new("Engine settings"), fonts.display(28.0, 800), TextColor(Color::WHITE)));
+            words.spawn((Text::new(format!("{}: yours, on every course", view.name)), fonts.body(19.0, 500), TextColor(DIM)));
+        });
+        for (i, (label, help, value)) in view.toggles.iter().enumerate() {
+            let on = view.row == i;
+            b.spawn((
+                Hit::Toggle(i),
+                Node {
+                    width: percent(100),
+                    padding: UiRect::axes(px(18), px(14)),
+                    column_gap: px(18),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::SpaceBetween,
+                    border_radius: BorderRadius::all(px(12)),
+                    ..default()
+                },
+                BackgroundColor(if on { SELECTED } else { CARD }),
+            ))
+            .with_children(|row| {
+                row.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(4), flex_shrink: 1.0, ..default() }).with_children(|words| {
+                    words.spawn((Text::new(label.clone()), fonts.display(22.0, 700), TextColor(Color::WHITE)));
+                    words.spawn((Text::new(help.clone()), fonts.body(17.0, 400), TextColor(if on { Color::WHITE } else { DIM })));
+                });
+                // (the switch: filled teal when on)
+                row.spawn((
+                    Node {
+                        width: px(96),
+                        height: px(44),
+                        flex_shrink: 0.0,
+                        border: UiRect::all(px(1)),
+                        border_radius: BorderRadius::all(px(22)),
+                        align_items: AlignItems::Center,
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                    BackgroundColor(if *value { TEAL } else { Color::NONE }),
+                    BorderColor::all(if *value { TEAL } else { LINE }),
+                ))
+                .with_children(|s| {
+                    s.spawn((Text::new(if *value { "On" } else { "Off" }), fonts.display(20.0, 700), TextColor(if *value { INK } else { DIM })));
+                });
+            });
+        }
+        b.spawn(Node { padding: UiRect::all(px(18)), justify_content: JustifyContent::FlexEnd, ..default() }).with_children(|buttons| {
+            let on = view.row == view.toggles.len();
             buttons
                 .spawn((
                     Hit::SettingsDone,
@@ -1685,10 +1849,13 @@ mod tests {
         assert_eq!(go(Focus::Item(2, Part::Edit), |n| n.down = true), Focus::Item(3, Part::Edit));
         assert_eq!(go(Focus::Item(1, Part::Main), |n| n.up = true), Focus::Tab(0));
         assert_eq!(go(Focus::Settings, |n| n.down = true), Focus::Item(0, Part::Main));
-        // Along the top: the tabs, the engine, Settings, and back.
+        // Along the top: the tabs, the engine, its gear (passed over where it isn't shown: `frame`), Settings, and back.
         assert_eq!(go(Focus::Tab(0), |n| n.right = true), Focus::Tab(1));
         assert_eq!(go(Focus::Tab(1), |n| n.right = true), Focus::Engine);
-        assert_eq!(go(Focus::Engine, |n| n.right = true), Focus::Settings);
+        assert_eq!(go(Focus::Engine, |n| n.right = true), Focus::EngineGear);
+        assert_eq!(go(Focus::EngineGear, |n| n.right = true), Focus::Settings);
+        assert_eq!(go(Focus::Settings, |n| n.left = true), Focus::EngineGear);
+        assert_eq!(go(Focus::EngineGear, |n| n.left = true), Focus::Engine);
         assert_eq!(go(Focus::Engine, |n| n.left = true), Focus::Tab(1));
         assert_eq!(go(Focus::Tab(1), |n| n.left = true), Focus::Tab(0));
         assert_eq!(go(Focus::Tab(0), |n| n.left = true), Focus::Tab(0));
@@ -1777,13 +1944,30 @@ mod tests {
                 app.add_systems(Update, || {});
             });
         }
+        // (`SK8_UI_SHOT_ENGINE_SETTINGS=list|open|course`: Mario Kart Wii picked, with settings of the player's - the
+        // Tracks tab with the gear by the engine; its engine settings open; a track's details with its gear)
+        let engine_settings = std::env::var("SK8_UI_SHOT_ENGINE_SETTINGS").ok();
+        if engine_settings.is_some() {
+            use crate::engines::{self, Engine, EngineToggle, EngineToggles};
+            engines::add_engine(&mut app, Engine::Mkwii, |_| Ok(()), |app| {
+                app.add_systems(Update, || {});
+            });
+            let toggles = vec![
+                EngineToggle { key: "analog_throttle", label: "Analog throttle", help: "Pull the right trigger part way to drive slower" },
+                EngineToggle { key: "drift_automatic", label: "Automatic drift", help: "Off: hop with the right grip and steer, for mini-turbos" },
+            ];
+            let mut registry = EngineToggles::default();
+            registry.0.insert(Engine::Mkwii, (toggles, (|_: &World, key: &str| key == "analog_throttle", |_: &mut World, _: &str, _: bool| {})));
+            app.insert_resource(registry);
+            app.world_mut().resource_mut::<Parks>().list.iter_mut().find(|p| p.id == "t").unwrap().file.engine = Some("mkwii".into());
+        }
         let menu = std::env::var_os("SK8_UI_SHOT_MENU").is_some();
         // (`SK8_UI_SHOT_ENGINES=1`: the engine dropdown open; `SK8_UI_SHOT_WARNING=1`: a park built for Skate 3, which
         // isn't in the app, opened)
         let dropdown = std::env::var_os("SK8_UI_SHOT_ENGINES").is_some();
         let warning = std::env::var_os("SK8_UI_SHOT_WARNING").is_some();
         // (`SK8_UI_SHOT_TAB=1`: the Tracks tab; `SK8_UI_SHOT_SETTINGS=1`: a park's settings open)
-        let tracks = std::env::var_os("SK8_UI_SHOT_TAB").is_some();
+        let tracks = std::env::var_os("SK8_UI_SHOT_TAB").is_some() || std::env::var("SK8_UI_SHOT_ENGINE_SETTINGS").is_ok();
         let settings = std::env::var_os("SK8_UI_SHOT_SETTINGS").is_some();
         // (`SK8_UI_SHOT_SETTINGS=track`: a Mario Kart Wii track's, its engine's settings below the scale, one kept)
         let track_settings = std::env::var("SK8_UI_SHOT_SETTINGS").is_ok_and(|v| v == "track");
@@ -1831,6 +2015,14 @@ mod tests {
                         {
                             screen.details = Some(course::Details::shown("b", "Desk lines", state));
                         }
+                        match engine_settings.as_deref() {
+                            Some("open") if screen.engine_settings.is_none() => screen.engine_settings = Some((crate::engines::Engine::Mkwii, 0)),
+                            Some("course") if screen.details.is_none() => screen.details = Some(course::Details::shown("t", "Desk circuit", "open")),
+                            _ => {}
+                        }
+                    }
+                    if engine_settings.is_some() && world.resource::<Engines>().chosen() != Some(crate::engines::Engine::Mkwii) {
+                        world.resource_mut::<Engines>().request(crate::engines::Engine::Mkwii);
                     }
                     frame(world, Nav::default(), &UiPointer::default());
                 },

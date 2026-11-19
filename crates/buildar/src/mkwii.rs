@@ -95,7 +95,8 @@ pub(crate) fn install(app: &mut App, files: &Path) {
     app.world_mut().resource_mut::<engines::CourseSettings>().0.insert(Engine::Mkwii, (park_settings, apply_park_settings));
     app.init_resource::<engines::CourseSteppers>();
     app.world_mut().resource_mut::<engines::CourseSteppers>().0.insert(Engine::Mkwii, TRACK_STEPPERS.to_vec());
-    app.world_mut().resource_mut::<crate::xr::ui::UiProviders>().0.push(std::sync::Arc::new(MkwiiPages));
+    app.init_resource::<engines::EngineToggles>();
+    app.world_mut().resource_mut::<engines::EngineToggles>().0.insert(Engine::Mkwii, (PLAYER_TOGGLES.to_vec(), (player_toggle, set_player_toggle)));
     crate::xr::ui::import::offer(app, Engine::Mkwii, mkw_engine::DATA);
     app.world_mut().resource_mut::<crate::xr::ui::ControlsSheet>().set(Engine::Mkwii, CONTROLS.iter().map(|&(a, b)| engine_api::Control::new(a, b)).collect());
     crate::engine_hud::install(app);
@@ -197,58 +198,32 @@ fn tune(player: Res<PlayerSettings>, track: Res<TrackSettings>, mut driver: ResM
     driver.set_setting(settings::ACCELERATION, track.acceleration);
 }
 
-/// Mario Kart Wii's page in the headset menu (shown while it runs; this menu is on its way out - the courses screens
-/// are the app's UI).
-struct MkwiiPages;
+/// The player's settings in its engine settings dialog (the gear by its dropdown).
+const PLAYER_TOGGLES: [engines::EngineToggle; 2] = [
+    engines::EngineToggle { key: "analog_throttle", label: "Analog throttle", help: "Pull the right trigger part way to drive slower" },
+    engines::EngineToggle { key: "drift_automatic", label: "Automatic drift", help: "Off: hop with the right grip and steer, for mini-turbos" },
+];
 
-const PAGE: crate::xr::ui::PageId = "mkwii";
-
-impl crate::xr::ui::UiProvider for MkwiiPages {
-    fn page(&self, id: crate::xr::ui::PageId, world: &World) -> Option<crate::xr::ui::UiPage> {
-        use crate::xr::ui::{UiPage, Widget};
-        if id != PAGE {
-            return None;
-        }
-        let s = *world.resource::<PlayerSettings>();
-        Some(UiPage::new(
-            "Mario Kart Wii",
-            vec![
-                Widget::toggle("drift_automatic", "Drift: automatic", s.drift_automatic),
-                Widget::info("Off (manual): hop with the right grip and steer to drift, for mini-turbos."),
-            ],
-        ))
+fn player_toggle(world: &World, key: &str) -> bool {
+    let p = world.resource::<PlayerSettings>();
+    match key {
+        "analog_throttle" => p.analog_throttle,
+        "drift_automatic" => p.drift_automatic,
+        _ => false,
     }
+}
 
-    fn act(
-        &self,
-        page: crate::xr::ui::PageId,
-        widget: &'static str,
-        act: crate::xr::ui::Act,
-        world: &mut World,
-    ) -> Option<crate::xr::ui::Outcome> {
-        use crate::xr::ui::{Act, Outcome};
-        if page != PAGE {
-            return None;
-        }
-        let mut s = *world.resource::<PlayerSettings>();
-        match (widget, act) {
-            ("drift_automatic", Act::Press) => s.drift_automatic = !s.drift_automatic,
-            _ => return Some(Outcome::Stay),
-        }
-        world.insert_resource(s);
-        let file = world.resource::<SettingsFile>().0.clone();
-        if let Ok(json) = serde_json::to_vec_pretty(&s) {
-            let _ = std::fs::write(&file, json);
-        }
-        Some(Outcome::Stay)
+fn set_player_toggle(world: &mut World, key: &str, on: bool) {
+    let mut p = *world.resource::<PlayerSettings>();
+    match key {
+        "analog_throttle" => p.analog_throttle = on,
+        "drift_automatic" => p.drift_automatic = on,
+        _ => return,
     }
-
-    fn start_items(&self, _world: &World) -> Vec<crate::xr::ui::Widget> {
-        vec![crate::xr::ui::Widget::link("Mario Kart Wii: driving", PAGE)]
-    }
-
-    fn engine(&self) -> Option<Engine> {
-        Some(Engine::Mkwii)
+    world.insert_resource(p);
+    let file = world.resource::<SettingsFile>().0.clone();
+    if let Ok(json) = serde_json::to_vec_pretty(&p) {
+        let _ = std::fs::write(&file, json);
     }
 }
 

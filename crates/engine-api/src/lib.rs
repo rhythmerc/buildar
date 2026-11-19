@@ -150,6 +150,37 @@ impl CourseStepper {
 #[derive(Resource, Default)]
 pub struct CourseSteppers(pub HashMap<Engine, Vec<CourseStepper>>);
 
+/// A setting of the player's own for an engine (how they play it, on every course): a switch in its engine
+/// settings dialog (the gear by the engine's dropdown).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EngineToggle {
+    pub key: &'static str,
+    pub label: &'static str,
+    /// A line under the label (what on and off do).
+    pub help: &'static str,
+}
+
+/// A player setting's getter and setter, by its key.
+pub type EngineToggleHooks = (fn(&World, &str) -> bool, fn(&mut World, &str, bool));
+
+/// Each engine's player settings: its [`EngineToggle`]s, and how to read and set them.
+#[derive(Resource, Default)]
+pub struct EngineToggles(pub HashMap<Engine, (Vec<EngineToggle>, EngineToggleHooks)>);
+
+impl EngineToggles {
+    /// `engine`'s toggles, each with its value now.
+    pub fn of(world: &World, engine: Engine) -> Vec<(EngineToggle, bool)> {
+        let Some((toggles, (get, _))) = world.get_resource::<EngineToggles>().and_then(|t| t.0.get(&engine)) else { return Vec::new() };
+        toggles.iter().map(|t| (*t, get(world, t.key))).collect()
+    }
+
+    /// `engine`'s toggle `key` set to `on`.
+    pub fn set(world: &mut World, engine: Engine, key: &str, on: bool) {
+        let Some(&(_, (_, set))) = world.get_resource::<EngineToggles>().and_then(|t| t.0.get(&engine)) else { return };
+        set(world, key, on);
+    }
+}
+
 /// A park setting's getter and setter.
 pub type CourseSettingHooks = (fn(&World) -> serde_json::Value, fn(&mut World, &serde_json::Value));
 

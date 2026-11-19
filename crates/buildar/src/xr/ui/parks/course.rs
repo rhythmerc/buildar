@@ -27,13 +27,15 @@ pub(crate) enum Spot {
     Title,
     Mode,
     Engine,
+    /// The small gear by the engine's dropdown: its engine settings (the player's own).
+    EngineGear,
     Play,
     Edit,
     Delete,
 }
 
 /// The screen's spots in rows, as the stick walks them.
-const ROWS: [&[Spot]; 4] = [&[Spot::Back, Spot::Settings], &[Spot::Title], &[Spot::Mode, Spot::Engine], &[Spot::Play, Spot::Edit, Spot::Delete]];
+const ROWS: [&[Spot]; 4] = [&[Spot::Back, Spot::Settings], &[Spot::Title], &[Spot::Mode, Spot::Engine, Spot::EngineGear], &[Spot::Play, Spot::Edit, Spot::Delete]];
 
 /// A dropdown: the mode's or the engine's.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -124,6 +126,8 @@ pub(crate) struct View {
     title: String,
     mode: String,
     engine: String,
+    /// The course's engine has settings of the player's (its gear shown).
+    engine_gear: bool,
     thumb: Option<Handle<Image>>,
     empty: bool,
     here: bool,
@@ -312,6 +316,10 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
             c = (c + 1) % ROWS[r].len();
         }
         focus = ROWS[r][c];
+        // (no gear without engine settings: the stick passes it)
+        if focus == Spot::EngineGear && !engine_of(world, mode, file.engine()).is_some_and(|e| !crate::engines::EngineToggles::of(world, e).is_empty()) {
+            focus = if nav.left { Spot::Engine } else { ROWS[r][0] };
+        }
         if let Some(CHit::Spot(s)) = hovered {
             focus = s;
         }
@@ -339,6 +347,11 @@ pub(super) fn frame(world: &mut World, nav: Nav, point: &UiPointer) -> Outcome {
                 let engine = engine_of(world, mode, file.engine());
                 let at = engine_rows(world, mode).and_then(|rows| rows.iter().position(|r| Some(r.engine) == engine)).unwrap_or(0);
                 details.dropdown = Some((Drop::Engine, at));
+            }
+            Some(Spot::EngineGear) => {
+                if let Some(engine) = engine_of(world, mode, file.engine()).filter(|&e| !crate::engines::EngineToggles::of(world, e).is_empty()) {
+                    world.resource_mut::<ParksScreen>().engine_settings = Some((engine, 0));
+                }
             }
             Some(Spot::Play) => outcome = Outcome::Close,
             Some(Spot::Edit) => {
@@ -436,6 +449,7 @@ pub(super) fn view(world: &World, modal: bool) -> Option<View> {
         title: file.name.clone(),
         mode: mode.name().to_string(),
         engine: engine.map_or_else(|| "None".to_string(), |e| e.name().to_string()),
+        engine_gear: engine.is_some_and(|e| !crate::engines::EngineToggles::of(world, e).is_empty()),
         thumb: screen.thumbs.get(&details.id).map(|(_, h)| h.clone()),
         empty: file.pieces.is_empty(),
         here: parks.here(&details.id, world.resource::<Anchors>()) == Here::Found,
@@ -562,6 +576,9 @@ pub(super) fn panel(root: &mut Spawner, view: &View, fonts: &Fonts, icons: &Icon
                 dropdown(row, CHit::Spot(Spot::Mode), "MODE", &view.mode, open == Some(Drop::Mode), focus == Some(Spot::Mode), fonts, icons);
                 row.spawn((Text::new("•"), fonts.body(24.0, 400), TextColor(OFF), Node { margin: UiRect::axes(px(4), px(0)), ..default() }));
                 dropdown(row, CHit::Spot(Spot::Engine), "ENGINE", &view.engine, open == Some(Drop::Engine), focus == Some(Spot::Engine), fonts, icons);
+                if view.engine_gear {
+                    super::engine_gear(row, CHit::Spot(Spot::EngineGear), focus == Some(Spot::EngineGear), icons);
+                }
             });
         });
         // Its picture - or, renaming, the keyboard.
@@ -724,7 +741,7 @@ mod tests {
 
     #[test]
     fn every_spot_is_in_a_row() {
-        for spot in [Spot::Back, Spot::Settings, Spot::Title, Spot::Mode, Spot::Engine, Spot::Play, Spot::Edit, Spot::Delete] {
+        for spot in [Spot::Back, Spot::Settings, Spot::Title, Spot::Mode, Spot::Engine, Spot::EngineGear, Spot::Play, Spot::Edit, Spot::Delete] {
             let (r, c) = spot_at(spot);
             assert_eq!(ROWS[r][c], spot);
         }
