@@ -1229,7 +1229,7 @@ pub(super) fn draw(world: &mut World) {
         ))
         .with_children(|panel| {
             // The title, and the settings gear in the corner.
-            panel.spawn(Node { width: percent(100), height: px(64), flex_shrink: 0.0, align_items: AlignItems::Center, column_gap: px(20), ..default() }).with_children(|bar| {
+            panel.spawn(Node { width: percent(100), height: px(64), flex_shrink: 0.0, align_items: AlignItems::Center, column_gap: px(14), ..default() }).with_children(|bar| {
                 // The tabs: each mode's courses.
                 for (t, &mode) in TABS.iter().enumerate() {
                     let on = t == model.tab;
@@ -1251,21 +1251,26 @@ pub(super) fn draw(world: &mut World) {
                         engine_gear(bar, Hit::EngineGear, focus == Some(Focus::EngineGear), &icons);
                     }
                 }
+                // (the app's own menu: its settings and the rest, apart from an engine's own by its gear)
                 bar.spawn((
                     Hit::Settings,
                     Node {
-                        width: px(64),
-                        height: px(64),
+                        height: px(56),
+                        flex_shrink: 0.0,
+                        padding: UiRect::new(px(16), px(20), px(0), px(0)),
+                        column_gap: px(10),
                         border: UiRect::all(px(1)),
-                        border_radius: BorderRadius::all(px(14)),
+                        border_radius: BorderRadius::all(px(16)),
                         align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Center,
                         ..default()
                     },
                     BorderColor::all(LINE),
                     ring(focus == Some(Focus::Settings), 3.5, 4.0),
                 ))
-                .with_children(|b| icon(b, &icons.gear, 34.0, DIM));
+                .with_children(|b| {
+                    icon(b, &icons.gear, 26.0, DIM);
+                    b.spawn((Text::new("buildAR Menu"), fonts.body(19.0, 600), TextColor(DIM), TextLayout::new_with_no_wrap()));
+                });
             });
             // The cards, and how far down them it is.
             panel.spawn(Node { width: percent(100), flex_grow: 1.0, flex_direction: FlexDirection::Column, row_gap: px(GAP_PX), ..default() }).with_children(|cards| {
@@ -1425,6 +1430,7 @@ fn engine_pill(bar: &mut Spawner, running: &str, open: bool, focused: bool, font
         Hit::Engine,
         Node {
             height: px(48),
+            flex_shrink: 0.0,
             padding: UiRect::axes(px(18), px(0)),
             column_gap: px(10),
             align_items: AlignItems::Center,
@@ -1438,7 +1444,7 @@ fn engine_pill(bar: &mut Spawner, running: &str, open: bool, focused: bool, font
     ))
     .with_children(|pill| {
         pill.spawn((Text::new("Engine"), fonts.body(18.0, 500), TextColor(OFF)));
-        pill.spawn((Text::new(running), fonts.display(22.0, 700), TextColor(Color::WHITE)));
+        pill.spawn((Text::new(running), fonts.display(22.0, 700), TextColor(Color::WHITE), TextLayout::new_with_no_wrap()));
         // (the play triangle turned to point down)
         pill.spawn((
             ImageNode { color: DIM, ..ImageNode::new(icons.play.clone()) },
@@ -1545,6 +1551,7 @@ fn engine_gear<H: Component>(bar: &mut Spawner, hit: H, focused: bool, icons: &I
         Node {
             width: px(48),
             height: px(48),
+            flex_shrink: 0.0,
             border: UiRect::all(px(1)),
             border_radius: BorderRadius::all(px(24)),
             align_items: AlignItems::Center,
