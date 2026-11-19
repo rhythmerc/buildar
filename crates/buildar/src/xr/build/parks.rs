@@ -591,7 +591,8 @@ pub(crate) fn engine_fit(world: &World, id: &str) -> EngineFit {
     }
 }
 
-/// Park `id`'s engine switched to (when it's installed) and its settings put back, before it's opened. A course
+/// Park `id`'s engine switched to (when it's installed) and its settings put back, before it's opened (one that kept
+/// none: the engine's defaults where it has them). A course
 /// built for none, of another mode than the running engine's: the first engine of its mode that can run.
 pub(crate) fn use_its_engine(world: &mut World, id: &str) {
     let Some(file) = world.resource::<Parks>().get(id).map(|p| p.file.clone()) else { return };
@@ -603,9 +604,10 @@ pub(crate) fn use_its_engine(world: &mut World, id: &str) {
         world.resource_mut::<Engines>().request(engine);
         info!("PARKS {id} was built for {}: switching to it", engine.name());
     }
-    if let Some(settings) = &file.engine_settings {
-        CourseSettings::apply(world, engine, settings);
-    }
+    // (a course that kept none: `{}`, each engine's own defaults for what it fills in - else the last course's
+    // would carry over)
+    let settings = file.engine_settings.clone().unwrap_or_else(|| serde_json::json!({}));
+    CourseSettings::apply(world, engine, &settings);
 }
 
 /// For a course of `mode`: the running engine if it is of that mode, else the first of that mode the menus offer

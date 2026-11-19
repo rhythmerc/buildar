@@ -90,6 +90,8 @@ pub(crate) fn install(app: &mut App, files: &Path) {
     app.insert_resource(MkwiiFiles { disc })
         .insert_resource(Settings::load(&files.join(SETTINGS_FILE)))
         .insert_resource(SettingsFile(files.join(SETTINGS_FILE)));
+    app.init_resource::<engines::CourseSettings>();
+    app.world_mut().resource_mut::<engines::CourseSettings>().0.insert(Engine::Mkwii, (park_settings, apply_park_settings));
     app.world_mut().resource_mut::<crate::xr::ui::UiProviders>().0.push(std::sync::Arc::new(MkwiiPages));
     crate::xr::ui::import::offer(app, Engine::Mkwii, mkw_engine::DATA);
     app.world_mut().resource_mut::<crate::xr::ui::ControlsSheet>().set(Engine::Mkwii, CONTROLS.iter().map(|&(a, b)| engine_api::Control::new(a, b)).collect());
@@ -109,19 +111,78 @@ const CONTROLS: &[(&str, &str)] = &[
     ("Right grip", "drift (hop)"),
 ];
 
-/// Mario Kart Wii's settings, kept in `mkwii.json` beside the app's other settings.
-#[derive(Resource, Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+/// Mario Kart Wii's settings, kept in `mkwii.json` beside the app's other settings; a track keeps its speed and
+/// acceleration (`park_settings`).
+#[derive(Resource, Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 struct Settings {
     /// The kart drifts by itself when it turns hard (no mini-turbos); off, manual: hop and steer.
     drift_automatic: bool,
+    /// The kart's top speed and acceleration, multiples of its own (1: as the game has them).
+    speed: f32,
+    acceleration: f32,
 }
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { drift_automatic: false, speed: 1.0, acceleration: 1.0 }
+    }
+}
+
+/// The sliders' ranges: least, most, step.
+const SPEED_RANGE: (f32, f32, f32) = (0.5, 2.0, 0.05);
+const ACCELERATION_RANGE: (f32, f32, f32) = (0.5, 3.0, 0.1);
 
 const SETTINGS_FILE: &str = "mkwii.json";
 
 impl Settings {
     fn load(file: &Path) -> Self {
-        std::fs::read(file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+        let s: Settings = std::fs::read(file).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+        s.clamped()
+    }
+
+    fn clamped(self) -> Self {
+        let within = |v: f32, (lo, hi, _): (f32, f32, f32)| if v.is_finite() { v.clamp(lo, hi) } else { 1.0 };
+        Self { speed: within(self.speed, SPEED_RANGE), acceleration: within(self.acceleration, ACCELERATION_RANGE), ..self }
+    }
+}
+
+/// `s` in use, and kept for the next launch.
+fn keep(world: &mut World, s: Settings) {
+    world.insert_resource(s);
+    let file = world.resource::<SettingsFile>().0.clone();
+    if let Ok(json) = serde_json::to_vec_pretty(&s) {
+        let _ = std::fs::write(&file, json);
+    }
+}
+
+/// What a track keeps of Mario Kart Wii's settings: the kart's speed and acceleration it was built for (the drift is
+/// the player's own).
+/// (a track that kept none, or an older one: the kart's own)
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct TrackTuning {
+    speed: f32,
+    acceleration: f32,
+}
+
+impl Default for TrackTuning {
+    fn default() -> Self {
+        Self { speed: 1.0, acceleration: 1.0 }
+    }
+}
+
+fn park_settings(world: &World) -> serde_json::Value {
+    let s = world.resource::<Settings>();
+    serde_json::to_value(TrackTuning { speed: s.speed, acceleration: s.acceleration }).unwrap_or_default()
+}
+
+fn apply_park_settings(world: &mut World, settings: &serde_json::Value) {
+    let Ok(track) = serde_json::from_value::<TrackTuning>(settings.clone()) else { return };
+    let now = *world.resource::<Settings>();
+    let s = Settings { speed: track.speed, acceleration: track.acceleration, ..now }.clamped();
+    if s != now {
+        keep(world, s);
     }
 }
 
@@ -131,6 +192,8 @@ struct SettingsFile(PathBuf);
 /// Its settings to the engine (the driver gives them again each time it is made).
 fn tune(settings: Res<Settings>, mut driver: ResMut<Driver>) {
     driver.set_setting(mkw_engine::engine::settings::DRIFT_AUTOMATIC, if settings.drift_automatic { 1.0 } else { 0.0 });
+    driver.set_setting(mkw_engine::engine::settings::SPEED, settings.speed);
+    driver.set_setting(mkw_engine::engine::settings::ACCELERATION, settings.acceleration);
 }
 
 /// Mario Kart Wii's page in the headset menu (shown while it runs).
@@ -148,6 +211,11 @@ impl crate::xr::ui::UiProvider for MkwiiPages {
         Some(UiPage::new(
             "Mario Kart Wii",
             vec![
+                Widget::slider("speed", "Top speed", s.speed, SPEED_RANGE, format!("{:.0}%", s.speed * 100.0)),
+                Widget::slider("acceleration", "Acceleration", s.acceleration, ACCELERATION_RANGE, format!("{:.0}%", s.acceleration * 100.0)),
+                Widget::button("reset", "Back to the kart's own (100%)"),
+                Widget::info("Speed and acceleration are kept with the track."),
+                Widget::info(""),
                 Widget::toggle("drift_automatic", "Drift: automatic", s.drift_automatic),
                 Widget::info("Off (manual): hop with the right grip and steer to drift, for mini-turbos."),
             ],
@@ -168,18 +236,17 @@ impl crate::xr::ui::UiProvider for MkwiiPages {
         let mut s = *world.resource::<Settings>();
         match (widget, act) {
             ("drift_automatic", Act::Press) => s.drift_automatic = !s.drift_automatic,
+            ("speed", Act::Set(v)) => s.speed = v,
+            ("acceleration", Act::Set(v)) => s.acceleration = v,
+            ("reset", Act::Press) => s = Settings { drift_automatic: s.drift_automatic, ..Settings::default() },
             _ => return Some(Outcome::Stay),
         }
-        world.insert_resource(s);
-        let file = world.resource::<SettingsFile>().0.clone();
-        if let Ok(json) = serde_json::to_vec_pretty(&s) {
-            let _ = std::fs::write(&file, json);
-        }
+        keep(world, s.clamped());
         Some(Outcome::Stay)
     }
 
     fn start_items(&self, _world: &World) -> Vec<crate::xr::ui::Widget> {
-        vec![crate::xr::ui::Widget::link("Mario Kart Wii: driving", PAGE)]
+        vec![crate::xr::ui::Widget::link("Mario Kart Wii: speed, acceleration, drift", PAGE)]
     }
 
     fn engine(&self) -> Option<Engine> {
@@ -201,6 +268,30 @@ mod tests {
         assert!(Settings::load(&dir.join("auto.json")).drift_automatic);
         std::fs::write(dir.join("broken.json"), b"{").unwrap();
         assert!(!Settings::load(&dir.join("broken.json")).drift_automatic);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The kart's own speed and acceleration by default; a track's put back (out of range: clamped), the drift left
+    /// as the player has it.
+    #[test]
+    fn a_track_keeps_its_speed_and_acceleration() {
+        let s = Settings::default();
+        assert_eq!((s.speed, s.acceleration), (1.0, 1.0));
+        let mut world = World::new();
+        let dir = std::env::temp_dir().join(format!("mkwii-track-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        world.insert_resource(SettingsFile(dir.join(SETTINGS_FILE)));
+        world.insert_resource(Settings { drift_automatic: true, ..Settings::default() });
+        apply_park_settings(&mut world, &serde_json::json!({ "speed": 1.5, "acceleration": 9.0 }));
+        let s = *world.resource::<Settings>();
+        assert_eq!((s.speed, s.acceleration, s.drift_automatic), (1.5, ACCELERATION_RANGE.1, true));
+        assert_eq!(park_settings(&world), serde_json::json!({ "speed": 1.5, "acceleration": 3.0 }));
+        // (a track that kept none: the kart's own)
+        apply_park_settings(&mut world, &serde_json::json!({}));
+        assert_eq!((world.resource::<Settings>().speed, world.resource::<Settings>().acceleration), (1.0, 1.0));
+        // (an old mkwii.json, with only the drift: the kart's own)
+        std::fs::write(dir.join("old.json"), br#"{ "drift_automatic": true }"#).unwrap();
+        assert_eq!(Settings::load(&dir.join("old.json")).speed, 1.0);
         let _ = std::fs::remove_dir_all(dir);
     }
 }
