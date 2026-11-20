@@ -1864,7 +1864,7 @@ dependencies = [
 [[package]]
 name = "brres-sys"
 version = "0.1.12"
-source = "git+https://github.com/rhythmerc/mkw-headless?rev=204ae079484bac442d196c1b0850bd5373307a55#204ae079484bac442d196c1b0850bd5373307a55"
+source = "git+https://github.com/rhythmerc/mkw-headless?rev=5f3d6368ea0f0532f2f5fb7bb717873c915876d5#5f3d6368ea0f0532f2f5fb7bb717873c915876d5"
 dependencies = [
  "anyhow",
  "cc",
@@ -3562,7 +3562,7 @@ checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
 [[package]]
 name = "mkw-engine"
 version = "0.1.0"
-source = "git+https://github.com/rhythmerc/mkw-headless?rev=204ae079484bac442d196c1b0850bd5373307a55#204ae079484bac442d196c1b0850bd5373307a55"
+source = "git+https://github.com/rhythmerc/mkw-headless?rev=5f3d6368ea0f0532f2f5fb7bb717873c915876d5#5f3d6368ea0f0532f2f5fb7bb717873c915876d5"
 dependencies = [
  "brres",
  "engine-core",

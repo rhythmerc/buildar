@@ -37,7 +37,7 @@ thug2-engine = { git = "https://github.com/rhythmerc/thug2-headless", rev = "215
 # The Mario Kart Wii engine: https://github.com/rhythmerc/mkw-headless (the game as the engine contract, over the
 # player's own disc recompiled by WiiCompiled; no game data). Its engine-core rev must be the one above; its brres-sys,
 # patched below, at the same rev.
-mkw-engine = { git = "https://github.com/rhythmerc/mkw-headless", rev = "204ae079484bac442d196c1b0850bd5373307a55" }
+mkw-engine = { git = "https://github.com/rhythmerc/mkw-headless", rev = "5f3d6368ea0f0532f2f5fb7bb717873c915876d5" }
 
 [profile.dev]
 opt-level = 3
@@ -73,7 +73,7 @@ opt-level = 3
 
 [patch.crates-io]
 # (MKWii's model reader, with its C strings typed for arm64: mkw-headless's third_party/brres-sys/BUILDAR.md)
-brres-sys = { git = "https://github.com/rhythmerc/mkw-headless", rev = "204ae079484bac442d196c1b0850bd5373307a55" }
+brres-sys = { git = "https://github.com/rhythmerc/mkw-headless", rev = "5f3d6368ea0f0532f2f5fb7bb717873c915876d5" }
 bevy_pbr = { path = "vendor/bevy_pbr" }
 bevy_core_pipeline = { path = "vendor/bevy_core_pipeline" }
 winit = { path = "vendor/winit" }
